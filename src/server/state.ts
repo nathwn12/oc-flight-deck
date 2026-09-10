@@ -373,8 +373,9 @@ export class FlightDeckState {
     // to the larger one.
     if (runtime.session.costUsd !== null) {
       const previous = model.costs.get(event.sessionId) ?? 0;
-      model.costs.set(event.sessionId, runtime.session.costUsd);
-      model.costUsd += Math.max(0, runtime.session.costUsd - previous);
+      const current = Math.max(previous, runtime.session.costUsd);
+      model.costs.set(event.sessionId, current);
+      model.costUsd += current - previous;
     }
     void this.persistModel(runtime.session, model);
     void this.persistSession(runtime);

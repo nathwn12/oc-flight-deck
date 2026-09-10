@@ -20,6 +20,11 @@ describe("Flight Deck presentation", () => {
     expect(sidebarVisible(null, "auto")).toBe(false);
   });
 
+  test("surfaces persistence failures without changing the quiet default", () => {
+    expect(formatSidebar({ activeWorkers: 1, persistFailures: 2 }, true).join("\n")).toContain("persistence failures");
+    expect(formatSidebar({ activeWorkers: 1, persistFailures: 0 }, true).join("\n")).not.toContain("persistence failures");
+  });
+
   test("formats bounded task rows", () => {
     expect(formatTasks([{ id: "abcdefghijk", title: "Fix it", state: "queued" }])).toEqual(["queued    abcdefgh Fix it"]);
   });

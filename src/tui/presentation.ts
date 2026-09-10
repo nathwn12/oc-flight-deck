@@ -20,6 +20,7 @@ export interface UiStatus {
   readonly activeTasks?: number;
   readonly aggregateTps?: number | null;
   readonly costUsd?: number | null;
+  readonly persistFailures?: number;
   readonly autopilot?: boolean;
   readonly paused?: boolean;
   readonly sessions?: readonly UiSession[];
@@ -79,6 +80,8 @@ export function formatSidebar(status: UiStatus | null, compact: boolean): string
     `● ${status.activeWorkers ?? 0} active   ${status.blockedWorkers ?? 0} blocked`,
     `⚡ ${formatTps(status.aggregateTps).replace(" tok/s", "")} aggregate`,
   ];
+  const persistFailures = number(status.persistFailures);
+  if (persistFailures !== null && persistFailures > 0) lines.push(`⚠ ${persistFailures} persistence failures`);
   if (!compact) {
     lines.push(`▣ ${status.queuedTasks ?? 0} queued   ${status.activeTasks ?? 0} working`);
     lines.push(`$${number(status.costUsd) === null ? "--" : (number(status.costUsd) as number).toFixed(3)} observed`);
