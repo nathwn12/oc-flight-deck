@@ -7,7 +7,7 @@ import { contextPercent, formatFooter, formatSidebar, formatTasks, sidebarVisibl
 function statusValue(value: unknown, expectedLocation: string): UiStatus | null {
   if (typeof value !== "object" || value === null) return null;
   const status = value as UiStatus;
-  return status.location === undefined || status.location === expectedLocation ? status : null;
+  return status.location === expectedLocation ? status : null;
 }
 
 function currentSession(status: UiStatus | null, sessionId: string | undefined) {
