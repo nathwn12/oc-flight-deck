@@ -1,0 +1,58 @@
+{
+  "name": "oc-flight-deck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode V2 telemetry, swarm coordination, and guarded autopilot with an always-on CLI rail.",
+  "exports": {
+    ".": {
+      "types": "./src/server/index.ts",
+      "import": "./src/server/index.ts"
+    },
+    "./rpc": {
+      "types": "./src/server/rpc.ts",
+      "import": "./src/server/rpc.ts"
+    },
+    "./tui": {
+      "types": "./src/tui/index.tsx",
+      "import": "./src/tui/index.tsx"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "ocfd.example.jsonc",
+    "ocfd.schema.json"
+  ],
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run typecheck && bun test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "0.0.0-beta-19425",
+    "jsonc-parser": "3.3.1"
+  },
+  "devDependencies": {
+    "@opentui/core": "0.5.10",
+    "@opentui/solid": "0.5.10",
+    "@types/bun": "^1.4.2",
+    "solid-js": "1.9.15",
+    "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.10",
+    "@opentui/solid": ">=0.5.10",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true },
+    "solid-js": { "optional": true }
+  }
+}

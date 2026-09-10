@@ -1,0 +1,32 @@
+{
+  // Flight Deck's canonical config. Project files override the global file.
+  "telemetry": {
+    "enabled": true,
+  },
+  "metrics": {
+    "tps": true,
+    "ttft": true,
+    "cost": true,
+    "context": true,
+  },
+  "ui": {
+    "sidebar": "always",
+    "footer": "always",
+    "compact": true,
+  },
+  "coordination": {
+    "enabled": true,
+    "leaseTtlMs": 120000,
+    "heartbeatMs": 30000,
+  },
+  "autopilot": {
+    // Deliberately false. Turn on only after reviewing the board behavior.
+    "enabled": false,
+    "recommendations": true,
+    "backoff": true,
+    "requeue": true,
+  },
+  "history": {
+    "maxItems": 200,
+  },
+}
