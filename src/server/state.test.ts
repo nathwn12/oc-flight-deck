@@ -231,6 +231,8 @@ describe("Flight Deck server state", () => {
     const first = makeState(storage).state;
     first.recordStepStart({ sessionId: "s1", at: 1_000, provider: "p", model: "m" });
     first.recordUsage({ sessionId: "s1", at: 1_000, outputTokens: 1, costUsd: 0.02 });
+    first.recordUsage({ sessionId: "s1", at: 2_000, outputTokens: 2, costUsd: 0.01 });
+    first.recordUsage({ sessionId: "s1", at: 3_000, outputTokens: 3, costUsd: 0.02 });
     first.recordStepStart({ sessionId: "s2", at: 1_000, provider: "p", model: "m" });
     first.recordUsage({ sessionId: "s2", at: 1_000, outputTokens: 1, costUsd: 0.03 });
     await first.flush();
