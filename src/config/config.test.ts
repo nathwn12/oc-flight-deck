@@ -15,13 +15,12 @@ describe("Flight Deck config", () => {
   test("parses JSONC and rejects malformed values without enabling autopilot", () => {
     const parsed = parseFlightDeckConfig(`{
       // comments are supported
-      "metrics": { "tps": false },
-      "metrics": { "ttft": false },
+      "metrics": { "tps": false, "ttft": false },
       "autopilot": { "enabled": "yes", "backoff": true },
     }`);
     const config = mergeFlightDeckConfig(parsed.patch);
     expect(config.metrics.ttft).toBe(false);
-    expect(config.metrics.tps).toBe(true);
+    expect(config.metrics.tps).toBe(false);
     expect(config.autopilot.enabled).toBe(false);
     expect(config.autopilot.backoff).toBe(true);
   });
@@ -35,11 +34,11 @@ describe("Flight Deck config", () => {
     await mkdir(join(home, ".config", "opencode"), { recursive: true });
     await mkdir(join(root, "project"), { recursive: true });
     await writeFile(globalPath, '{ "telemetry": { "enabled": false }, "metrics": { "tps": false }, "autopilot": { "backoff": false } }');
-    await writeFile(projectPath, '{ "telemetry": { "cost": false }, "autopilot": { "enabled": true } }');
+    await writeFile(projectPath, '{ "metrics": { "cost": false }, "autopilot": { "enabled": true } }');
     const result = await loadFlightDeckConfig({ cwd: project, home, fs: { readFile: (path, encoding) => readFile(path, encoding), access: async (path) => { await readFile(path); } } });
     expect(result.config.telemetry.enabled).toBe(false);
     expect(result.config.metrics.tps).toBe(false);
-    expect(result.config.metrics.cost).toBe(true);
+    expect(result.config.metrics.cost).toBe(false);
     expect(result.config.autopilot.enabled).toBe(true);
     expect(result.config.autopilot.backoff).toBe(false);
     await rm(root, { recursive: true, force: true });

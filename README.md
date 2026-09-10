@@ -40,9 +40,25 @@ list and add the TUI package to `~/.config/opencode/cli.json`:
 { "plugins": ["oc-flight-deck"] }
 ```
 
-For a local checkout, use the local `./tui` entrypoint in that list. The exact
-server config location is intentionally left to the host's current V2
-configuration; no live user configuration is modified by this repository.
+For this private checkout, use an absolute Windows path to the checkout's
+`src` directory. The host resolves the TUI entrypoint as `<path>\tui` and the
+server entrypoint as `<path>\server` inside that directory, so `src` resolves
+to `src\tui\index.tsx` and `src\server\index.ts`. Pointing at the repo root or
+at `src\tui` itself will not resolve:
+
+```json
+{
+  "plugins": [
+    "Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src"
+  ]
+}
+```
+
+Replace the example with the `src` directory of the checkout on your machine.
+If the package is installed from a registry or linked locally, the package
+name `oc-flight-deck` can be used instead. The exact server config location is
+intentionally left to the host's current V2 configuration; no live user
+configuration is modified by this repository.
 
 ## Development
 
