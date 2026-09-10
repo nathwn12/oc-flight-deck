@@ -130,7 +130,7 @@ export default Plugin.define({
     const toolRegistration = await ctx.tool.transform((editor) => {
       editor.namespace({ name: "flightdeck", description: "Flight Deck swarm coordination and telemetry" });
       const taskInput = { type: "object", properties: { taskId: { type: "string" }, holder: { type: "string" } }, required: ["taskId"], additionalProperties: false } as const;
-      editor.add({
+      if (loaded.config.coordination.enabled) editor.add({
         name: "claim",
         description: "Claim a Flight Deck task for this session. Include a holder only when acting for another session.",
         input: taskInput,
@@ -140,7 +140,7 @@ export default Plugin.define({
           return { content: json(result) };
         },
       });
-      editor.add({
+      if (loaded.config.coordination.enabled) editor.add({
         name: "heartbeat",
         description: "Renew a claimed Flight Deck task lease.",
         input: taskInput,
@@ -150,7 +150,7 @@ export default Plugin.define({
           return { content: json(result) };
         },
       });
-      editor.add({
+      if (loaded.config.coordination.enabled) editor.add({
         name: "report",
         description: "Report progress or an outcome for a claimed Flight Deck task.",
         input: { type: "object", properties: { taskId: { type: "string" }, outcome: { type: "string" }, note: { type: "string" } }, required: ["taskId", "outcome"], additionalProperties: false } as const,

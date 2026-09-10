@@ -13,6 +13,7 @@ export interface UiTask {
 }
 
 export interface UiStatus {
+  readonly location?: string;
   readonly activeWorkers?: number;
   readonly blockedWorkers?: number;
   readonly queuedTasks?: number;

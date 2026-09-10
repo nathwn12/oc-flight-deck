@@ -4,8 +4,10 @@ import { FlightDeckRpc } from "../server/rpc.js";
 import { loadFlightDeckConfig } from "../config/discover.js";
 import { contextPercent, formatFooter, formatSidebar, formatTasks, sidebarVisible, type UiStatus } from "./presentation.js";
 
-function statusValue(value: unknown): UiStatus | null {
-  return typeof value === "object" && value !== null ? (value as UiStatus) : null;
+function statusValue(value: unknown, expectedLocation: string): UiStatus | null {
+  if (typeof value !== "object" || value === null) return null;
+  const status = value as UiStatus;
+  return status.location === undefined || status.location === expectedLocation ? status : null;
 }
 
 function currentSession(status: UiStatus | null, sessionId: string | undefined) {
@@ -27,11 +29,14 @@ export default Plugin.define({
       compact: loaded.config.ui.compact,
     });
     const api = context.client.rpc(FlightDeckRpc);
+    // Every RPC call must carry the active location explicitly, so refresh and
+    // controls can never silently resolve against the server's default location.
+    const callOptions = { location: { directory: location.directory, ...(location.workspaceID ? { workspace: location.workspaceID } : {}) } };
     let stopped = false;
     const refresh = async () => {
       try {
-        const next = await api.status({});
-        if (!stopped) setStatus(statusValue(next));
+        const next = await api.status({}, callOptions);
+        if (!stopped) setStatus(statusValue(next, location.directory));
       } catch {
         if (!stopped) setStatus(null);
       }
@@ -101,7 +106,7 @@ export default Plugin.define({
           slash: { name: "flightdeck-autopilot" },
           run: async () => {
             const next = !(status()?.autopilot ?? false);
-            await api.setAutopilot({ enabled: next });
+            await api.setAutopilot({ enabled: next }, callOptions);
             await refresh();
             context.ui.toast.show({ title: "Flight Deck", message: `Autopilot ${next ? "enabled" : "disabled"}`, variant: next ? "warning" : "success" });
           },
@@ -114,8 +119,8 @@ export default Plugin.define({
           slash: { name: "flightdeck-pause" },
           run: async () => {
             const next = !(status()?.paused ?? false);
-            if (next) await api.pause({});
-            else await api.resume({});
+            if (next) await api.pause({}, callOptions);
+            else await api.resume({}, callOptions);
             await refresh();
             context.ui.toast.show({ title: "Flight Deck", message: next ? "Fleet paused" : "Fleet resumed", variant: next ? "warning" : "success" });
           },
