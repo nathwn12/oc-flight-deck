@@ -33,18 +33,24 @@ switches live under `metrics`. Autopilot defaults to `false`.
 | `oc-flight-deck/rpc` | Shared RPC contract |
 | `oc-flight-deck/tui` | OpenCode CLI/TUI plugin |
 
-For a local checkout, add the server package path to the OpenCode V2 plugin
-list and add the TUI package to `~/.config/opencode/cli.json`:
+For an installed or locally linked package, add the package name to the
+OpenCode V2 server plugin list and to `~/.config/opencode/cli.json`:
 
 ```json
 { "plugins": ["oc-flight-deck"] }
 ```
 
-For this private checkout, use an absolute Windows path to the checkout's
-`src` directory. The host resolves the TUI entrypoint as `<path>\tui` and the
-server entrypoint as `<path>\server` inside that directory, so `src` resolves
-to `src\tui\index.tsx` and `src\server\index.ts`. Pointing at the repo root or
-at `src\tui` itself will not resolve:
+For this private checkout, add the server entrypoint explicitly to the local
+V2 server config (the repository's `opencode.jsonc` uses this form):
+
+```json
+{ "plugins": ["Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src\\server"] }
+```
+
+For the CLI config, use an absolute Windows path to the checkout's `src`
+directory. The host resolves the TUI entrypoint as `<path>\tui` inside that
+directory, so `src` resolves to `src\tui\index.tsx`. Pointing at the repo root
+or at `src\tui` itself will not resolve:
 
 ```json
 {
