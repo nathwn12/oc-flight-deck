@@ -28,7 +28,8 @@ Flight Deck · cosmetic rail
 - **Prompt footer** — one quiet line under the composer.
 - **Theme-native** — colors come from your active OpenCode theme, so it blends
   with whatever look you're already running.
-- **Static and small** — fixed text only. Nothing is read, tracked, or sent.
+- **Static and small** — fixed text only. The one file it reads is its own
+  optional config; nothing is tracked or sent.
 
 ## Requirements
 

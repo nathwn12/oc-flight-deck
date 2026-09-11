@@ -46,6 +46,17 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
 const MAX_LINES = 24;
 const MAX_LINE_LENGTH = 120;
 
+// Rails render on a single line, so control characters are replaced with
+// spaces rather than being passed to the renderer.
+const CONTROL_CHAR = /[\u0000-\u001F\u007F-\u009F]/;
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+function normalizeText(value: string, path: string, issues: string[]): string {
+  if (!CONTROL_CHAR.test(value)) return value.trim();
+  issues.push(`${path} contained control characters; they were replaced with spaces`);
+  return value.replace(CONTROL_CHARS, " ").replace(/ {2,}/g, " ").trim();
+}
+
 export interface ConfigResolution {
   readonly config: FlightDeckConfig;
   /** Human-readable problems found in the supplied options; empty when clean. */
@@ -69,12 +80,16 @@ function readText(value: unknown, fallback: string, path: string, issues: string
     issues.push(`${path} must be a string; using the default`);
     return fallback;
   }
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
+  const text = normalizeText(value, path, issues);
+  if (text.length === 0) {
     issues.push(`${path} must not be empty; using the default`);
     return fallback;
   }
-  return trimmed.length > MAX_LINE_LENGTH ? trimmed.slice(0, MAX_LINE_LENGTH) : trimmed;
+  if (text.length > MAX_LINE_LENGTH) {
+    issues.push(`${path} was longer than ${MAX_LINE_LENGTH} characters; it was shortened`);
+    return text.slice(0, MAX_LINE_LENGTH);
+  }
+  return text;
 }
 
 function readLines(value: unknown, issues: string[]): readonly string[] {
@@ -86,16 +101,22 @@ function readLines(value: unknown, issues: string[]): readonly string[] {
 
   const lines: string[] = [];
   value.forEach((entry, index) => {
+    const path = `sidebar.lines[${index}]`;
     if (typeof entry !== "string") {
-      issues.push(`sidebar.lines[${index}] must be a string; skipping it`);
+      issues.push(`${path} must be a string; skipping it`);
       return;
     }
-    const trimmed = entry.trim();
-    if (trimmed.length === 0) {
-      issues.push(`sidebar.lines[${index}] is empty; skipping it`);
+    const text = normalizeText(entry, path, issues);
+    if (text.length === 0) {
+      issues.push(`${path} is empty; skipping it`);
       return;
     }
-    lines.push(trimmed.length > MAX_LINE_LENGTH ? trimmed.slice(0, MAX_LINE_LENGTH) : trimmed);
+    if (text.length > MAX_LINE_LENGTH) {
+      issues.push(`${path} was longer than ${MAX_LINE_LENGTH} characters; it was shortened`);
+      lines.push(text.slice(0, MAX_LINE_LENGTH));
+      return;
+    }
+    lines.push(text);
   });
 
   if (lines.length === 0) {

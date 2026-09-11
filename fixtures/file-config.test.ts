@@ -107,6 +107,14 @@ describe("flight deck config file", () => {
     expect(loaded.issue).toContain("is empty");
   });
 
+  test("refuses to read an oversized file", () => {
+    const directory = workspace();
+    writeFileSync(join(directory, "flight-deck.jsonc"), `{ "footer": { "text": "${"x".repeat(70 * 1024)}" } }`);
+    const loaded = loadConfigFile(directory);
+    expect(loaded.options).toBeUndefined();
+    expect(loaded.issue).toContain("larger than");
+  });
+
   test("lets host options override the file", () => {
     const directory = workspace();
     writeFileSync(
