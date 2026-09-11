@@ -39,6 +39,8 @@ export interface StatSource {
   readonly context?: unknown;
   readonly project?: unknown;
   readonly status?: unknown;
+  /** True when anything is working: this session, a subagent, or a shell. */
+  readonly busy?: unknown;
   readonly perms?: unknown;
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;
@@ -70,6 +72,14 @@ export const STAT_FIELDS = [
 ] as const;
 
 export type StatField = (typeof STAT_FIELDS)[number];
+
+/**
+ * Fields whose value only ever changes on a clock tick.
+ *
+ * The ticker exists to animate these. When none of them is on screen there is
+ * nothing to animate, so the plugin does not start a timer at all.
+ */
+export const ANIMATED_FIELDS = ["status", "elapsed"] as const;
 
 export function isStatField(value: string): value is StatField {
   return (STAT_FIELDS as readonly string[]).includes(value);
@@ -162,11 +172,18 @@ export function statLine(field: string, source: StatSource): string | undefined 
   switch (field) {
     case "status": {
       const status = asText(source.status);
-      if (status === undefined) return undefined;
+      if (status === undefined && source.busy === undefined) return undefined;
       // The spinner lives here rather than in a row of its own: an animated
       // glyph beside "running" says the same thing without spending a line.
-      if (status !== "running") return row("status", "○ idle");
-      const frame = asCount(source.frame) ?? 0;
+      //
+      // `busy` folds in work the session's own status misses — a subagent
+      // running in its own session, or a shell command still going — so the
+      // glyph only stops when there is genuinely nothing happening. A host that
+      // does not report it falls back to the session's own status.
+      if (source.busy !== true && status !== "running") return row("status", "○ idle");
+      // Floored at the boundary: a fractional frame would index the frame list
+      // with a non-integer and render `undefined`.
+      const frame = Math.floor(asCount(source.frame) ?? 0);
       return row("status", `${SPINNER[frame % SPINNER.length]} running`);
     }
     case "agent": {

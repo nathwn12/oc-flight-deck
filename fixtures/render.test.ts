@@ -49,6 +49,11 @@ interface HarnessExtras {
   readonly children?: Record<string, unknown>;
   readonly messages?: readonly unknown[];
   readonly models?: readonly unknown[];
+  /** Per-session status; omit for the default idle. May throw for one id. */
+  readonly status?: (id: string) => string | undefined;
+  readonly shells?: readonly unknown[];
+  /** Simulate a host with no shell API at all. */
+  readonly omitShell?: boolean;
 }
 
 function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
@@ -69,11 +74,16 @@ function harness(options: unknown, directory: string, session: unknown = undefin
       session: {
         get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
         list: () => [],
-        status: () => (session === undefined ? undefined : "idle"),
+        // An explicit undefined from the knob must survive: `??` would turn it
+        // back into the default idle and hide the "host said nothing" case.
+        status: (id: string) =>
+          extras.status === undefined ? (session === undefined ? undefined : "idle") : extras.status(id),
         family: () => extras.family ?? [],
         message: { list: () => extras.messages ?? [] },
         permission: { list: () => [] },
       },
+      // Shell support is optional so its absence can be pinned as well.
+      ...(extras.omitShell === true ? {} : { shell: { listBySession: () => extras.shells ?? [] } }),
     },
     ui: {
       slot: (claim: { append?: string; prepend?: string; render: Render }) => {
@@ -303,4 +313,73 @@ test("warns and keeps rendering when the config file is broken", async () => {
   expect(await frameOf(sidebar!.render, 40, 12)).toContain("FLIGHT DECK");
   // A broken file falls back to the off-by-default footer, not a guessed one.
   expect(footer).toBeUndefined();
+});
+
+// The status row is the rail's only moving part, so "is anything working" comes
+// from more than the session's own status: a subagent runs in its own session,
+// and a shell command outlives the turn that started it. These pin that
+// derivation through the real slot render rather than through a stub.
+
+test("keeps the glyph turning while a subagent runs, though the parent reads idle", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    family: ["ses_test", "ses_child"],
+    children: { ses_child: { cost: 0.02 } },
+    status: (id) => (id === "ses_child" ? "running" : "idle"),
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 16);
+  expect(frame).toContain("running");
+  expect(frame).not.toContain("idle");
+});
+
+test("keeps the glyph turning while a shell command runs", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    status: () => "idle",
+    shells: [{ status: "running", command: "bun test" }],
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 16);
+  expect(frame).toContain("running");
+  expect(frame).not.toContain("idle");
+});
+
+test("finds a running subagent even when a sibling status cannot be read", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    family: ["ses_test", "ses_broken", "ses_child"],
+    children: { ses_broken: {}, ses_child: {} },
+    status: (id) => {
+      if (id === "ses_broken") throw new Error("unreadable");
+      return id === "ses_child" ? "running" : "idle";
+    },
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 16)).toContain("running");
+});
+
+test("reads idle only when nothing anywhere is running", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    status: () => "idle",
+    shells: [{ status: "exited", command: "bun test" }],
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 16)).toContain("○ idle");
+});
+
+test("omits the status row rather than guess when the host will not say", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    // A host with no shell API and no session status: the rail must omit the row
+    // rather than invent "idle".
+    status: () => undefined,
+    omitShell: true,
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 16);
+  expect(frame).toContain("FLIGHT DECK");
+  expect(frame).not.toContain("idle");
+  expect(frame).not.toContain("running");
 });

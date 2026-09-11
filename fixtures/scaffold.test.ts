@@ -20,6 +20,7 @@ afterEach(() => {
 
 function stubContext(options: Record<string, unknown> = {}) {
   const slots: { readonly path: string; readonly release: () => void }[] = [];
+  const memoryCalls: string[] = [];
   // Point at an empty workspace so the result never depends on a config file
   // that happens to exist in the repo root.
   const directory = mkdtempSync(join(tmpdir(), "flight-deck-scaffold-"));
@@ -38,6 +39,19 @@ function stubContext(options: Record<string, unknown> = {}) {
         message: { list: () => [] },
         permission: { list: () => [] },
       },
+      // Session-scoped shells keep the spinner turning while a command runs.
+      shell: { listBySession: () => [] },
+    },
+    // The animation tick lives in the host's memory store, so the stub provides
+    // one the way a real host does: a readable frame plus a mutation that lands
+    // on that same object. Calls are recorded so the wiring can be asserted
+    // behaviourally instead of by grepping the source for a function name.
+    storage: {
+      memory: (key: string, options: { initial: { frame: number } }) => {
+        memoryCalls.push(key);
+        const state = { frame: options.initial.frame };
+        return [state, (mutation: (draft: { frame: number }) => void) => mutation(state)];
+      },
     },
     ui: {
       slot: (claim: { append: string }) => {
@@ -51,7 +65,7 @@ function stubContext(options: Record<string, unknown> = {}) {
       toast: { show: () => {} },
     },
   } as unknown as Parameters<typeof flightDeck.setup>[0];
-  return { context, slots };
+  return { context, slots, memoryCalls };
 }
 
 describe("flight deck plugin", () => {
@@ -121,8 +135,9 @@ describe("flight deck plugin", () => {
     ]);
 
     // The shipped TUI source stays inside its boundary: slot claims, theme
-    // tokens, read-only config, and read-only session state. No RPC, no polling,
-    // no storage, no keymap, and nothing that writes anywhere.
+    // tokens, read-only config, and read-only session state. No RPC, no keymap,
+    // no session writes, and no direct storage — the single write it performs is
+    // delegated to ./ticker.ts, which the next block pins down.
     const source = await readFile(join(root, "src", "tui", "index.tsx"), "utf8");
     expect(source).toContain("@opencode/plugin/tui");
     expect(source).toContain("context.ui.slot");
@@ -134,8 +149,15 @@ describe("flight deck plugin", () => {
     // Reading session state is the whole data surface: nothing is written out.
     expect(source).not.toMatch(/\.set\(|\.remove\(|fetch\(|context\.storage/);
     // The ticker exists for clock-derived rows and is opt-out via `refresh: 0`.
-    expect(source).toContain("setInterval");
-    expect(source).toContain("config.refresh > 0");
+    // It is the plugin's only write, so it lives in its own module where the
+    // boundary can be read and pinned in one place.
+    const tickerSource = await readFile(join(root, "src", "tui", "ticker.ts"), "utf8");
+    expect(tickerSource).toContain("setInterval");
+    expect(tickerSource).toContain("clearInterval");
+    expect(tickerSource).toContain("storage.memory");
+    // Ephemeral, in-process host state only: never the durable store, never a
+    // request, never a file. The frame counter must not outlive the TUI.
+    expect(tickerSource).not.toMatch(/storage\.store|fetch\(|client\.|writeFile|readFile/);
 
     // Every default row is live host state, not text we invented.
     const framed = sidebarLines(DEFAULT_CONFIG, {
@@ -176,7 +198,35 @@ describe("flight deck plugin", () => {
 
   test("claims both slots once the footer is configured", async () => {
     const { context, slots } = stubContext({ footer: { text: "Flight Deck" } });
-    await flightDeck.setup(context);
+    const cleanup = await flightDeck.setup(context);
     expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "prompt.footer.status"]);
+    // Always clean up: setup starts a real interval otherwise, which would outlive
+    // the test and surface as an unrelated async failure later in the run.
+    await cleanup?.();
+  });
+
+  // Behavioural rather than textual: grepping for `storage.memory` proves nothing
+  // about whether the wiring actually reaches it. A revert to a private
+  // `createSignal` ticker would keep every source guard green while re-breaking
+  // the feature — these fail instead.
+  test("starts the host ticker through the wiring, and skips it when told to", async () => {
+    const on = stubContext();
+    const cleanup = await flightDeck.setup(on.context);
+    expect(on.memoryCalls).toEqual(["flight-deck.frame"]);
+    await cleanup?.();
+
+    const off = stubContext({ refresh: 0 });
+    const offCleanup = await flightDeck.setup(off.context);
+    expect(off.memoryCalls).toEqual([]);
+    await offCleanup?.();
+  });
+
+  test("never starts a ticker when nothing on the rail animates", async () => {
+    // No `status` and no `elapsed`: there is nothing for a clock to move, so the
+    // host renderer must not be woken ten times a second for it.
+    const statics = stubContext({ sidebar: { rows: ["agent", "model"] } });
+    const cleanup = await flightDeck.setup(statics.context);
+    expect(statics.memoryCalls).toEqual([]);
+    await cleanup?.();
   });
 });

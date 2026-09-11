@@ -1,18 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
-import { createSignal } from "solid-js";
 import { mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
-import type { StatSource } from "./stats.js";
+import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
+import { startTicker } from "./ticker.js";
 
 // Flight Deck is a read-only instrument panel for the OpenCode V2 CLI/TUI. It
 // shows the open session's agent, model, branch, cost, tokens, and cache hit
 // rate in the sidebar. It uses only the official CLI plugin boundary —
 // `@opencode/plugin/tui`, `context.ui.slot`, and theme tokens.
 //
-// Read-only by construction: it never writes, requests, stores, subscribes, or
-// polls. Everything it shows is state the host already holds in memory.
+// Read-only but for one thing: the animation tick writes a single counter into
+// the host's ephemeral plugin-memory store. It has to, because a timer owned by
+// this plugin cannot wake the host's renderer — see ./ticker.ts for why. That
+// counter is in-process, scoped to this plugin, and gone when the TUI exits.
+// Everything the rail displays is state the host already holds in memory.
 //
 // Appearance comes from, in order of precedence:
 //   1. `context.options` — the host's plugin options, when the host forwards them
@@ -165,6 +168,43 @@ export default Plugin.define({
       }
     };
 
+    // Anything genuinely working keeps the status glyph turning: this session
+    // (thinking, streaming, running tools), any subagent in its tree, or a shell
+    // command still running. Returns `undefined` when the host has not said
+    // either way, so the rail can omit the row rather than invent "idle".
+    const busy = (sessionID: string): boolean | undefined => {
+      const status = statusOf(sessionID);
+      if (status === "running") return true;
+
+      try {
+        for (const id of context.data.session.family(sessionID) ?? []) {
+          if (id === sessionID) continue;
+          try {
+            if (context.data.session.status(id) === "running") return true;
+          } catch {
+            // One unreadable child must not hide a running sibling.
+          }
+        }
+      } catch {
+        // No subagent status on this host; the shell check below still applies.
+      }
+
+      try {
+        // `listBySession` is on the reactive client the host hands the plugin,
+        // but not on every published type surface, so it is reached defensively:
+        // a host without it still falls back to the session's own status.
+        const shellApi = context.data.shell as unknown as
+          | { listBySession?: (id: string) => readonly unknown[] }
+          | undefined;
+        const shells = shellApi?.listBySession?.(sessionID);
+        if (shells !== undefined && shells.some((entry) => asRecord(entry)?.status === "running")) return true;
+      } catch {
+        // Same again: unreadable shells just mean no shell signal.
+      }
+
+      return status === undefined ? undefined : false;
+    };
+
     // Throughput of the last completed turn. The host records when streaming
     // finished, so this is measured rather than estimated from wall-clock.
     const lastTps = (sessionID: string): number | undefined => {
@@ -199,10 +239,13 @@ export default Plugin.define({
     };
 
     // A ticker exists only for clock-derived rows; everything else updates from
-    // the host's own events. `refresh: 0` opts out of it entirely.
-    const [frame, setFrame] = createSignal(0);
-    const timer =
-      config.refresh > 0 ? setInterval(() => setFrame((value) => value + 1), config.refresh) : undefined;
+    // the host's own events. It is skipped entirely when nothing on the rail
+    // animates, and `refresh: 0` opts out regardless. The tick has to live in the
+    // host's reactive graph rather than ours, or it re-renders nothing at all.
+    const animated =
+      config.sidebar.enabled &&
+      config.sidebar.rows.some((name) => (ANIMATED_FIELDS as readonly string[]).includes(name));
+    const ticker = startTicker(context, animated ? config.refresh : 0);
 
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
@@ -219,13 +262,15 @@ export default Plugin.define({
         context: contextUsage(sessionID, session?.model),
         project: projectTotals(),
         status: statusOf(sessionID),
+        busy: busy(sessionID),
         perms: permsOf(sessionID),
         tps: lastTps(sessionID),
         spark: sparkValues(sessionID),
         elapsedMs: sessionElapsed(session),
         turns,
-        // Read the tick so the slot re-runs each frame.
-        frame: frame(),
+        // Read the tick inside the render so the host registers a dependency on
+        // it; that read is what makes the rail re-run on the ticker's schedule.
+        frame: ticker?.frame ?? 0,
       };
     };
 
@@ -261,7 +306,7 @@ export default Plugin.define({
     }
 
     return () => {
-      if (timer !== undefined) clearInterval(timer);
+      ticker?.dispose();
       for (const release of releases) release();
     };
   },
