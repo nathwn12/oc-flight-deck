@@ -1,34 +1,45 @@
 {
   // Flight Deck configuration.
   //
-  // To use it, copy this file to `flight-deck.jsonc` (beside this file) or to
-  // `.opencode/flight-deck.jsonc`, then edit. Comments and trailing commas are
-  // both fine.
+  // EVERYTHING HERE IS OPTIONAL. Install the plugin and the panel works with no
+  // config file at all — the values below are the defaults, written out so you
+  // can see what to change. Delete any key and its default comes back.
+  //
+  // To use it, copy this file to `flight-deck.jsonc` beside it, or to
+  // `.opencode/flight-deck.jsonc`. Comments and trailing commas are both fine.
   //
   // Flight Deck looks for these, in order, and uses the first one it finds:
   //   .opencode/flight-deck.jsonc   .opencode/flight-deck.json
   //   flight-deck.jsonc             flight-deck.json
-  //
-  // Every key is optional. Delete anything you don't want to change and the
-  // default comes back — the values below are those defaults.
 
   "sidebar": {
-    // Set to false to hide the sidebar rail entirely.
+    // Set to false to hide the panel entirely.
     "enabled": true,
-    // Rendered top to bottom beside an open session. The first line uses your
-    // theme's primary text color; the remaining lines use the subdued color.
-    "lines": [
-      "✈ FLIGHT DECK",
-      "─────────────",
-      "visual rail",
-      "cosmetic build"
-    ]
+
+    // Fixed lines, rendered above the live rows. Add your own words or a rule.
+    "lines": ["✈ FLIGHT DECK", "─────────────────"],
+
+    // The live rows, top to bottom. Every value is read from the open session —
+    // you never type these in. Delete any line you don't want to see.
+    //
+    //   agent      which agent is running (orchestrator, build, plan, ...)
+    //   model      model id, plus the variant when there is one
+    //   branch     the current git branch
+    //   cost       what this session has cost so far
+    //   total      this session plus all its subagents (hidden until one runs)
+    //   tokens     input and output tokens
+    //   cache      cache hit rate, then cache reads
+    //   reasoning  reasoning tokens, when the model emits them
+    //   context    how full the context window is
+    //   elapsed    wall-clock time since the session started
+    //   turns      number of messages in the session
+    "rows": ["agent", "model", "branch", "cost", "total", "tokens", "cache", "context"]
   },
 
   "footer": {
-    // Set to false to hide the prompt-footer line entirely.
-    "enabled": true,
-    // Any single line. Empty text is ignored.
-    "text": "Flight Deck · cosmetic rail"
+    // Off by default: the sidebar already carries the data, and the prompt
+    // footer is high-traffic space. Turn it on for a short custom label.
+    "enabled": false,
+    "text": "Flight Deck"
   }
 }

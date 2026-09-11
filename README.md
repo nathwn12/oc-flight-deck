@@ -1,35 +1,41 @@
 # ✈ Flight Deck
 
-**A tiny cosmetic plugin for the OpenCode V2 terminal.**
+**A read-only instrument panel for the OpenCode V2 terminal.**
 
-It puts a branded rail in your session sidebar and a one-line signature under
-your prompt, so your terminal feels a little more like a cockpit. That's the
-whole feature.
+Flight Deck shows the open session's live numbers in your sidebar — agent, model,
+branch, cost, tokens, cache hit rate, context occupancy — so you can see what your
+session is actually doing and what it's costing before the bill tells you.
 
-No commands to learn. No data collected. No config required. Install it, enjoy
-it, and delete it whenever you like — the stock UI comes straight back.
+No commands to learn. No telemetry, no network calls, nothing written. It only
+reads state OpenCode already holds, and deleting it leaves the stock UI behind.
 
 ## What you get
 
 ```
 ✈ FLIGHT DECK
-─────────────
-visual rail
-cosmetic build
+─────────────────
+agent      orchestrator
+model      deepseek-v4.1-flash · high
+branch     main
+cost       $0.225
+total      $0.245 · 2 subagents
+tokens     533k in · 91k out
+cache      98% hit · 32M read
+context    218k / 1M · 22%
 ```
 
-…and under the prompt:
+Rows appear as the data does — nothing is shown until it's real, so a fresh
+session starts with the header alone and fills in as you work.
 
-```
-Flight Deck · cosmetic rail
-```
-
-- **Sidebar rail** — shown beside an open session.
-- **Prompt footer** — one quiet line under the composer.
-- **Theme-native** — colors come from your active OpenCode theme, so it blends
-  with whatever look you're already running.
-- **Static and small** — fixed text only. The one file it reads is its own
-  optional config; nothing is tracked or sent.
+- **Whole-session totals.** Cost and tokens are cumulative for the session.
+- **`total` includes subagents.** Subagent sessions are separate sessions, so the
+  parent's own cost understates a swarm. `total` sums the tree.
+- **`cache` is the value signal.** A 98% hit rate is what makes millions of
+  tokens cost cents; it's also the first thing to break.
+- **`context` is real occupancy.** Taken from the last request's prompt size, not
+  a running total, so you can see the window filling up.
+- **Theme-native.** Every line uses your active theme's text tokens, so it blends
+  with whatever look you already run.
 
 ## Requirements
 
@@ -38,27 +44,42 @@ Flight Deck · cosmetic rail
 
 ## Install
 
-Clone the repo somewhere handy, then point OpenCode at the folder. In
-`opencode.jsonc` (or `cli.json` for CLI-only use):
+From a published package, add it to `opencode.jsonc`:
 
 ```jsonc
 {
-  "plugins": ["./plugins/oc-flight-deck"]
+  "plugins": ["oc-flight-deck"]
 }
 ```
 
-Restart OpenCode and you're done. Flight Deck shows up with its default look —
-no configuration required.
+From a local checkout, OpenCode discovers plugins under its config directory.
+Create two one-line bridges so the plugin code stays in your checkout:
+
+```
+~/.config/opencode/plugins/flight-deck/index.ts
+~/.config/opencode/plugins/flight-deck/tui.ts
+```
+
+```ts
+// index.ts — the registerable entrypoint
+export { default } from "file:///path/to/oc-flight-deck/src/index.ts";
+```
+
+```ts
+// tui.ts — the terminal UI entrypoint
+export { default } from "file:///path/to/oc-flight-deck/src/tui/index.tsx";
+```
+
+Restart OpenCode. The panel appears beside an open session — the sidebar only
+exists inside a session, so the home screen stays untouched.
 
 ## Configuration
 
-Flight Deck reads a small JSONC file, so you can leave comments next to the
-values you change. To customize it, copy `flight-deck.example.jsonc` to one of:
+**Nothing is required.** Install it and the panel works. The file below exists
+only to change the defaults.
 
-- `flight-deck.jsonc` at your project root, or
-- `.opencode/flight-deck.jsonc`
-
-Flight Deck uses the first one it finds, in this order:
+Copy `flight-deck.example.jsonc` to one of these; Flight Deck uses the first it
+finds, in order:
 
 ```
 .opencode/flight-deck.jsonc
@@ -67,46 +88,62 @@ flight-deck.jsonc
 flight-deck.json
 ```
 
-Every key is optional. Delete anything you don't want to change and the default
-comes back — the values below *are* the defaults:
-
 ```jsonc
 {
   "sidebar": {
-    // false hides the sidebar rail entirely.
+    // false hides the panel entirely.
     "enabled": true,
-    // Top to bottom beside an open session. The first line uses your theme's
-    // primary text color; the rest use the subdued color.
-    "lines": [
-      "✈ FLIGHT DECK",
-      "─────────────",
-      "visual rail",
-      "cosmetic build"
-    ]
+    // Fixed lines above the live rows. Your own words, or a rule.
+    "lines": ["✈ FLIGHT DECK", "─────────────────"],
+    // The live rows, top to bottom. Delete any you don't want.
+    "rows": ["agent", "model", "branch", "cost", "total", "tokens", "cache", "context"]
   },
   "footer": {
-    // false hides the prompt-footer line entirely.
-    "enabled": true,
-    // Any single line. Empty text is ignored.
-    "text": "Flight Deck · cosmetic rail"
+    // Off by default: the sidebar already carries the data, and the prompt
+    // footer is high-traffic space. Turn it on for a short custom label.
+    "enabled": false,
+    "text": "Flight Deck"
   }
 }
 ```
 
+### Rows
+
+Every row is read from the open session. You never type these values in.
+
+| Row | Shows | Notes |
+| --- | --- | --- |
+| `agent` | Which agent is running | `orchestrator`, `build`, `plan`, … |
+| `model` | Model id and variant | Variant matters: `high` behaves differently. |
+| `branch` | Current git branch | From the location's VCS info. |
+| `cost` | What this session has cost | Cumulative across every turn. |
+| `total` | This session **plus its subagents** | Hidden until a subagent has run. |
+| `tokens` | Input and output tokens | Cumulative for the session. |
+| `cache` | Cache hit rate, then cache reads | Falls back to reads if the rate is underivable. |
+| `reasoning` | Reasoning tokens | Hidden when the model emits none. |
+| `context` | Context window occupancy | From the last request's prompt size. |
+| `elapsed` | Wall-clock time since the session started | |
+| `turns` | Number of messages | |
+
+### Options
+
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `sidebar.enabled` | boolean | `true` | Set `false` to hide the sidebar rail. |
-| `sidebar.lines` | string[] | see above | Lines top to bottom. The first uses your theme's primary text color, the rest the subdued color. |
-| `footer.enabled` | boolean | `true` | Set `false` to hide the prompt-footer line. |
-| `footer.text` | string | `Flight Deck · cosmetic rail` | Any single line. |
+| `sidebar.enabled` | boolean | `true` | Set `false` to hide the panel. |
+| `sidebar.lines` | string[] | `["✈ FLIGHT DECK", "─────────────────"]` | Fixed text above the rows. The first line uses your theme's primary text color, the rest the subdued color. |
+| `sidebar.rows` | string[] | the eight above | Any of the rows in the table, in any order. |
+| `footer.enabled` | boolean | `false` | The prompt footer is off unless you configure it. |
+| `footer.text` | string | `"Flight Deck"` | Any single line. |
 
 A few things worth knowing:
 
-- **Mistakes are harmless.** A bad value is ignored rather than fatal: Flight
-  Deck falls back to the default and shows a one-time warning toast naming the
-  key to fix.
-- **Layout is guarded.** `sidebar.lines` is capped at 24 lines of 120 characters
-  each, so a stray edit can't wreck your terminal.
+- **Writing a footer setting turns the footer on.** Set `footer.enabled: false`
+  explicitly to keep it hidden.
+- **Mistakes are harmless.** A bad value is ignored rather than fatal: Flight Deck
+  falls back to the default and shows a one-time warning toast naming the key —
+  including an unrecognised row name.
+- **Layout is guarded.** The panel is capped at 24 lines of 120 characters, so a
+  stray edit can't wreck your terminal.
 - **Forward compatible.** Unknown keys are ignored, so a config written for a
   newer version still loads cleanly.
 - **Host options also work.** The same values can be passed as plugin options in
@@ -115,8 +152,8 @@ A few things worth knowing:
 
 ## Uninstall
 
-Remove the plugin entry (or the folder), delete your Flight Deck config file,
-restart OpenCode, and the stock sidebar and footer are back.
+Remove the plugin entry (or the bridge folder), delete your Flight Deck config
+file, restart OpenCode, and the stock sidebar is back.
 
 ## Development
 
@@ -125,8 +162,8 @@ bun install
 bun run check
 ```
 
-`bun run check` runs the type checker and the test suite, including a headless
-render test that mounts both rails in a real OpenTUI renderer and asserts the
+`bun run check` runs the type checker and the test suite, including headless
+render tests that mount the panel in a real OpenTUI renderer and assert the exact
 characters that come out.
 
 Built on the official

@@ -14,10 +14,33 @@ describe("flight deck config", () => {
     expect(resolution.issues).toEqual([]);
     expect(resolution.config).toEqual(DEFAULT_CONFIG);
     // Literal defaults, so a silent edit to the constants is still caught.
-    expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────", "visual rail", "cosmetic build"]);
-    expect(footerLine(resolution.config)).toBe("Flight Deck · cosmetic rail");
-    expect(DEFAULT_FOOTER_TEXT).toBe("Flight Deck · cosmetic rail");
+    // With no session data, only the fixed branding line renders.
+    expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
+    expect(resolution.config.sidebar.rows).toEqual([
+      "agent",
+      "model",
+      "branch",
+      "cost",
+      "total",
+      "tokens",
+      "cache",
+      "context",
+    ]);
     expect(DEFAULT_SIDEBAR_LINES[0]).toBe("✈ FLIGHT DECK");
+    // The prompt footer is off unless configured: the sidebar already has it.
+    expect(footerLine(resolution.config)).toBeUndefined();
+    expect(DEFAULT_CONFIG.footer.enabled).toBe(false);
+    expect(DEFAULT_FOOTER_TEXT).toBe("Flight Deck");
+  });
+
+  test("turns the footer on as soon as any footer setting is written", () => {
+    const resolution = resolveConfig({ footer: { text: "hello" } });
+    expect(resolution.issues).toEqual([]);
+    expect(resolution.config.footer.enabled).toBe(true);
+    expect(footerLine(resolution.config)).toBe("hello");
+
+    // An explicit false still wins over the implied opt-in.
+    expect(resolveConfig({ footer: { enabled: false, text: "hello" } }).config.footer.enabled).toBe(false);
   });
 
   test("applies user overrides and trims whitespace", () => {
@@ -53,7 +76,24 @@ describe("flight deck config", () => {
 
   test("falls back to the default lines when every entry is unusable", () => {
     const resolution = resolveConfig({ sidebar: { lines: [42, "   ", null] } });
-    expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────", "visual rail", "cosmetic build"]);
+    expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
+    expect(resolution.issues.join(" ")).toContain("no usable entries");
+  });
+
+  test("accepts a custom row selection and reports unknown field names", () => {
+    const custom = resolveConfig({ sidebar: { rows: ["cost", "branch"] } });
+    expect(custom.issues).toEqual([]);
+    expect(custom.config.sidebar.rows).toEqual(["cost", "branch"]);
+
+    const bad = resolveConfig({ sidebar: { rows: ["cost", "nope"] } });
+    expect(bad.config.sidebar.rows).toEqual(["cost"]);
+    expect(bad.issues.join(" ")).toContain("sidebar.rows[1]");
+    expect(bad.issues.join(" ")).toContain("not a known field");
+  });
+
+  test("falls back to the default rows when none are usable", () => {
+    const resolution = resolveConfig({ sidebar: { rows: [1, "  ", "nope"] } });
+    expect(resolution.config.sidebar.rows).toEqual(DEFAULT_CONFIG.sidebar.rows);
     expect(resolution.issues.join(" ")).toContain("no usable entries");
   });
 
@@ -127,7 +167,9 @@ describe("flight deck option precedence", () => {
   test("lets a malformed host section win loudly over a valid file section", () => {
     const { config, issues } = resolveConfig(mergeOptions({ footer: { text: "file footer" } }, { footer: 12 }));
     expect(issues.join(" ")).toContain("footer must be an object");
-    expect(footerLine(config)).toBe(DEFAULT_FOOTER_TEXT);
+    // The malformed section is discarded entirely, so the rail falls back to
+    // its off-by-default state rather than guessing at the file's intent.
+    expect(footerLine(config)).toBeUndefined();
   });
 
   // The mirror case: when the host supplies a valid section, it takes over and
