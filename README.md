@@ -47,24 +47,39 @@ V2 server config (the repository's `opencode.jsonc` uses this form):
 { "plugins": ["Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src\\server"] }
 ```
 
-For the CLI config, use an absolute Windows path to the checkout's `src`
-directory. The host resolves the TUI entrypoint as `<path>\tui` inside that
-directory, so `src` resolves to `src\tui\index.tsx`. Pointing at the repo root
-or at `src\tui` itself will not resolve:
+For the CLI config, use an absolute Windows path to the checkout's `src\tui`
+directory:
 
 ```json
 {
   "plugins": [
-    "Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src"
+    "Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src\\tui"
   ]
 }
 ```
 
-Replace the example with the `src` directory of the checkout on your machine.
-If the package is installed from a registry or linked locally, the package
-name `oc-flight-deck` can be used instead. The exact server config location is
-intentionally left to the host's current V2 configuration; no live user
-configuration is modified by this repository.
+Replace the example with the `src\tui` directory of the checkout on your
+machine. This beta accepts the local TUI directory directly. The repository
+does not modify the live `cli.json`; use a temporary `XDG_CONFIG_HOME` when
+testing without changing your normal CLI configuration:
+
+```powershell
+$repo = 'Q:\PROJECTS\PERSONAL\oc-flight-deck'
+$testConfig = Join-Path $env:TEMP 'ocfd-cli-test'
+New-Item -ItemType Directory -Force "$testConfig\opencode" | Out-Null
+@{ '$schema' = 'https://opencode.ai/v2/cli.json'; plugins = @("$repo\src\tui") } |
+  ConvertTo-Json | Set-Content "$testConfig\opencode\cli.json"
+$env:XDG_CONFIG_HOME = $testConfig
+opencode2 --standalone $repo
+```
+
+The server side is already wired by this checkout's `opencode.jsonc`; the
+local TUI test should show the Flight Deck sidebar/footer without changing
+your global config. Replace the example paths on another machine. If the
+package is installed from a registry or linked locally, the package name
+`oc-flight-deck` can be used instead.
+The exact server config location is intentionally left to the host's current
+V2 configuration; no live user configuration is modified by this repository.
 
 ## Development
 
