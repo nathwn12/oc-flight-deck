@@ -80,8 +80,9 @@ then edit. Comments and trailing commas are fine.
 
 ```jsonc
 {
-  // Milliseconds between ticks. 0 turns the timer off entirely.
-  "refresh": 1000,
+  // Tick rate in ms. The spinner has ten frames, so 100 turns it once a
+  // second. 0 turns the timer off entirely.
+  "refresh": 100,
 
   "sidebar": {
     "enabled": true,
@@ -105,16 +106,18 @@ The example file documents every row and every option inline. A typo is never
 fatal: the bad value is ignored, the default comes back, and you get a one-time
 toast naming the key to fix.
 
-## It reads. It never writes.
+## It reads. It writes one number.
 
 Flight Deck shows what OpenCode already knows.
 
 - **No network calls.** Nothing is fetched, nothing is sent.
 - **No telemetry.** Nothing is collected or phoned home.
-- **No storage.** Nothing is written to disk.
-- **No polling loop** by default — cost, tokens, and permissions update from the
-  host's own events. The ticker exists only so clock-derived rows like `elapsed`
-  keep moving, and `"refresh": 0` removes it completely.
+- **Nothing on disk.** The one thing it writes is an animation counter in the
+  host's in-memory plugin state, so the spinner and `elapsed` keep moving
+  between turns. It is scoped to this plugin and dies with the TUI; it is never
+  persisted, and `"refresh": 0` removes even that.
+- **No polling of your session** — cost, tokens, and permissions update from the
+  host's own events.
 - **Theme-native.** Every line uses your active theme's text tokens, so it blends
   with whatever look you already run.
 

@@ -39,8 +39,9 @@ export interface FlightDeckConfig {
    * Update cadence in milliseconds for time-derived rows.
    *
    * Cost and tokens arrive with events, so they stay current without a timer.
-   * Anything derived from the clock — `elapsed` especially — has nothing to
-   * react to, so it needs a tick. `0` turns the ticker off entirely.
+   * Anything derived from the clock — `elapsed`, and the status spinner's
+   * frames — has nothing to react to, so it needs a tick. `0` turns the ticker
+   * off, leaving every row event-driven.
    */
   readonly refresh: number;
 }
@@ -79,11 +80,24 @@ export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
   "spark",
 ];
 
-/** One tick a second: enough for the clock-derived rows, cheap enough to ignore. */
-export const DEFAULT_REFRESH_MS = 1_000;
+/**
+ * Ten ticks a second: the status spinner has ten frames, so one rotation takes a
+ * second and reads as motion instead of as a stuck glyph. A tick costs one
+ * host-store write plus a recompute measured in microseconds, and when nothing
+ * on the rail changed the host's renderer diffs the frame away to nothing.
+ * Raise it to spend less on idle sessions; `0` turns the ticker off entirely.
+ */
+export const DEFAULT_REFRESH_MS = 100;
 
 /** A tick slower than once a minute is indistinguishable from no ticker. */
 const MAX_REFRESH_MS = 60_000;
+
+/**
+ * A tick wakes the host's renderer, so a sub-frame interval from a config file
+ * is a way to wedge the TUI rather than a way to make it smoother. 16ms is one
+ * frame at 60Hz; below that there is nothing left to animate.
+ */
+export const MIN_REFRESH_MS = 16;
 
 export const DEFAULT_FOOTER_TEXT = "Flight Deck";
 
@@ -236,6 +250,11 @@ function readRefresh(value: unknown, issues: string[]): number {
   if (value > MAX_REFRESH_MS) {
     issues.push(`refresh was longer than ${MAX_REFRESH_MS}ms; using ${MAX_REFRESH_MS}`);
     return MAX_REFRESH_MS;
+  }
+  // `0` is "off", not "as fast as possible", so it is deliberately not clamped.
+  if (value > 0 && value < MIN_REFRESH_MS) {
+    issues.push(`refresh was faster than ${MIN_REFRESH_MS}ms; using ${MIN_REFRESH_MS}`);
+    return MIN_REFRESH_MS;
   }
   return value;
 }

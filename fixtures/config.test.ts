@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_TEXT,
+  DEFAULT_REFRESH_MS,
   DEFAULT_SIDEBAR_LINES,
+  MIN_REFRESH_MS,
   mergeOptions,
   resolveConfig,
 } from "../src/tui/config.js";
@@ -33,8 +35,10 @@ describe("flight deck config", () => {
       "spark",
     ]);
     // The ticker is on by default: clock-derived rows have nothing else to
-    // react to. `refresh: 0` opts out.
-    expect(resolution.config.refresh).toBe(1000);
+    // react to. It runs at the spinner's frame rate so the glyph reads as
+    // motion, not as a stuck character. `refresh: 0` opts out.
+    expect(resolution.config.refresh).toBe(DEFAULT_REFRESH_MS);
+    expect(DEFAULT_REFRESH_MS).toBe(100);
     expect(DEFAULT_SIDEBAR_LINES[0]).toBe("✈ FLIGHT DECK");
     // The prompt footer is off unless configured: the sidebar already has it.
     expect(footerLine(resolution.config)).toBeUndefined();
@@ -188,6 +192,22 @@ describe("flight deck option precedence", () => {
     const { config, issues } = resolveConfig(mergeOptions({ sidebar: "nope" }, { sidebar: { lines: ["host"] } }));
     expect(issues).toEqual([]);
     expect(sidebarLines(config)).toEqual(["host"]);
+  });
+
+  // A tick now wakes the host's renderer, so a sub-frame interval is a way to
+  // wedge the TUI from a config file rather than a way to make it smoother.
+  test("clamps a sub-frame refresh rate instead of accepting it", () => {
+    const { config, issues } = resolveConfig({ refresh: 1 });
+    expect(config.refresh).toBe(MIN_REFRESH_MS);
+    expect(issues.join(" ")).toContain("faster than");
+  });
+
+  // The clamp must not swallow the deliberate "off" value: 0 means no ticker,
+  // not "as fast as possible".
+  test("still lets refresh be switched off entirely", () => {
+    const { config, issues } = resolveConfig({ refresh: 0 });
+    expect(config.refresh).toBe(0);
+    expect(issues).toEqual([]);
   });
 
   test("merging two empty sources yields the defaults", () => {

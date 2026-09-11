@@ -19,17 +19,22 @@
   // ═════════════════════════════════════════════════════════════════════════
 
   // ── Update cadence ───────────────────────────────────────────────────────
-  // Milliseconds between refreshes.
+  // Milliseconds between refreshes: the tick rate of everything that has to
+  // animate. The status spinner has ten frames, so 100 turns it once a second.
   //
   // Cost, tokens, and permissions arrive from the host's own events, so they
-  // stay current with no timer at all. Only clock-derived rows need one, and
-  // `elapsed` is the reason this exists — without a tick it would sit frozen
-  // between turns.
+  // stay current with no timer at all. Only clock-derived rows need one — and
+  // `elapsed` plus the spinner are the reason this exists. Without a tick they
+  // would sit frozen between turns.
   //
-  //   1000  default — a smooth tick, negligible cost
-  //      0  no timer; `elapsed` only moves when the session does
-  //   5000  calmer, still live enough for a wall-clock row
-  "refresh": 1000,
+  //    100  default — the spinner turns once a second, the clock stays live
+  //     50  twice as lively, still negligible work per tick
+  //   1000  a calm wall-clock tick, but the spinner visibly stutters
+  //      0  no timer; `elapsed` and the spinner only move when the session does
+  //
+  // Anything faster than 16 (one frame at 60Hz) is clamped: a tick wakes the
+  // host's renderer, so a smaller value spends work without adding motion.
+  "refresh": 100,
 
   // ── Sidebar ──────────────────────────────────────────────────────────────
   "sidebar": {
@@ -47,7 +52,7 @@
     // them freely — an unknown name is ignored with a one-time warning, so a
     // typo can never break the panel.
     //
-    //   status     running or idle — the glyph animates while it works
+    //   status     running or idle — the glyph turns while anything is working
     //   agent      which agent is running (orchestrator, build, plan, ...)
     //   model      model id, plus the variant when there is one
     //   branch     current git branch

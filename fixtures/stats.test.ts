@@ -97,12 +97,26 @@ describe("flight deck live rows", () => {
     expect(statLine("model", { model: { id: "gpt-5" } })).toBe("model     gpt-5");
   });
 
-  test("animates the status glyph only while the session runs", () => {
+  test("animates the status glyph while anything is working, not just the session", () => {
     expect(statLine("status", { status: "idle" })).toBe("status    ○ idle");
     expect(statLine("status", { status: "running", frame: 0 })).toBe("status    ⠋ running");
     expect(statLine("status", { status: "running", frame: 1 })).toBe("status    ⠙ running");
     // The spinner wraps rather than running off the end of the frame list.
     expect(statLine("status", { status: "running", frame: 10 })).toBe("status    ⠋ running");
+    // A subagent runs in its own session, so the parent can read idle while work
+    // is plainly happening. `busy` keeps the glyph turning through that, and a
+    // running shell counts the same way.
+    expect(statLine("status", { status: "idle", busy: true, frame: 2 })).toBe("status    ⠹ running");
+    expect(statLine("status", { busy: true, frame: 0 })).toBe("status    ⠋ running");
+    // Nothing anywhere: only then does it read as idle.
+    expect(statLine("status", { status: "idle", busy: false })).toBe("status    ○ idle");
+    // The session's own status wins over a missing busy flag: an explicit false
+    // must not stop the glyph while the turn is still running.
+    expect(statLine("status", { status: "running", busy: false, frame: 0 })).toBe("status    ⠋ running");
+    // A fractional frame would index the frame list with a non-integer, and a
+    // non-numeric one would render the literal text `undefined`.
+    expect(statLine("status", { busy: true, frame: 2.7 })).toBe("status    ⠹ running");
+    expect(statLine("status", { busy: true, frame: "x" })).toBe("status    ⠋ running");
     expect(statLine("status", {})).toBeUndefined();
   });
 
