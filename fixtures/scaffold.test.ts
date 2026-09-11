@@ -60,6 +60,7 @@ describe("flight deck plugin", () => {
       exports: Record<string, unknown>;
       dependencies: Record<string, string>;
       peerDependencies: Record<string, string>;
+      peerDependenciesMeta?: Record<string, unknown>;
       scripts: Record<string, string>;
     };
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
@@ -73,6 +74,12 @@ describe("flight deck plugin", () => {
       "@opentui/solid": ">=0.5.10",
       "solid-js": ">=1.9.0",
     });
+    // These peers MUST NOT be optional. The render entrypoint imports
+    // @opentui/solid and solid-js directly, and npm skips optional peers, so
+    // marking them optional ships a package that cannot resolve its own
+    // imports after install. It worked locally only because the checkout's
+    // node_modules happened to satisfy them. That mistake shipped once.
+    expect(packageJson.peerDependenciesMeta).toBeUndefined();
     expect(packageJson.scripts.check).toContain("typecheck");
     expect(packageJson.scripts.check).toContain("test");
 
