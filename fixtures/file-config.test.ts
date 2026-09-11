@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mergeOptions, resolveConfig } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, mergeOptions, resolveConfig } from "../src/tui/config.js";
 import { loadConfigFile } from "../src/tui/file-config.js";
 import { footerLine, sidebarLines } from "../src/tui/presentation.js";
 
@@ -94,10 +94,7 @@ describe("flight deck config file", () => {
     const loaded = loadConfigFile(directory);
     expect(loaded.options).toBeUndefined();
     expect(loaded.issue).toContain("could not be parsed");
-    expect(resolveConfig(mergeOptions(loaded.options, undefined)).config).toEqual({
-      sidebar: { enabled: true, lines: ["✈ FLIGHT DECK", "─────────────", "visual rail", "cosmetic build"] },
-      footer: { enabled: true, text: "Flight Deck · cosmetic rail" },
-    });
+    expect(resolveConfig(mergeOptions(loaded.options, undefined)).config).toEqual(DEFAULT_CONFIG);
   });
 
   test("reports an empty file", () => {

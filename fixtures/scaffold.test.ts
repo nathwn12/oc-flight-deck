@@ -17,16 +17,20 @@ afterEach(() => {
   }
 });
 
-function stubContext() {
+function stubContext(options: Record<string, unknown> = {}) {
   const slots: { readonly path: string; readonly release: () => void }[] = [];
   // Point at an empty workspace so the result never depends on a config file
   // that happens to exist in the repo root.
   const directory = mkdtempSync(join(tmpdir(), "flight-deck-scaffold-"));
   created.push(directory);
   const context = {
-    options: {},
+    options,
     location: { directory },
     theme: { text: { default: "#ffffff", subdued: "#888888" } },
+    data: {
+      location: { default: () => ({ directory }), vcs: { info: () => undefined }, model: { list: () => [] } },
+      session: { get: () => undefined, family: () => [], message: { list: () => [] } },
+    },
     ui: {
       slot: (claim: { append: string }) => {
         const release = () => {
@@ -42,8 +46,8 @@ function stubContext() {
   return { context, slots };
 }
 
-describe("flight deck cosmetic plugin", () => {
-  test("ships a cosmetic package with a static branded rail and no orchestration surface", async () => {
+describe("flight deck plugin", () => {
+  test("ships a live readout with no orchestration surface", async () => {
     const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as {
       exports: Record<string, unknown>;
       dependencies: Record<string, string>;
@@ -88,37 +92,60 @@ describe("flight deck cosmetic plugin", () => {
     expect(readme).not.toContain("Q:\\");
     expect(readme).not.toContain("Q:/");
 
-    // The shipped TUI source stays inside the cosmetic boundary: slot claims,
-    // theme tokens, and read-only config, with no RPC/polling/storage surface.
+    // The shipped TUI source stays inside its boundary: slot claims, theme
+    // tokens, read-only config, and read-only session state. No RPC, no polling,
+    // no storage, no keymap, and nothing that writes anywhere.
     const source = await readFile(join(root, "src", "tui", "index.tsx"), "utf8");
     expect(source).toContain("@opencode/plugin/tui");
     expect(source).toContain("context.ui.slot");
     expect(source).toContain("context.theme");
     expect(source).toContain("resolveConfig(mergeOptions(file.options, context.options))");
     expect(source).toContain("loadConfigFile(directory)");
-    expect(source).not.toMatch(
-      /client\.rpc|createSignal|setInterval|context\.keymap|context\.storage|context\.data|server\/|config\//,
-    );
+    expect(source).toContain("context.data.session.get");
+    expect(source).not.toMatch(/client\.rpc|createSignal|setInterval|context\.keymap|context\.storage|server\/|config\//);
+    // Reading session state is the whole data surface: nothing is written out.
+    expect(source).not.toMatch(/\.set\(|\.remove\(|fetch\(|context\.storage/);
 
-    // The rail is static branding, not live data.
-    expect(sidebarLines(DEFAULT_CONFIG)[0]).toContain("FLIGHT DECK");
-    expect(footerLine(DEFAULT_CONFIG)).toContain("Flight Deck");
+    // Every default row is live host state, not text we invented.
+    const framed = sidebarLines(DEFAULT_CONFIG, {
+      agent: "orchestrator",
+      model: { id: "gpt-5" },
+      cost: 0.25,
+      tokens: { input: 1200, output: 340 },
+      branch: "main",
+    });
+    expect(framed[0]).toContain("FLIGHT DECK");
+    expect(framed).toContain("agent     orchestrator");
+    expect(framed).toContain("model     gpt-5");
+    expect(framed).toContain("branch    main");
+    expect(framed).toContain("cost      $0.250");
+    expect(framed).toContain("tokens    1k in · 340 out");
+    // The prompt footer is opt-in; the sidebar already carries the data.
+    expect(footerLine(DEFAULT_CONFIG)).toBeUndefined();
+    expect(sidebarLines(DEFAULT_CONFIG)).not.toContain("visual rail");
 
     const hostSource = await readFile(join(root, "src", "index.ts"), "utf8");
     expect(hostSource).toContain('id: "flight-deck.host"');
     expect(hostSource).not.toMatch(/ctx\.(rpc|tool|event|storage)|session\.hook/);
   });
 
-  test("registers exactly the two cosmetic slots and removes them on cleanup", async () => {
+  test("registers the sidebar slot by default and removes it on cleanup", async () => {
     const { context, slots } = stubContext();
     expect(flightDeck.id).toBe("flight-deck-tui");
     const cleanup = await flightDeck.setup(context);
     expect(cleanup).toBeTypeOf("function");
-    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "prompt.footer.status"]);
+    // The footer is opt-in, so a default setup claims only the sidebar.
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content"]);
     await cleanup?.();
     expect(slots).toEqual([]);
     // Cleanup must stay harmless if the host calls it twice.
     expect(() => cleanup?.()).not.toThrow();
     expect(slots).toEqual([]);
+  });
+
+  test("claims both slots once the footer is configured", async () => {
+    const { context, slots } = stubContext({ footer: { text: "Flight Deck" } });
+    await flightDeck.setup(context);
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "prompt.footer.status"]);
   });
 });

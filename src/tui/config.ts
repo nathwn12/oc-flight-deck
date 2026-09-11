@@ -8,15 +8,25 @@
 // Everything is optional. Missing or invalid values fall back to the sane
 // defaults below, so the rail always renders and a typo can never break the TUI.
 
+import { isStatField, STAT_FIELDS } from "./stats.js";
+
 export interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
   readonly enabled: boolean;
-  /** Lines rendered top to bottom beside a session. Default `DEFAULT_SIDEBAR_LINES`. */
+  /** Fixed lines rendered above the live rows. Default `DEFAULT_SIDEBAR_LINES`. */
   readonly lines: readonly string[];
+  /** Live session fields to render, top to bottom. Default `DEFAULT_SIDEBAR_ROWS`. */
+  readonly rows: readonly string[];
 }
 
 export interface FooterConfig {
-  /** Show the prompt-footer rail. Default `true`. */
+  /**
+   * Show the prompt-footer rail. Default `false`.
+   *
+   * Off by default on purpose: the prompt footer is prime real estate and the
+   * sidebar already carries the data, so a line that only restates the plugin's
+   * name is decoration. Turn it on for a one-line reminder or a custom label.
+   */
   readonly enabled: boolean;
   /** Footer text. Default `DEFAULT_FOOTER_TEXT`. */
   readonly text: string;
@@ -27,23 +37,43 @@ export interface FlightDeckConfig {
   readonly footer: FooterConfig;
 }
 
-/** The brand mark and tagline shown by default. */
+/**
+ * Fixed lines shown above the live rows — branding only.
+ *
+ * The rail exists to show session state, so nothing here is filler: there is no
+ * placeholder text to delete before it looks finished.
+ */
 export const DEFAULT_SIDEBAR_LINES: readonly string[] = [
   "✈ FLIGHT DECK",
-  "─────────────",
-  "visual rail",
-  "cosmetic build",
+  "─────────────────",
 ];
 
-export const DEFAULT_FOOTER_TEXT = "Flight Deck · cosmetic rail";
+/**
+ * Live fields shown by default, in reading order.
+ *
+ * Every one of these is read from the open session at render time, so a fresh
+ * install shows real numbers with no configuration file at all.
+ */
+export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
+  "agent",
+  "model",
+  "branch",
+  "cost",
+  "total",
+  "tokens",
+  "cache",
+  "context",
+];
+
+export const DEFAULT_FOOTER_TEXT = "Flight Deck";
 
 export const DEFAULT_CONFIG: FlightDeckConfig = {
-  sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES },
-  footer: { enabled: true, text: DEFAULT_FOOTER_TEXT },
+  sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES, rows: DEFAULT_SIDEBAR_ROWS },
+  footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
 };
 
 /** Layout guards: keep a hand-edited config from producing an unusable rail. */
-const MAX_LINES = 24;
+export const MAX_LINES = 24;
 const MAX_LINE_LENGTH = 120;
 
 // Rails render on a single line, so control characters are replaced with
@@ -130,6 +160,41 @@ function readLines(value: unknown, issues: string[]): readonly string[] {
   return lines;
 }
 
+/**
+ * Read the list of live fields to render.
+ *
+ * An unknown name is reported rather than silently dropped: otherwise a typo in
+ * `sidebar.rows` looks identical to the host simply not having the data yet.
+ */
+function readRows(value: unknown, issues: string[]): readonly string[] {
+  if (value === undefined) return DEFAULT_SIDEBAR_ROWS;
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push("sidebar.rows must be a non-empty array of field names; using the default rows");
+    return DEFAULT_SIDEBAR_ROWS;
+  }
+
+  const rows: string[] = [];
+  value.forEach((entry, index) => {
+    const path = `sidebar.rows[${index}]`;
+    if (typeof entry !== "string") {
+      issues.push(`${path} must be a string; skipping it`);
+      return;
+    }
+    const name = entry.trim().toLowerCase();
+    if (!isStatField(name)) {
+      issues.push(`${path} is not a known field (${STAT_FIELDS.join(", ")}); skipping it`);
+      return;
+    }
+    rows.push(name);
+  });
+
+  if (rows.length === 0) {
+    issues.push("sidebar.rows had no usable entries; using the default rows");
+    return DEFAULT_SIDEBAR_ROWS;
+  }
+  return rows.slice(0, MAX_LINES);
+}
+
 function sectionOf(options: Record<string, unknown>, key: "sidebar" | "footer"): Record<string, unknown> {
   const value = options[key];
   return isRecord(value) ? value : {};
@@ -193,14 +258,20 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
 
+  // Writing any footer setting counts as asking for the footer, so the rail
+  // turns on as soon as you configure it. It is off only when you said nothing
+  // about it, and an explicit `enabled` always wins either way.
+  const footerConfigured = Object.keys(footer).length > 0;
+
   return {
     config: {
       sidebar: {
         enabled: readBoolean(sidebar.enabled, DEFAULT_CONFIG.sidebar.enabled, "sidebar.enabled", issues),
         lines: readLines(sidebar.lines, issues),
+        rows: readRows(sidebar.rows, issues),
       },
       footer: {
-        enabled: readBoolean(footer.enabled, DEFAULT_CONFIG.footer.enabled, "footer.enabled", issues),
+        enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues),
       },
     },

@@ -13,10 +13,20 @@ import flightDeck from "../src/tui/index.js";
 // Every test pins `location.directory` to a throwaway workspace, so the result
 // never depends on whatever config file happens to sit in the repo root.
 
+type Render = (input: { sessionID: string }) => unknown;
+
 interface Claim {
   readonly path: string;
-  readonly render: () => unknown;
+  readonly render: Render;
 }
+
+/** A snapshot shaped exactly like the live `Session.Info` observed from the server. */
+const LIVE_SESSION = {
+  agent: "orchestrator",
+  model: { id: "deepseek-v4.1-flash", providerID: "opencode-go", variant: "high" },
+  cost: 0.1913,
+  tokens: { input: 517512, output: 75683, reasoning: 152995, cache: { read: 29174144, write: 0 } },
+};
 
 const created: string[] = [];
 
@@ -33,15 +43,36 @@ afterEach(() => {
   }
 });
 
-function harness(options: unknown, directory: string) {
+interface HarnessExtras {
+  readonly branch?: string;
+  readonly family?: readonly string[];
+  readonly children?: Record<string, unknown>;
+  readonly messages?: readonly unknown[];
+}
+
+function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
   const claims: Claim[] = [];
   const toasts: string[] = [];
   const context = {
     options,
     location: { directory },
     theme: { text: { default: "#ffffff", subdued: "#888888" } },
+    data: {
+      location: {
+        default: () => ({ directory }),
+        vcs: {
+          info: () => (extras.branch === undefined ? undefined : { branch: { current: extras.branch } }),
+        },
+        model: { list: () => [] },
+      },
+      session: {
+        get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
+        family: () => extras.family ?? [],
+        message: { list: () => extras.messages ?? [] },
+      },
+    },
     ui: {
-      slot: (claim: { append?: string; prepend?: string; render: () => unknown }) => {
+      slot: (claim: { append?: string; prepend?: string; render: Render }) => {
         const entry: Claim = { path: claim.append ?? claim.prepend ?? "unknown", render: claim.render };
         claims.push(entry);
         return () => {
@@ -59,8 +90,8 @@ function harness(options: unknown, directory: string) {
   return { context: context as unknown as Parameters<typeof flightDeck.setup>[0], claims, toasts };
 }
 
-async function frameOf(render: () => unknown, width: number, height: number): Promise<string> {
-  const setup = await testRender(() => render() as never, { width, height });
+async function frameOf(render: Render, width: number, height: number): Promise<string> {
+  const setup = await testRender(() => render({ sessionID: "ses_test" }) as never, { width, height });
   try {
     await setup.renderOnce();
     return setup.captureCharFrame();
@@ -75,36 +106,80 @@ function railClaims(claims: Claim[]) {
   return { sidebar, footer };
 }
 
-test("renders both cosmetic rails from the default config", async () => {
-  const { context, claims, toasts } = harness(undefined, workspace());
+test("renders the live rail with no configuration at all", async () => {
+  const { context, claims, toasts } = harness(undefined, workspace(), LIVE_SESSION, { branch: "main" });
   flightDeck.setup(context);
+  // The whole point: zero configuration, real numbers.
   expect(toasts).toEqual([]);
 
   const { sidebar, footer } = railClaims(claims);
   expect(sidebar).toBeDefined();
-  expect(footer).toBeDefined();
+  // The prompt footer is opt-in, so a default setup claims only the sidebar.
+  expect(footer).toBeUndefined();
 
-  const sidebarFrame = await frameOf(sidebar!.render, 40, 10);
-  expect(sidebarFrame).toContain("FLIGHT DECK");
-  expect(sidebarFrame).toContain("cosmetic build");
-
-  const footerFrame = await frameOf(footer!.render, 60, 3);
-  expect(footerFrame).toContain("Flight Deck");
-  expect(footerFrame).toContain("cosmetic rail");
+  const frame = await frameOf(sidebar!.render, 40, 12);
+  expect(frame).toContain("FLIGHT DECK");
+  expect(frame).toContain("orchestrator");
+  expect(frame).toContain("deepseek-v4.1-flash · high");
+  expect(frame).toContain("main");
+  expect(frame).toContain("$0.191");
+  expect(frame).toContain("518k in · 76k out");
+  expect(frame).toContain("29.2M read");
+  // The old placeholder text must be gone for good.
+  expect(frame).not.toContain("visual rail");
+  expect(frame).not.toContain("cosmetic build");
 });
 
-test("renders the text a user configured, replacing the defaults", async () => {
-  const { context, claims } = harness({ sidebar: { lines: ["CUSTOM RAIL"] }, footer: { text: "hello deck" } }, workspace());
+test("totals subagent sessions and reads context from the last request", async () => {
+  const messages = [
+    { tokens: { input: 100, output: 10, cache: { read: 1000, write: 0 } } },
+    { tokens: { input: 212, output: 415, reasoning: 686, cache: { read: 175744, write: 0 } } },
+  ];
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    family: ["ses_test", "ses_child"],
+    children: { ses_child: { cost: 0.02010514 } },
+    messages,
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 14);
+  // Parent cost plus the subagent's, not the parent alone.
+  expect(frame).toContain("$0.211");
+  expect(frame).toContain("1 subagent");
+  // Occupancy is the last request (212 input + 175,744 cache read), not a sum.
+  expect(frame).toContain("176k used");
+});
+
+test("renders branding alone until the host supplies session data", async () => {
+  const { context, claims } = harness(undefined, workspace());
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 4);
+  expect(frame).toContain("FLIGHT DECK");
+  // No invented placeholders: a row appears only once it has a value.
+  expect(frame).not.toContain("agent");
+  expect(frame).not.toContain("branch");
+});
+
+test("renders the text a user configured, alongside the live rows", async () => {
+  const { context, claims } = harness(
+    { sidebar: { lines: ["CUSTOM RAIL"], rows: ["agent"] }, footer: { text: "hello deck" } },
+    workspace(),
+    LIVE_SESSION,
+  );
   flightDeck.setup(context);
 
   const { sidebar, footer } = railClaims(claims);
   const sidebarFrame = await frameOf(sidebar!.render, 40, 4);
   expect(sidebarFrame).toContain("CUSTOM RAIL");
+  expect(sidebarFrame).toContain("orchestrator");
   expect(sidebarFrame).not.toContain("FLIGHT DECK");
 
   const footerFrame = await frameOf(footer!.render, 60, 3);
   expect(footerFrame).toContain("hello deck");
-  expect(footerFrame).not.toContain("cosmetic rail");
+  expect(footerFrame).not.toContain("Flight Deck");
 });
 
 test("merges the on-disk config file with host options", async () => {
@@ -148,6 +223,15 @@ test("omits disabled rails and warns once about bad config", async () => {
   expect(toasts[0]).toContain("footer.text");
 });
 
+test("warns about an unknown row name", async () => {
+  const { context, toasts } = harness({ sidebar: { rows: ["agent", "nope"] } }, workspace());
+  flightDeck.setup(context);
+
+  expect(toasts).toHaveLength(1);
+  expect(toasts[0]).toContain("sidebar.rows[1]");
+  expect(toasts[0]).toContain("not a known field");
+});
+
 test("registers only the sidebar when just the footer is disabled", async () => {
   const { context, claims, toasts } = harness({ footer: { enabled: false } }, workspace());
   flightDeck.setup(context);
@@ -176,7 +260,7 @@ test("warns and keeps rendering when the config file is broken", async () => {
   let claims: Claim[] = [];
   let toasts: string[] = [];
   try {
-    const built = harness(undefined, directory);
+    const built = harness(undefined, directory, LIVE_SESSION);
     claims = built.claims;
     toasts = built.toasts;
     await flightDeck.setup(built.context);
@@ -190,6 +274,7 @@ test("warns and keeps rendering when the config file is broken", async () => {
 
   // Still renders the defaults.
   const { sidebar, footer } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 10)).toContain("FLIGHT DECK");
-  expect(await frameOf(footer!.render, 60, 3)).toContain("cosmetic rail");
+  expect(await frameOf(sidebar!.render, 40, 12)).toContain("FLIGHT DECK");
+  // A broken file falls back to the off-by-default footer, not a guessed one.
+  expect(footer).toBeUndefined();
 });
