@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEFAULT_CONFIG } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, resolveConfig } from "../src/tui/config.js";
+import { parseJsonc } from "../src/tui/file-config.js";
 import flightDeck from "../src/tui/index.js";
 import { footerLine, sidebarLines } from "../src/tui/presentation.js";
 
@@ -29,7 +30,14 @@ function stubContext(options: Record<string, unknown> = {}) {
     theme: { text: { default: "#ffffff", subdued: "#888888" } },
     data: {
       location: { default: () => ({ directory }), vcs: { info: () => undefined }, model: { list: () => [] } },
-      session: { get: () => undefined, family: () => [], message: { list: () => [] } },
+      session: {
+        get: () => undefined,
+        list: () => [],
+        status: () => undefined,
+        family: () => [],
+        message: { list: () => [] },
+        permission: { list: () => [] },
+      },
     },
     ui: {
       slot: (claim: { append: string }) => {
@@ -92,6 +100,19 @@ describe("flight deck plugin", () => {
     expect(readme).not.toContain("Q:\\");
     expect(readme).not.toContain("Q:/");
 
+    // The shipped example config must parse and still describe the real
+    // defaults, so the documentation cannot silently drift from the code.
+    const example = await readFile(join(root, "flight-deck.example.jsonc"), "utf8");
+    const exampleResolution = resolveConfig(parseJsonc(example));
+    expect(exampleResolution.issues).toEqual([]);
+    expect(exampleResolution.config).toEqual(DEFAULT_CONFIG);
+    // Every knob must be reachable from the file, not just from the host.
+    expect(Object.keys(parseJsonc(example) as Record<string, unknown>).sort()).toEqual([
+      "footer",
+      "refresh",
+      "sidebar",
+    ]);
+
     // The shipped TUI source stays inside its boundary: slot claims, theme
     // tokens, read-only config, and read-only session state. No RPC, no polling,
     // no storage, no keymap, and nothing that writes anywhere.
@@ -102,9 +123,12 @@ describe("flight deck plugin", () => {
     expect(source).toContain("resolveConfig(mergeOptions(file.options, context.options))");
     expect(source).toContain("loadConfigFile(directory)");
     expect(source).toContain("context.data.session.get");
-    expect(source).not.toMatch(/client\.rpc|createSignal|setInterval|context\.keymap|context\.storage|server\/|config\//);
+    expect(source).not.toMatch(/client\.rpc|context\.keymap|context\.storage|server\/|config\//);
     // Reading session state is the whole data surface: nothing is written out.
     expect(source).not.toMatch(/\.set\(|\.remove\(|fetch\(|context\.storage/);
+    // The ticker exists for clock-derived rows and is opt-out via `refresh: 0`.
+    expect(source).toContain("setInterval");
+    expect(source).toContain("config.refresh > 0");
 
     // Every default row is live host state, not text we invented.
     const framed = sidebarLines(DEFAULT_CONFIG, {

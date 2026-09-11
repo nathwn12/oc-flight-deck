@@ -90,13 +90,17 @@ flight-deck.json
 
 ```jsonc
 {
+  "refresh": 1000,
   "sidebar": {
     // false hides the panel entirely.
     "enabled": true,
     // Fixed lines above the live rows. Your own words, or a rule.
     "lines": ["✈ FLIGHT DECK", "─────────────────"],
     // The live rows, top to bottom. Delete any you don't want.
-    "rows": ["agent", "model", "branch", "cost", "total", "tokens", "cache", "context"]
+    "rows": [
+      "status", "agent", "model", "branch", "cost", "total", "project",
+      "tokens", "cache", "context", "perms", "elapsed", "tps", "spark"
+    ]
   },
   "footer": {
     // Off by default: the sidebar already carries the data, and the prompt
@@ -113,25 +117,31 @@ Every row is read from the open session. You never type these values in.
 
 | Row | Shows | Notes |
 | --- | --- | --- |
+| `status` | `running` or `idle` | The glyph animates while it works. |
 | `agent` | Which agent is running | `orchestrator`, `build`, `plan`, … |
 | `model` | Model id and variant | Variant matters: `high` behaves differently. |
 | `branch` | Current git branch | From the location's VCS info. |
 | `cost` | What this session has cost | Cumulative across every turn. |
 | `total` | This session **plus its subagents** | Hidden until a subagent has run. |
+| `project` | Every session in this repo | Not just the one on screen. |
 | `tokens` | Input and output tokens | Cumulative for the session. |
 | `cache` | Cache hit rate, then cache reads | Falls back to reads if the rate is underivable. |
+| `context` | A gauge of the context window | From the last request's prompt size, not a running total. |
+| `perms` | Approval requests waiting | Only shown when there are some. |
+| `elapsed` | Time since the session started | Needs `refresh` above `0` to tick. |
+| `tps` | Output tokens/second | Measured from the last completed turn's timing. |
+| `spark` | Recent turn sizes as a sparkline | Scaled to the largest turn in the window. |
 | `reasoning` | Reasoning tokens | Hidden when the model emits none. |
-| `context` | Context window occupancy | From the last request's prompt size. |
-| `elapsed` | Wall-clock time since the session started | |
 | `turns` | Number of messages | |
 
 ### Options
 
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
+| `refresh` | number | `1000` | Milliseconds between ticks. `0` disables the timer entirely. Only clock-derived rows need it. |
 | `sidebar.enabled` | boolean | `true` | Set `false` to hide the panel. |
 | `sidebar.lines` | string[] | `["✈ FLIGHT DECK", "─────────────────"]` | Fixed text above the rows. The first line uses your theme's primary text color, the rest the subdued color. |
-| `sidebar.rows` | string[] | the eight above | Any of the rows in the table, in any order. |
+| `sidebar.rows` | string[] | all fourteen above | Any row from the table, in any order. |
 | `footer.enabled` | boolean | `false` | The prompt footer is off unless you configure it. |
 | `footer.text` | string | `"Flight Deck"` | Any single line. |
 
