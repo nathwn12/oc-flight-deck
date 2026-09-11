@@ -1,45 +1,95 @@
 {
-  // Flight Deck configuration.
+  // ═════════════════════════════════════════════════════════════════════════
+  //  ✈  Flight Deck — configuration
   //
-  // EVERYTHING HERE IS OPTIONAL. Install the plugin and the panel works with no
-  // config file at all — the values below are the defaults, written out so you
-  // can see what to change. Delete any key and its default comes back.
+  //  EVERYTHING HERE IS OPTIONAL. Install the plugin and the panel works with
+  //  no config file at all. The values below are the defaults, written out so
+  //  you can see exactly what there is to change. Delete any key and its
+  //  default comes straight back.
   //
-  // To use it, copy this file to `flight-deck.jsonc` beside it, or to
-  // `.opencode/flight-deck.jsonc`. Comments and trailing commas are both fine.
+  //  TO USE IT: copy this file to `flight-deck.jsonc` at your project root, or
+  //  to `.opencode/flight-deck.jsonc`. Comments and trailing commas are fine.
   //
-  // Flight Deck looks for these, in order, and uses the first one it finds:
-  //   .opencode/flight-deck.jsonc   .opencode/flight-deck.json
-  //   flight-deck.jsonc             flight-deck.json
+  //  Flight Deck looks in this order and uses the first file it finds:
+  //    .opencode/flight-deck.jsonc   .opencode/flight-deck.json
+  //    flight-deck.jsonc             flight-deck.json
+  //
+  //  The same values can also be passed as plugin options in opencode.jsonc /
+  //  cli.json, which take precedence on hosts that forward them.
+  // ═════════════════════════════════════════════════════════════════════════
 
+  // ── Update cadence ───────────────────────────────────────────────────────
+  // Milliseconds between refreshes.
+  //
+  // Cost, tokens, and permissions arrive from the host's own events, so they
+  // stay current with no timer at all. Only clock-derived rows need one, and
+  // `elapsed` is the reason this exists — without a tick it would sit frozen
+  // between turns.
+  //
+  //   1000  default — a smooth tick, negligible cost
+  //      0  no timer; `elapsed` only moves when the session does
+  //   5000  calmer, still live enough for a wall-clock row
+  "refresh": 1000,
+
+  // ── Sidebar ──────────────────────────────────────────────────────────────
   "sidebar": {
-    // Set to false to hide the panel entirely.
+    // false hides the whole panel.
     "enabled": true,
 
-    // Fixed lines, rendered above the live rows. Add your own words or a rule.
+    // Fixed lines, rendered above the live rows. This is the only text Flight
+    // Deck shows of its own — put your own words here, or a rule.
+    // The first line uses your theme's primary text colour; the rest use the
+    // subdued colour.
     "lines": ["✈ FLIGHT DECK", "─────────────────"],
 
-    // The live rows, top to bottom. Every value is read from the open session —
-    // you never type these in. Delete any line you don't want to see.
+    // The live rows, top to bottom. Every value is read from the open session,
+    // so you never type these in. Delete any row you don't want, or reorder
+    // them freely — an unknown name is ignored with a one-time warning, so a
+    // typo can never break the panel.
     //
+    //   status     running or idle — the glyph animates while it works
     //   agent      which agent is running (orchestrator, build, plan, ...)
     //   model      model id, plus the variant when there is one
-    //   branch     the current git branch
+    //   branch     current git branch
     //   cost       what this session has cost so far
     //   total      this session plus all its subagents (hidden until one runs)
-    //   tokens     input and output tokens
+    //   project    every session in this repo, not just the one on screen
+    //   tokens     this session's input and output tokens
     //   cache      cache hit rate, then cache reads
-    //   reasoning  reasoning tokens, when the model emits them
-    //   context    how full the context window is
+    //   context    a gauge of how full the context window is
+    //   perms      approval requests waiting (only shown when there are some)
     //   elapsed    wall-clock time since the session started
+    //   tps        output tokens per second on the last completed turn
+    //   spark      recent turn sizes as a sparkline
+    //   reasoning  reasoning tokens, when the model emits them
     //   turns      number of messages in the session
-    "rows": ["agent", "model", "branch", "cost", "total", "tokens", "cache", "context"]
+    "rows": [
+      "status",
+      "agent",
+      "model",
+      "branch",
+      "cost",
+      "total",
+      "project",
+      "tokens",
+      "cache",
+      "context",
+      "perms",
+      "elapsed",
+      "tps",
+      "spark"
+    ]
   },
 
+  // ── Footer ───────────────────────────────────────────────────────────────
+  // Off by default: the sidebar already carries the data, and the prompt
+  // footer is high-traffic space, so a line there should earn its place.
+  //
+  // Writing ANY footer setting turns it on — `"footer": { "text": "hi" }` is
+  // enough. Set "enabled": false explicitly to keep it hidden.
   "footer": {
-    // Off by default: the sidebar already carries the data, and the prompt
-    // footer is high-traffic space. Turn it on for a short custom label.
     "enabled": false,
+    // Any single line. Empty text is ignored.
     "text": "Flight Deck"
   }
 }

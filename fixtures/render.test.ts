@@ -67,8 +67,11 @@ function harness(options: unknown, directory: string, session: unknown = undefin
       },
       session: {
         get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
+        list: () => [],
+        status: () => (session === undefined ? undefined : "idle"),
         family: () => extras.family ?? [],
         message: { list: () => extras.messages ?? [] },
+        permission: { list: () => [] },
       },
     },
     ui: {

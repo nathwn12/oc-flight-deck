@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatCost, formatCount, formatDuration, statLine, statRows } from "../src/tui/stats.js";
+import { formatCost, formatCount, formatDuration, fuelBar, sparkline, statLine, statRows } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -64,7 +64,7 @@ describe("flight deck live rows", () => {
   test("reads context occupancy from the last request, not the running total", () => {
     expect(statLine("context", { context: { used: 218_000 } })).toBe("context   218k used");
     expect(statLine("context", { context: { used: 218_000, limit: 1_000_000 } })).toBe(
-      "context   218k / 1M · 22%",
+      "context   ██░░░░░░░░ 22%",
     );
     // A window the host never reports still shows the honest half of the answer.
     expect(statLine("context", { context: { used: 0 } })).toBeUndefined();
@@ -95,6 +95,54 @@ describe("flight deck live rows", () => {
 
   test("shows the model without a variant when the host omits one", () => {
     expect(statLine("model", { model: { id: "gpt-5" } })).toBe("model     gpt-5");
+  });
+
+  test("animates the status glyph only while the session runs", () => {
+    expect(statLine("status", { status: "idle" })).toBe("status    ○ idle");
+    expect(statLine("status", { status: "running", frame: 0 })).toBe("status    ⠋ running");
+    expect(statLine("status", { status: "running", frame: 1 })).toBe("status    ⠙ running");
+    // The spinner wraps rather than running off the end of the frame list.
+    expect(statLine("status", { status: "running", frame: 10 })).toBe("status    ⠋ running");
+    expect(statLine("status", {})).toBeUndefined();
+  });
+
+  test("only surfaces pending permissions when something is actually waiting", () => {
+    expect(statLine("perms", {})).toBeUndefined();
+    expect(statLine("perms", { perms: 0 })).toBeUndefined();
+    expect(statLine("perms", { perms: 1 })).toBe("perms     1 waiting");
+    expect(statLine("perms", { perms: 3 })).toBe("perms     3 waiting");
+  });
+
+  test("reports project spend, naming the session count only when it adds meaning", () => {
+    expect(statLine("project", { project: { cost: 0.5 } })).toBe("project   $0.500");
+    expect(statLine("project", { project: { cost: 1.482, count: 12 } })).toBe("project   $1.48 · 12 sessions");
+    expect(statLine("project", { project: { cost: 1.482, count: 1 } })).toBe("project   $1.48");
+    expect(statLine("project", {})).toBeUndefined();
+  });
+
+  test("reports measured throughput, not an estimate", () => {
+    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: 0 })).toBeUndefined();
+  });
+
+  test("draws recent turn sizes as a sparkline", () => {
+    expect(sparkline([])).toBe("");
+    expect(sparkline([0, 0])).toBe("▁▁");
+    expect(sparkline([100])).toBe("█");
+    // Scaled against the largest value in the window, so the shape survives
+    // whether the turns are tiny or enormous.
+    expect(sparkline([1, 2, 3, 4, 5, 6, 7, 8])).toBe("▁▂▃▄▅▆▇█");
+    expect(statLine("spark", { spark: [1, 8, 4] })).toBe("spark     ▁█▄");
+    // One point is not a shape.
+    expect(statLine("spark", { spark: [5] })).toBeUndefined();
+  });
+
+  test("draws the context gauge at both extremes", () => {
+    expect(fuelBar(0)).toBe("░░░░░░░░░░");
+    expect(fuelBar(0.5)).toBe("█████░░░░░");
+    expect(fuelBar(1)).toBe("██████████");
+    // Never draws more than a full bar, however the host reports the window.
+    expect(fuelBar(2)).toBe("██████████");
   });
 
   test("ignores host data of the wrong shape rather than throwing", () => {

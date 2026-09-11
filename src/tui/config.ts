@@ -35,6 +35,14 @@ export interface FooterConfig {
 export interface FlightDeckConfig {
   readonly sidebar: SidebarConfig;
   readonly footer: FooterConfig;
+  /**
+   * Update cadence in milliseconds for time-derived rows.
+   *
+   * Cost and tokens arrive with events, so they stay current without a timer.
+   * Anything derived from the clock — `elapsed` especially — has nothing to
+   * react to, so it needs a tick. `0` turns the ticker off entirely.
+   */
+  readonly refresh: number;
 }
 
 /**
@@ -55,21 +63,34 @@ export const DEFAULT_SIDEBAR_LINES: readonly string[] = [
  * install shows real numbers with no configuration file at all.
  */
 export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
+  "status",
   "agent",
   "model",
   "branch",
   "cost",
   "total",
+  "project",
   "tokens",
   "cache",
   "context",
+  "perms",
+  "elapsed",
+  "tps",
+  "spark",
 ];
+
+/** One tick a second: enough for the clock-derived rows, cheap enough to ignore. */
+export const DEFAULT_REFRESH_MS = 1_000;
+
+/** A tick slower than once a minute is indistinguishable from no ticker. */
+const MAX_REFRESH_MS = 60_000;
 
 export const DEFAULT_FOOTER_TEXT = "Flight Deck";
 
 export const DEFAULT_CONFIG: FlightDeckConfig = {
   sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES, rows: DEFAULT_SIDEBAR_ROWS },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
+  refresh: DEFAULT_REFRESH_MS,
 };
 
 /** Layout guards: keep a hand-edited config from producing an unusable rail. */
@@ -200,6 +221,25 @@ function sectionOf(options: Record<string, unknown>, key: "sidebar" | "footer"):
   return isRecord(value) ? value : {};
 }
 
+/**
+ * Read the ticker cadence.
+ *
+ * `0` is a deliberate value meaning "no ticker", so it must not be treated as a
+ * missing setting.
+ */
+function readRefresh(value: unknown, issues: string[]): number {
+  if (value === undefined) return DEFAULT_REFRESH_MS;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    issues.push("refresh must be a number of milliseconds; using the default");
+    return DEFAULT_REFRESH_MS;
+  }
+  if (value > MAX_REFRESH_MS) {
+    issues.push(`refresh was longer than ${MAX_REFRESH_MS}ms; using ${MAX_REFRESH_MS}`);
+    return MAX_REFRESH_MS;
+  }
+  return value;
+}
+
 function mergeSection(file: Record<string, unknown>, host: Record<string, unknown>, key: "sidebar" | "footer"): unknown {
   const fileValue = file[key];
   const hostValue = host[key];
@@ -274,6 +314,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
         enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues),
       },
+      refresh: readRefresh(options.refresh, issues),
     },
     issues,
   };

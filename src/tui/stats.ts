@@ -1,8 +1,8 @@
 // Live session readouts for the Flight Deck rail.
 //
 // Everything here is derived from state the host already holds in memory and
-// hands to the plugin. There is no network call, no server, no storage write,
-// and no background work: this module turns a session snapshot into strings.
+// hands to the plugin. There is no network call, no server, and no storage
+// write: this module turns a session snapshot into strings.
 //
 // Kept pure and dependency-free so the formatting is trivial to test.
 
@@ -12,8 +12,6 @@ export interface StatTree {
   readonly cost?: unknown;
   /** Number of subagent sessions in the tree. */
   readonly count?: unknown;
-  /** Combined token counts across the tree. */
-  readonly tokens?: unknown;
 }
 
 /** Context-window occupancy for the most recent request. */
@@ -22,6 +20,12 @@ export interface StatContext {
   readonly used?: unknown;
   /** The model's context window, when the catalog knows it. */
   readonly limit?: unknown;
+}
+
+/** Whole-project spend, across every session in this repository. */
+export interface StatProject {
+  readonly cost?: unknown;
+  readonly count?: unknown;
 }
 
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
@@ -33,22 +37,35 @@ export interface StatSource {
   readonly branch?: unknown;
   readonly tree?: unknown;
   readonly context?: unknown;
+  readonly project?: unknown;
+  readonly status?: unknown;
+  readonly perms?: unknown;
+  readonly tps?: unknown;
   readonly elapsedMs?: unknown;
   readonly turns?: unknown;
+  /** Recent per-turn output sizes, oldest first, for the sparkline. */
+  readonly spark?: unknown;
+  /** Animation frame counter, advanced by the ticker. */
+  readonly frame?: unknown;
 }
 
 /** Fields a user may name in `sidebar.rows`, in the order they are documented. */
 export const STAT_FIELDS = [
+  "status",
   "agent",
   "model",
   "branch",
   "cost",
   "total",
+  "project",
   "tokens",
   "cache",
-  "reasoning",
   "context",
+  "perms",
   "elapsed",
+  "tps",
+  "spark",
+  "reasoning",
   "turns",
 ] as const;
 
@@ -59,6 +76,7 @@ export function isStatField(value: string): value is StatField {
 }
 
 const LABEL_WIDTH = 10;
+const BAR_WIDTH = 10;
 
 function row(label: string, value: string): string {
   return `${label.padEnd(LABEL_WIDTH)}${value}`;
@@ -104,6 +122,35 @@ export function formatDuration(ms: number): string {
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
+/** A ten-cell gauge, so a percentage is readable at a glance rather than parsed. */
+export function fuelBar(ratio: number): string {
+  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round(ratio * BAR_WIDTH)));
+  return `${"█".repeat(filled)}${"░".repeat(BAR_WIDTH - filled)}`;
+}
+
+const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
+
+/** Braille frames, advanced by the ticker, shown only while the session runs. */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+/**
+ * Recent turn sizes as a shape.
+ *
+ * Scaled against the largest value in the window rather than an absolute scale,
+ * so the sparkline stays readable whether turns are tiny or enormous.
+ */
+export function sparkline(values: readonly number[]): string {
+  if (values.length === 0) return "";
+  const max = Math.max(...values);
+  if (!Number.isFinite(max) || max <= 0) return SPARK_LEVELS[0].repeat(values.length);
+  return values
+    .map((value) => {
+      const level = Math.floor((Math.max(0, value) / max) * (SPARK_LEVELS.length - 1));
+      return SPARK_LEVELS[Math.min(SPARK_LEVELS.length - 1, level)];
+    })
+    .join("");
+}
+
 /**
  * Render one named field, or `undefined` when the host has not supplied it yet.
  *
@@ -113,6 +160,15 @@ export function formatDuration(ms: number): string {
  */
 export function statLine(field: string, source: StatSource): string | undefined {
   switch (field) {
+    case "status": {
+      const status = asText(source.status);
+      if (status === undefined) return undefined;
+      // The spinner lives here rather than in a row of its own: an animated
+      // glyph beside "running" says the same thing without spending a line.
+      if (status !== "running") return row("status", "○ idle");
+      const frame = asCount(source.frame) ?? 0;
+      return row("status", `${SPINNER[frame % SPINNER.length]} running`);
+    }
     case "agent": {
       const agent = asText(source.agent);
       return agent === undefined ? undefined : row("agent", agent);
@@ -142,6 +198,13 @@ export function statLine(field: string, source: StatSource): string | undefined 
       const plural = count === 1 ? "subagent" : "subagents";
       return row("total", `${formatCost(cost)} · ${count} ${plural}`);
     }
+    case "project": {
+      const project = asRecord(source.project);
+      const cost = asCount(project?.cost);
+      if (cost === undefined) return undefined;
+      const count = asCount(project?.count);
+      return row("project", `${formatCost(cost)}${count !== undefined && count > 1 ? ` · ${count} sessions` : ""}`);
+    }
     case "tokens": {
       const tokens = asRecord(source.tokens);
       const input = asCount(tokens?.input);
@@ -158,13 +221,11 @@ export function statLine(field: string, source: StatSource): string | undefined 
       // Hit ratio is the whole point: it explains a cheap bill on a huge token
       // count, and it is the first thing to break when caching stops working.
       const total = input === undefined ? undefined : read + input;
-      const value = total === undefined || total === 0 ? `${formatCount(read)} read` : `${Math.round((read / total) * 100)}% hit · ${formatCount(read)} read`;
+      const value =
+        total === undefined || total === 0
+          ? `${formatCount(read)} read`
+          : `${Math.round((read / total) * 100)}% hit · ${formatCount(read)} read`;
       return row("cache", value);
-    }
-    case "reasoning": {
-      const reasoning = asCount(asRecord(source.tokens)?.reasoning);
-      if (reasoning === undefined || reasoning === 0) return undefined;
-      return row("reasoning", formatCount(reasoning));
     }
     case "context": {
       const context = asRecord(source.context);
@@ -172,13 +233,35 @@ export function statLine(field: string, source: StatSource): string | undefined 
       if (used === undefined || used === 0) return undefined;
       const limit = asCount(context?.limit);
       if (limit === undefined || limit === 0) return row("context", `${formatCount(used)} used`);
-      const percent = Math.min(100, Math.round((used / limit) * 100));
-      return row("context", `${formatCount(used)} / ${formatCount(limit)} · ${percent}%`);
+      const ratio = used / limit;
+      // Show the percentage whenever the host reports it, but never a bar that
+      // reads as more than full.
+      return row("context", `${fuelBar(ratio)} ${Math.round(Math.min(1, ratio) * 100)}%`);
+    }
+    case "perms": {
+      const perms = asCount(source.perms);
+      if (perms === undefined || perms === 0) return undefined;
+      return row("perms", perms === 1 ? "1 waiting" : `${perms} waiting`);
     }
     case "elapsed": {
       const ms = asCount(source.elapsedMs);
       if (ms === undefined || ms <= 0) return undefined;
       return row("elapsed", formatDuration(ms));
+    }
+    case "tps": {
+      const tps = asCount(source.tps);
+      if (tps === undefined || tps === 0) return undefined;
+      return row("tps", `${Math.round(tps)} tok/s`);
+    }
+    case "spark": {
+      const values = Array.isArray(source.spark) ? source.spark.map((value) => asCount(value) ?? 0) : [];
+      if (values.length < 2) return undefined;
+      return row("spark", sparkline(values));
+    }
+    case "reasoning": {
+      const reasoning = asCount(asRecord(source.tokens)?.reasoning);
+      if (reasoning === undefined || reasoning === 0) return undefined;
+      return row("reasoning", formatCount(reasoning));
     }
     case "turns": {
       const turns = asCount(source.turns);

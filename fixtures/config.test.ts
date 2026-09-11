@@ -17,15 +17,24 @@ describe("flight deck config", () => {
     // With no session data, only the fixed branding line renders.
     expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
     expect(resolution.config.sidebar.rows).toEqual([
+      "status",
       "agent",
       "model",
       "branch",
       "cost",
       "total",
+      "project",
       "tokens",
       "cache",
       "context",
+      "perms",
+      "elapsed",
+      "tps",
+      "spark",
     ]);
+    // The ticker is on by default: clock-derived rows have nothing else to
+    // react to. `refresh: 0` opts out.
+    expect(resolution.config.refresh).toBe(1000);
     expect(DEFAULT_SIDEBAR_LINES[0]).toBe("✈ FLIGHT DECK");
     // The prompt footer is off unless configured: the sidebar already has it.
     expect(footerLine(resolution.config)).toBeUndefined();

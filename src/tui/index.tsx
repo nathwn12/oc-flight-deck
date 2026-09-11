@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
+import { createSignal } from "solid-js";
 import { mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
@@ -121,13 +122,82 @@ export default Plugin.define({
       return undefined;
     };
 
+    // Measured against the clock rather than the session's last update, so the
+    // row keeps moving between events instead of freezing between turns.
     const sessionElapsed = (session: SessionLike | undefined): number | undefined => {
-      const time = asRecord(session?.time);
-      const created = asCount(time?.created);
-      const updated = asCount(time?.updated);
-      if (created === undefined || updated === undefined || updated <= created) return undefined;
-      return updated - created;
+      const created = asCount(asRecord(session?.time)?.created);
+      if (created === undefined) return undefined;
+      const elapsed = Date.now() - created;
+      return elapsed <= 0 ? undefined : elapsed;
     };
+
+    // Project spend: every session the host knows about here, not just the one
+    // on screen. Answers "what has this repo cost me", not "this conversation".
+    const projectTotals = () => {
+      try {
+        const sessions = context.data.session.list() ?? [];
+        let cost = 0;
+        for (const entry of sessions) cost += asCount(asRecord(entry)?.cost) ?? 0;
+        return { cost, count: sessions.length };
+      } catch {
+        return undefined;
+      }
+    };
+
+    const statusOf = (sessionID: string): string | undefined => {
+      try {
+        return context.data.session.status(sessionID);
+      } catch {
+        return undefined;
+      }
+    };
+
+    const permsOf = (sessionID: string): number | undefined => {
+      try {
+        return context.data.session.permission.list(sessionID)?.length;
+      } catch {
+        return undefined;
+      }
+    };
+
+    // Throughput of the last completed turn. The host records when streaming
+    // finished, so this is measured rather than estimated from wall-clock.
+    const lastTps = (sessionID: string): number | undefined => {
+      const messages = messagesOf(sessionID);
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = asRecord(messages[index]);
+        const tokens = asRecord(message?.tokens);
+        const output = asCount(tokens?.output);
+        const time = asRecord(message?.time);
+        const created = asCount(time?.created);
+        const streamed = asCount(time?.streamed);
+        if (output === undefined || created === undefined || streamed === undefined) continue;
+        const duration = streamed - created;
+        if (duration <= 0) continue;
+        return output / (duration / 1_000);
+      }
+      return undefined;
+    };
+
+    // Recent turn sizes, oldest first. Drawn from messages the host already
+    // holds, so the sparkline needs no history of our own to accumulate.
+    const sparkValues = (sessionID: string): readonly number[] => {
+      const sizes: number[] = [];
+      for (const entry of messagesOf(sessionID)) {
+        const message = asRecord(entry);
+        if (message?.type !== "assistant") continue;
+        const output = asCount(asRecord(message.tokens)?.output);
+        if (output === undefined) continue;
+        sizes.push(output);
+      }
+      return sizes.slice(-12);
+    };
+
+    // A ticker exists only for clock-derived rows; everything else updates from
+    // the host's own events. `refresh: 0` opts out of it entirely.
+    const [frame, setFrame] = createSignal(0);
+    const timer =
+      config.refresh > 0 ? setInterval(() => setFrame((value) => value + 1), config.refresh) : undefined;
 
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
@@ -142,8 +212,15 @@ export default Plugin.define({
         branch: context.data.location.vcs.info(location)?.branch?.current,
         tree: treeTotals(sessionID, session?.cost),
         context: contextUsage(sessionID, session?.model),
+        project: projectTotals(),
+        status: statusOf(sessionID),
+        perms: permsOf(sessionID),
+        tps: lastTps(sessionID),
+        spark: sparkValues(sessionID),
         elapsedMs: sessionElapsed(session),
         turns,
+        // Read the tick so the slot re-runs each frame.
+        frame: frame(),
       };
     };
 
@@ -179,6 +256,7 @@ export default Plugin.define({
     }
 
     return () => {
+      if (timer !== undefined) clearInterval(timer);
       for (const release of releases) release();
     };
   },
