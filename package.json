@@ -3,15 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OpenCode V2 telemetry, swarm coordination, and guarded autopilot with an always-on CLI rail.",
+  "description": "Cosmetic Flight Deck rail for the OpenCode V2 CLI/TUI: a static branded sidebar and footer plugin.",
   "exports": {
     ".": {
-      "types": "./src/server/index.ts",
-      "import": "./src/server/index.ts"
-    },
-    "./rpc": {
-      "types": "./src/server/rpc.ts",
-      "import": "./src/server/rpc.ts"
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
     },
     "./tui": {
       "types": "./src/tui/index.tsx",
@@ -21,9 +17,7 @@
   "files": [
     "src",
     "README.md",
-    "LICENSE",
-    "ocfd.example.jsonc",
-    "ocfd.schema.json"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22",
@@ -35,8 +29,7 @@
     "check": "bun run typecheck && bun test"
   },
   "dependencies": {
-    "@opencode/plugin": "0.0.0-beta-19425",
-    "jsonc-parser": "3.3.1"
+    "@opencode/plugin": "0.0.0-beta-19425"
   },
   "devDependencies": {
     "@opentui/core": "0.5.10",

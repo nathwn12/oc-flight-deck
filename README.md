@@ -1,110 +1,141 @@
-# OC Flight Deck
+# ✈ Flight Deck
 
-Flight Deck is an OpenCode V2 plugin with three layers:
+**A tiny cosmetic plugin for the OpenCode V2 terminal.**
 
-1. **Telemetry** — persistent TPS, TTFT, cost, context, and session health.
-2. **Coordination** — task board, leases, artifact ownership, heartbeats, and
-   agent-facing tools.
-3. **Guarded autopilot** — opt-in lane recommendations, shared backoff, and
-   stale-task recovery.
+It puts a branded rail in your session sidebar and a one-line signature under
+your prompt, so your terminal feels a little more like a cockpit. That's the
+whole feature.
 
-The CLI companion keeps a compact rail visible in the sidebar and prompt
-footer. The server plugin is the control plane; the TUI is only the cockpit.
+No commands to learn. No data collected. No config required. Install it, enjoy
+it, and delete it whenever you like — the stock UI comes straight back.
 
-## Configuration
+## What you get
 
-Flight Deck uses `ocfd.jsonc` instead of duplicating options in OpenCode's
-server and CLI configuration:
-
-```text
-project ocfd.jsonc -> global ~/.config/opencode/ocfd.jsonc -> defaults
+```
+✈ FLIGHT DECK
+─────────────
+visual rail
+cosmetic build
 ```
 
-Copy `ocfd.example.jsonc` to a project or to
-`~/.config/opencode/ocfd.jsonc`. The UI can patch supported settings through
-the same file. `telemetry.enabled` is the master switch; individual metric
-switches live under `metrics`. Autopilot defaults to `false`.
+…and under the prompt:
 
-## Package entrypoints
-
-| Entry | Purpose |
-| --- | --- |
-| `oc-flight-deck` | OpenCode server plugin |
-| `oc-flight-deck/rpc` | Shared RPC contract |
-| `oc-flight-deck/tui` | OpenCode CLI/TUI plugin |
-
-For an installed or locally linked package, add the package name to the
-OpenCode V2 server plugin list and to `~/.config/opencode/cli.json`:
-
-```json
-{ "plugins": ["oc-flight-deck"] }
+```
+Flight Deck · cosmetic rail
 ```
 
-For this private checkout, add the server entrypoint explicitly to the local
-V2 server config (the repository's `opencode.jsonc` uses this form):
+- **Sidebar rail** — shown beside an open session.
+- **Prompt footer** — one quiet line under the composer.
+- **Theme-native** — colors come from your active OpenCode theme, so it blends
+  with whatever look you're already running.
+- **Static and small** — fixed text only. Nothing is read, tracked, or sent.
 
-```json
-{ "plugins": ["Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src\\server"] }
-```
+## Requirements
 
-For the CLI config, use an absolute Windows path to the checkout's `src\tui`
-directory:
+- OpenCode V2 (`opencode2`)
+- Only if you build from source: Bun 1.4+ or Node 22+
 
-```json
+## Install
+
+Clone the repo somewhere handy, then point OpenCode at the folder. In
+`opencode.jsonc` (or `cli.json` for CLI-only use):
+
+```jsonc
 {
-  "plugins": [
-    "Q:\\PROJECTS\\PERSONAL\\oc-flight-deck\\src\\tui"
-  ]
+  "plugins": ["./plugins/oc-flight-deck"]
 }
 ```
 
-Replace the example with the `src\tui` directory of the checkout on your
-machine. This beta accepts the local TUI directory directly. The repository
-does not modify the live `cli.json`; use a temporary `XDG_CONFIG_HOME` when
-testing without changing your normal CLI configuration:
+Restart OpenCode and you're done. Flight Deck shows up with its default look —
+no configuration required.
 
-```powershell
-$repo = 'Q:\PROJECTS\PERSONAL\oc-flight-deck'
-$testConfig = Join-Path $env:TEMP 'ocfd-cli-test'
-New-Item -ItemType Directory -Force "$testConfig\opencode" | Out-Null
-@{ '$schema' = 'https://opencode.ai/v2/cli.json'; plugins = @("$repo\src\tui") } |
-  ConvertTo-Json | Set-Content "$testConfig\opencode\cli.json"
-$env:XDG_CONFIG_HOME = $testConfig
-opencode2 --standalone $repo
+## Configuration
+
+Flight Deck reads a small JSONC file, so you can leave comments next to the
+values you change. To customize it, copy `flight-deck.example.jsonc` to one of:
+
+- `flight-deck.jsonc` at your project root, or
+- `.opencode/flight-deck.jsonc`
+
+Flight Deck uses the first one it finds, in this order:
+
+```
+.opencode/flight-deck.jsonc
+.opencode/flight-deck.json
+flight-deck.jsonc
+flight-deck.json
 ```
 
-The server side is already wired by this checkout's `opencode.jsonc`; the
-local TUI test should show the Flight Deck sidebar/footer without changing
-your global config. Replace the example paths on another machine. If the
-package is installed from a registry or linked locally, the package name
-`oc-flight-deck` can be used instead.
-The exact server config location is intentionally left to the host's current
-V2 configuration; no live user configuration is modified by this repository.
+Every key is optional. Delete anything you don't want to change and the default
+comes back — the values below *are* the defaults:
+
+```jsonc
+{
+  "sidebar": {
+    // false hides the sidebar rail entirely.
+    "enabled": true,
+    // Top to bottom beside an open session. The first line uses your theme's
+    // primary text color; the rest use the subdued color.
+    "lines": [
+      "✈ FLIGHT DECK",
+      "─────────────",
+      "visual rail",
+      "cosmetic build"
+    ]
+  },
+  "footer": {
+    // false hides the prompt-footer line entirely.
+    "enabled": true,
+    // Any single line. Empty text is ignored.
+    "text": "Flight Deck · cosmetic rail"
+  }
+}
+```
+
+| Option | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `sidebar.enabled` | boolean | `true` | Set `false` to hide the sidebar rail. |
+| `sidebar.lines` | string[] | see above | Lines top to bottom. The first uses your theme's primary text color, the rest the subdued color. |
+| `footer.enabled` | boolean | `true` | Set `false` to hide the prompt-footer line. |
+| `footer.text` | string | `Flight Deck · cosmetic rail` | Any single line. |
+
+A few things worth knowing:
+
+- **Mistakes are harmless.** A bad value is ignored rather than fatal: Flight
+  Deck falls back to the default and shows a one-time warning toast naming the
+  key to fix.
+- **Layout is guarded.** `sidebar.lines` is capped at 24 lines of 120 characters
+  each, so a stray edit can't wreck your terminal.
+- **Forward compatible.** Unknown keys are ignored, so a config written for a
+  newer version still loads cleanly.
+- **Host options also work.** The same values can be passed as plugin options in
+  `opencode.jsonc` / `cli.json`, and they take precedence over the file on hosts
+  that forward them.
+
+## Uninstall
+
+Remove the plugin entry (or the folder), delete your Flight Deck config file,
+restart OpenCode, and the stock sidebar and footer are back.
 
 ## Development
 
 ```sh
 bun install
-bun run typecheck
-bun test
 bun run check
 ```
 
-The package is pinned to `@opencode/plugin` beta `0.0.0-beta-19425`. The
-installed host CLI may be a different beta; verify the host before enabling the
-plugin globally.
+`bun run check` runs the type checker and the test suite, including a headless
+render test that mounts both rails in a real OpenTUI renderer and asserts the
+characters that come out.
 
-## Safety boundary
+Built on the official
+[OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
 
-- Telemetry is read-only.
-- Coordination starts in one location and uses a serialized claim queue.
-- Autopilot is disabled by default and every automatic action is visible in
-  the board/RPC status.
-- Flight Deck never auto-merges, force-removes worktrees, or prints secrets.
-- Events are notifications; persisted state is authoritative.
+## Compatibility
 
-## Official references
+The OpenCode plugin API is still in beta. This release targets
+`@opencode/plugin` beta `0.0.0-beta-19425`; pin a host version you've tested.
 
-- https://opencode.ai/v2/docs/build/plugins
-- https://opencode.ai/v2/docs/build/plugins/rpc
-- https://opencode.ai/v2/docs/build/plugins/cli
+## License
+
+MIT © 2026 nathwn12 — free to use, modify, and share.

@@ -1,0 +1,34 @@
+{
+  // Flight Deck configuration.
+  //
+  // To use it, copy this file to `flight-deck.jsonc` (beside this file) or to
+  // `.opencode/flight-deck.jsonc`, then edit. Comments and trailing commas are
+  // both fine.
+  //
+  // Flight Deck looks for these, in order, and uses the first one it finds:
+  //   .opencode/flight-deck.jsonc   .opencode/flight-deck.json
+  //   flight-deck.jsonc             flight-deck.json
+  //
+  // Every key is optional. Delete anything you don't want to change and the
+  // default comes back — the values below are those defaults.
+
+  "sidebar": {
+    // Set to false to hide the sidebar rail entirely.
+    "enabled": true,
+    // Rendered top to bottom beside an open session. The first line uses your
+    // theme's primary text color; the remaining lines use the subdued color.
+    "lines": [
+      "✈ FLIGHT DECK",
+      "─────────────",
+      "visual rail",
+      "cosmetic build"
+    ]
+  },
+
+  "footer": {
+    // Set to false to hide the prompt-footer line entirely.
+    "enabled": true,
+    // Any single line. Empty text is ignored.
+    "text": "Flight Deck · cosmetic rail"
+  }
+}
