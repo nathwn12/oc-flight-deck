@@ -1,169 +1,129 @@
 # ✈ Flight Deck
 
-**A read-only instrument panel for the OpenCode V2 terminal.**
+**Live session telemetry for your OpenCode terminal.**
 
-Flight Deck shows the open session's live numbers in your sidebar — agent, model,
-branch, cost, tokens, cache hit rate, context occupancy — so you can see what your
-session is actually doing and what it's costing before the bill tells you.
+Your agent is spending money right now. Most of the time you find out afterwards.
 
-No commands to learn. No telemetry, no network calls, nothing written. It only
-reads state OpenCode already holds, and deleting it leaves the stock UI behind.
-
-## What you get
+Flight Deck puts the numbers where you're already looking — a quiet sidebar that
+shows which model is running, what it's costing, how full the context is, and
+whether your caching is actually working.
 
 ```
 ✈ FLIGHT DECK
 ─────────────────
+status     ⠹ running
 agent      orchestrator
 model      deepseek-v4.1-flash · high
 branch     main
-cost       $0.225
-total      $0.245 · 2 subagents
+cost       $0.226
+total      $0.247 · 2 subagents
+project    $1.48 · 12 sessions
 tokens     533k in · 91k out
 cache      98% hit · 32M read
-context    218k / 1M · 22%
+context    ██░░░░░░░░ 18%
+elapsed    2h 14m
+tps        106 tok/s
+spark      ▁▃▂▅█▄▃▂
 ```
-
-Rows appear as the data does — nothing is shown until it's real, so a fresh
-session starts with the header alone and fills in as you work.
-
-- **Whole-session totals.** Cost and tokens are cumulative for the session.
-- **`total` includes subagents.** Subagent sessions are separate sessions, so the
-  parent's own cost understates a swarm. `total` sums the tree.
-- **`cache` is the value signal.** A 98% hit rate is what makes millions of
-  tokens cost cents; it's also the first thing to break.
-- **`context` is real occupancy.** Taken from the last request's prompt size, not
-  a running total, so you can see the window filling up.
-- **Theme-native.** Every line uses your active theme's text tokens, so it blends
-  with whatever look you already run.
-
-## Requirements
-
-- OpenCode V2 (`opencode2`)
-- Only if you build from source: Bun 1.4+ or Node 22+
 
 ## Install
 
-From a published package, add it to `opencode.jsonc`:
-
 ```jsonc
+// opencode.jsonc
 {
   "plugins": ["oc-flight-deck"]
 }
 ```
 
-From a local checkout, OpenCode discovers plugins under its config directory.
-Create two one-line bridges so the plugin code stays in your checkout:
+Restart OpenCode. That's the whole setup — no config file, no options, nothing to
+learn. The panel appears beside an open session and starts reading.
 
-```
-~/.config/opencode/plugins/flight-deck/index.ts
-~/.config/opencode/plugins/flight-deck/tui.ts
-```
+## What you're looking at
 
-```ts
-// index.ts — the registerable entrypoint
-export { default } from "file:///path/to/oc-flight-deck/src/index.ts";
-```
+| Row | Why it's there |
+| --- | --- |
+| `status` | A spinner while it works, a circle while it's waiting on you. |
+| `agent` | Which agent you're actually talking to. |
+| `model` | The model *and its variant* — `high` behaves differently. |
+| `branch` | Which branch you're about to commit to. |
+| `cost` | This session, so far. |
+| `total` | **This session plus every subagent it spawned.** |
+| `project` | Every session in this repo. |
+| `tokens` | Input and output, cumulative. |
+| `cache` | Hit rate first, because that's the number that explains the bill. |
+| `context` | A gauge of how full the window is. |
+| `perms` | Appears only when approvals are waiting on you. |
+| `elapsed` | How long you've been at it. |
+| `tps` | Output tokens per second, measured from the last completed turn. |
+| `spark` | Recent turn sizes as a shape — you can see the expensive one. |
 
-```ts
-// tui.ts — the terminal UI entrypoint
-export { default } from "file:///path/to/oc-flight-deck/src/tui/index.tsx";
-```
+### `total` is the row that matters
 
-Restart OpenCode. The panel appears beside an open session — the sidebar only
-exists inside a session, so the home screen stays untouched.
+Subagents run as **separate sessions**, and a session's own cost does not include
+them. On the session this was built against, the parent reported `$0.2246` while
+the true spend was `$0.2447` — **9% low on money, and 54% low on input tokens**.
+If you swarm, `total` is the number you actually spent.
+
+### `cache` is the row that surprises people
+
+A 98% hit rate is why millions of tokens can cost cents. The moment that number
+drops, your bill doesn't.
 
 ## Configuration
 
-**Nothing is required.** Install it and the panel works. The file below exists
-only to change the defaults.
+**You don't need any.** Install it and the panel works. But every knob is
+available in a commented JSONC file.
 
-Copy `flight-deck.example.jsonc` to one of these; Flight Deck uses the first it
-finds, in order:
-
-```
-.opencode/flight-deck.jsonc
-.opencode/flight-deck.json
-flight-deck.jsonc
-flight-deck.json
-```
+Copy [`flight-deck.example.jsonc`](./flight-deck.example.jsonc) to
+`flight-deck.jsonc` at your project root, or to `.opencode/flight-deck.jsonc`,
+then edit. Comments and trailing commas are fine.
 
 ```jsonc
 {
+  // Milliseconds between ticks. 0 turns the timer off entirely.
   "refresh": 1000,
+
   "sidebar": {
-    // false hides the panel entirely.
     "enabled": true,
-    // Fixed lines above the live rows. Your own words, or a rule.
     "lines": ["✈ FLIGHT DECK", "─────────────────"],
-    // The live rows, top to bottom. Delete any you don't want.
+    // Any rows, any order. Delete whatever you don't want.
     "rows": [
       "status", "agent", "model", "branch", "cost", "total", "project",
       "tokens", "cache", "context", "perms", "elapsed", "tps", "spark"
     ]
   },
+
   "footer": {
-    // Off by default: the sidebar already carries the data, and the prompt
-    // footer is high-traffic space. Turn it on for a short custom label.
+    // Off by default — the sidebar already carries the data.
     "enabled": false,
     "text": "Flight Deck"
   }
 }
 ```
 
-### Rows
+The example file documents every row and every option inline. A typo is never
+fatal: the bad value is ignored, the default comes back, and you get a one-time
+toast naming the key to fix.
 
-Every row is read from the open session. You never type these values in.
+## It reads. It never writes.
 
-| Row | Shows | Notes |
-| --- | --- | --- |
-| `status` | `running` or `idle` | The glyph animates while it works. |
-| `agent` | Which agent is running | `orchestrator`, `build`, `plan`, … |
-| `model` | Model id and variant | Variant matters: `high` behaves differently. |
-| `branch` | Current git branch | From the location's VCS info. |
-| `cost` | What this session has cost | Cumulative across every turn. |
-| `total` | This session **plus its subagents** | Hidden until a subagent has run. |
-| `project` | Every session in this repo | Not just the one on screen. |
-| `tokens` | Input and output tokens | Cumulative for the session. |
-| `cache` | Cache hit rate, then cache reads | Falls back to reads if the rate is underivable. |
-| `context` | A gauge of the context window | From the last request's prompt size, not a running total. |
-| `perms` | Approval requests waiting | Only shown when there are some. |
-| `elapsed` | Time since the session started | Needs `refresh` above `0` to tick. |
-| `tps` | Output tokens/second | Measured from the last completed turn's timing. |
-| `spark` | Recent turn sizes as a sparkline | Scaled to the largest turn in the window. |
-| `reasoning` | Reasoning tokens | Hidden when the model emits none. |
-| `turns` | Number of messages | |
+Flight Deck shows what OpenCode already knows.
 
-### Options
+- **No network calls.** Nothing is fetched, nothing is sent.
+- **No telemetry.** Nothing is collected or phoned home.
+- **No storage.** Nothing is written to disk.
+- **No polling loop** by default — cost, tokens, and permissions update from the
+  host's own events. The ticker exists only so clock-derived rows like `elapsed`
+  keep moving, and `"refresh": 0` removes it completely.
+- **Theme-native.** Every line uses your active theme's text tokens, so it blends
+  with whatever look you already run.
 
-| Option | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `refresh` | number | `1000` | Milliseconds between ticks. `0` disables the timer entirely. Only clock-derived rows need it. |
-| `sidebar.enabled` | boolean | `true` | Set `false` to hide the panel. |
-| `sidebar.lines` | string[] | `["✈ FLIGHT DECK", "─────────────────"]` | Fixed text above the rows. The first line uses your theme's primary text color, the rest the subdued color. |
-| `sidebar.rows` | string[] | all fourteen above | Any row from the table, in any order. |
-| `footer.enabled` | boolean | `false` | The prompt footer is off unless you configure it. |
-| `footer.text` | string | `"Flight Deck"` | Any single line. |
-
-A few things worth knowing:
-
-- **Writing a footer setting turns the footer on.** Set `footer.enabled: false`
-  explicitly to keep it hidden.
-- **Mistakes are harmless.** A bad value is ignored rather than fatal: Flight Deck
-  falls back to the default and shows a one-time warning toast naming the key —
-  including an unrecognised row name.
-- **Layout is guarded.** The panel is capped at 24 lines of 120 characters, so a
-  stray edit can't wreck your terminal.
-- **Forward compatible.** Unknown keys are ignored, so a config written for a
-  newer version still loads cleanly.
-- **Host options also work.** The same values can be passed as plugin options in
-  `opencode.jsonc` / `cli.json`, and they take precedence over the file on hosts
-  that forward them.
+Delete the plugin and the stock sidebar is back, exactly as it was.
 
 ## Uninstall
 
-Remove the plugin entry (or the bridge folder), delete your Flight Deck config
-file, restart OpenCode, and the stock sidebar is back.
+Remove the entry from `opencode.jsonc`, restart, done. Delete your
+`flight-deck.jsonc` too if you made one.
 
 ## Development
 
@@ -172,9 +132,10 @@ bun install
 bun run check
 ```
 
-`bun run check` runs the type checker and the test suite, including headless
-render tests that mount the panel in a real OpenTUI renderer and assert the exact
-characters that come out.
+`bun run check` typechecks and runs the suite, including headless OpenTUI render
+tests that mount the panel in a real renderer and assert the exact characters
+that come out. A guard test parses the shipped example config and asserts it
+still matches the real defaults, so the documentation can't drift from the code.
 
 Built on the official
 [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
@@ -183,6 +144,9 @@ Built on the official
 
 The OpenCode plugin API is still in beta. This release targets
 `@opencode/plugin` beta `0.0.0-beta-19425`; pin a host version you've tested.
+
+Requires OpenCode V2 (`opencode2`). Building from source needs Bun 1.4+ or
+Node 22+.
 
 ## License
 
