@@ -57,6 +57,23 @@ describe("flight deck config", () => {
     expect(resolution.issues.join(" ")).toContain("no usable entries");
   });
 
+  test("flattens control characters so a rail can never become two lines", () => {
+    const resolution = resolveConfig({ sidebar: { lines: ["A\nB", "C\td"] }, footer: { text: "x\u001b[31my" } });
+    expect(sidebarLines(resolution.config)).toEqual(["A B", "C d"]);
+    expect(footerLine(resolution.config)).toBe("x [31my");
+    expect(resolution.issues.join(" ")).toContain("control characters");
+    for (const line of sidebarLines(resolution.config)) {
+      expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    }
+  });
+
+  test("reports truncation instead of silently shortening", () => {
+    const resolution = resolveConfig({ sidebar: { lines: ["y".repeat(400)] }, footer: { text: "z".repeat(400) } });
+    expect(sidebarLines(resolution.config)[0]).toHaveLength(120);
+    expect(footerLine(resolution.config)).toHaveLength(120);
+    expect(resolution.issues.join(" ")).toContain("longer than 120 characters");
+  });
+
   test("survives a non-object options payload and ignores unknown keys", () => {
     expect(resolveConfig("nope").issues).toHaveLength(1);
     expect(resolveConfig(42).config).toEqual(DEFAULT_CONFIG);

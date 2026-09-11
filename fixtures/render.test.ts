@@ -148,6 +148,14 @@ test("omits disabled rails and warns once about bad config", async () => {
   expect(toasts[0]).toContain("footer.text");
 });
 
+test("registers only the sidebar when just the footer is disabled", async () => {
+  const { context, claims, toasts } = harness({ footer: { enabled: false } }, workspace());
+  flightDeck.setup(context);
+
+  expect(toasts).toEqual([]);
+  expect(claims.map((claim) => claim.path)).toEqual(["sidebar.content"]);
+});
+
 test("summarises additional config problems", async () => {
   const { context, toasts } = harness({ footer: { enabled: "yes", text: 7 } }, workspace());
   flightDeck.setup(context);
