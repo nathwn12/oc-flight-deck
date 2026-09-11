@@ -48,6 +48,7 @@ interface HarnessExtras {
   readonly family?: readonly string[];
   readonly children?: Record<string, unknown>;
   readonly messages?: readonly unknown[];
+  readonly models?: readonly unknown[];
 }
 
 function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
@@ -63,7 +64,7 @@ function harness(options: unknown, directory: string, session: unknown = undefin
         vcs: {
           info: () => (extras.branch === undefined ? undefined : { branch: { current: extras.branch } }),
         },
-        model: { list: () => [] },
+        model: { list: () => extras.models ?? [] },
       },
       session: {
         get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
@@ -152,6 +153,28 @@ test("totals subagent sessions and reads context from the last request", async (
   expect(frame).toContain("1 subagent");
   // Occupancy is the last request (212 input + 175,744 cache read), not a sum.
   expect(frame).toContain("176k used");
+});
+
+test("draws the context gauge, matching provider as well as model id", async () => {
+  const messages = [{ tokens: { input: 212, output: 415, cache: { read: 175744, write: 0 } } }];
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
+    messages,
+    models: [
+      // Same model id, different provider, different window. Matching on id
+      // alone would read this ceiling and show 17%.
+      { id: "deepseek-v4.1-flash", providerID: "openrouter", limit: { context: 1048576, output: 384000 } },
+      { id: "deepseek-v4.1-flash", providerID: "opencode-go", limit: { context: 1000000, output: 384000 } },
+    ],
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 16);
+  // 212 + 175,744 against a 1,000,000 window is 18%, not the 17% the other
+  // provider's larger window would give.
+  expect(frame).toContain("context");
+  expect(frame).toContain("██░░░░░░░░ 18%");
+  expect(frame).not.toContain("17%");
 });
 
 test("renders branding alone until the host supplies session data", async () => {

@@ -104,17 +104,22 @@ export default Plugin.define({
       return undefined;
     };
 
-    // The catalog field name for the window size is not guaranteed across
-    // versions, so accept the likely spellings and otherwise show no limit.
+    // The window lives at `limit.context` on the catalog entry, and two
+    // providers can expose the same model id with different windows — so the
+    // provider has to match too, or the gauge would read the wrong ceiling.
     const contextLimit = (model: unknown): number | undefined => {
-      const id = asRecord(model)?.id;
+      const ref = asRecord(model);
+      const id = ref?.id;
+      const providerID = ref?.providerID;
       if (typeof id !== "string") return undefined;
       try {
         const location = context.location ?? context.data.location.default();
         for (const entry of context.data.location.model.list(location) ?? []) {
           const record = asRecord(entry);
           if (record === undefined || record.id !== id) continue;
-          return asCount(record.context) ?? asCount(record.limit) ?? asCount(record.contextWindow);
+          if (typeof providerID === "string" && record.providerID !== providerID) continue;
+          const limit = asRecord(record.limit);
+          return asCount(limit?.context) ?? asCount(record.context) ?? asCount(record.contextWindow);
         }
       } catch {
         return undefined;
