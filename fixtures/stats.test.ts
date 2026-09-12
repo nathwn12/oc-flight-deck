@@ -205,3 +205,50 @@ describe("flight deck live rows", () => {
     expect(statLine("unknown-field", {})).toBeUndefined();
   });
 });
+
+// Boundaries are where a short formatter goes wrong: the unit has to change
+// exactly once, and a rounded value must never carry the wrong unit into the
+// string. `999,600` printing as `1000k` was a real number, with two magnitudes
+// in it.
+describe("number boundaries", () => {
+  test("changes unit once, and never prints a four-figure thousands count", () => {
+    expect(formatCount(999)).toBe("999");
+    expect(formatCount(1_000)).toBe("1k");
+    expect(formatCount(999_499)).toBe("999k");
+    expect(formatCount(999_500)).toBe("1M");
+    expect(formatCount(999_999)).toBe("1M");
+    expect(formatCount(1_000_000)).toBe("1M");
+    expect(formatCount(1_050_000)).toBe("1.1M");
+    expect(formatCount(31_974_784)).toBe("32M");
+  });
+
+  test("never cuts a surrogate pair in half", () => {
+    // 18 code units against a 4-unit budget, so the cut lands mid-pair. The
+    // orphaned half renders as a replacement character, which reads as
+    // corruption rather than as a shortened path.
+    expect(clip("😀".repeat(9), 4)).toBe("😀…");
+    expect(clip("😀".repeat(9), 5)).toBe("😀😀…");
+    // Nothing to clip means nothing is touched.
+    expect(clip("short", 18)).toBe("short");
+    expect(clip("😀", 18)).toBe("😀");
+  });
+});
+
+// Config text is flattened in ./config.ts, but a tool name, a permission resource
+// or a branch name arrives straight from the host and lands on the same rail. A
+// control character there moves the cursor instead of being seen.
+describe("host text is flattened before it is drawn", () => {
+  test("strips an escape sequence out of a permission resource", () => {
+    expect(statLine("perms", { perms: { count: 1, action: "shell", resource: "a\u001b[31mb" } })).toBe(
+      "perms     shell · a [31mb",
+    );
+  });
+
+  test("keeps a newline in a branch name from breaking the row", () => {
+    expect(statLine("branch", { branch: "ma\nin" })).toBe("branch    ma in");
+  });
+
+  test("flattens a control character inside a tool name", () => {
+    expect(statLine("caution", { caution: "⚠ sh\u0007ell running" })).toBe("caution   ⚠ sh ell running");
+  });
+});

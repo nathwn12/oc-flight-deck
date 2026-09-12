@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../src/tui/config.js";
 import { sidebarLines } from "../src/tui/presentation.js";
-import type { StatSource } from "../src/tui/stats.js";
+import { sparkline, statLine, STAT_FIELDS, type StatSource } from "../src/tui/stats.js";
 
 // A rail that wraps is not a rail. The sidebar is roughly 30-40 columns, and the
 // host does the layout — the plugin cannot ask how wide it is, so every row has
@@ -76,8 +76,38 @@ describe("the rail fits", () => {
     expect(overBudget(FULL)).toEqual([]);
   });
 
-  test("no default row exceeds the budget, with every field populated", () => {
-    expect(overBudget(FULL)).toEqual([]);
+  test("every field fits, including the rows that are off by default", () => {
+    // The default rows are 13 of the 17 fields, so `reasoning` (the widest
+    // label), `spark` (a width of its own) and `total` (the widest value) were
+    // never actually put on the rail by this guard. Two of those shipped bugs.
+    for (const field of STAT_FIELDS) {
+      expect(overBudget(FULL, [field])).toEqual([]);
+    }
+  });
+
+  test("a label wider than its column still gets a separator", () => {
+    // The literal shape of the shipped bug: `reasoning` is nine characters, so
+    // at labelWidth 8 it overflows its column. Padding alone leaves it glued to
+    // the value ("reasoning153k"); the row has to guarantee the space itself.
+    for (const labelWidth of [8, 9, 10]) {
+      expect(statLine("reasoning", { tokens: { reasoning: 152_995 } }, { labelWidth })).toBe("reasoning 153k");
+    }
+  });
+
+  test("the spark row is as wide as sparkWidth asks for, and still fits", () => {
+    const source = { ...FULL, spark: Array.from({ length: 32 }, (_, index) => index + 1) };
+    for (const sparkWidth of [2, 12, 16, 24]) {
+      const config = {
+        ...DEFAULT_CONFIG,
+        sidebar: { ...DEFAULT_CONFIG.sidebar, rows: ["spark"] },
+        layout: { ...DEFAULT_CONFIG.layout, sparkWidth },
+      };
+      const [row] = sidebarLines(config, source).slice(config.sidebar.lines.length);
+      // The newest `sparkWidth` samples of 1..32, drawn as a shape.
+      const expected = sparkline(Array.from({ length: sparkWidth }, (_, index) => index + 32 - sparkWidth + 1));
+      expect(row).toBe(`spark     ${expected}`);
+      expect(row!.length).toBeLessThanOrEqual(BUDGET);
+    }
   });
 
   test("no row wraps when the caution row is at its longest", () => {

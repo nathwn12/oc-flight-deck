@@ -48,7 +48,7 @@ learn. The panel appears beside an open session and starts reading.
 | `model` | The model *and its variant* - `high` behaves differently. |
 | `branch` | Which branch you're about to commit to. |
 | `cost` | This conversation, plus its subagents once any have run. |
-| `project` | Every session in this repo. |
+| `project` | Every session in this **project** — matched by the host's project id, so worktrees count together. |
 | `tokens` | Input and output, cumulative. |
 | `cache` | Hit rate first, because that's the number that explains the bill. |
 | `context` | A gauge of how full the window is. |
@@ -56,7 +56,13 @@ learn. The panel appears beside an open session and starts reading.
 | `elapsed` | How long you've been at it. |
 | `tps` | Output tokens per second, measured from the last completed turn. |
 | `spark` | Recent turn sizes as a shape. Available, off by default. |
-| `total` | Available if you want the session/subagent split on two rows. |
+| `reasoning` | Reasoning tokens, when the model emits them. Available, off by default. |
+| `turns` | How many prompts you have sent this session. Available, off by default. |
+| `total` | The family total and subagent count on a row of its own. Adding it makes `cost` show the session figure alone. Available, off by default. |
+
+`project` matches on the host's **project id**, not on a directory, so a worktree
+counts as part of the same project. A host that reports no project id leaves
+nothing to match on, and the row then totals every session that host knows about.
 
 ### `caution` is the one row that isn't session state
 
@@ -77,11 +83,14 @@ hang.
 | the same call fails with identical input | caution at 3 |
 | a running session stops producing anything | watch at 10m, caution at 20m |
 
-The thresholds are calibrated, not guessed. Measured over **53,672 real tool
-calls**, the exempt list (`subagent`, `task`, `delegate*`, `question`) is the
-difference between **0.16%** and **0.57%** of calls lighting the row: `subagent`
-alone exceeded the threshold 152 times, with a p99 of 14.7 minutes. Without the
-list it would light up on every delegated task, and you would learn to ignore it.
+The thresholds are calibrated, not guessed. Measured over **54,218 real settled
+tool calls**, **307** (0.57%) ran longer than three minutes — and **200 of those
+are on the exempt list**, so with it **0.20%** of calls light the row. `subagent`
+alone accounts for 152 of them at a p99 of 14.2 minutes: a delegated agent
+running a quarter of an hour is working as designed. Without the list the row
+lights up on every delegation, and you would learn to ignore it.
+
+The percentages move as that history grows; the exemption ratio is the point.
 
 The toast is **off by default**. The rail is the signal; a notification is an
 interruption.
@@ -148,7 +157,7 @@ then edit. Comments and trailing commas are fine.
     "turnCautionSeconds": 1200,
     "repeatThreshold": 3,
     // Tools that are slow by nature, so slow is not an anomaly for them.
-    "exemptTools": ["question", "task", "subagent", "agent", "delegate"],
+    "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
     // Off by default: the rail is the signal, a toast is an interruption.
     "toast": false
   },
@@ -176,7 +185,8 @@ Flight Deck shows what OpenCode already knows.
   between turns. It is scoped to this plugin and dies with the TUI; it is never
   persisted, and `"refresh": 0` removes even that.
 - **No polling of your session** — cost, tokens, and permissions update from the
-  host's own events.
+  host's own events. The timer only re-reads state the host already holds in
+  memory, and only so the clock-derived rows keep moving.
 - **Theme-native.** Every line uses your active theme's text tokens, so it blends
   with whatever look you already run.
 
@@ -200,17 +210,20 @@ that come out. A guard test parses the shipped example config and asserts it
 still matches the real defaults, so the documentation can't drift from the code.
 
 To load the plugin **from this checkout** while working on it, add it to the
-config of the directory you run OpenCode in:
+`opencode.jsonc` of the project you run OpenCode in. A `plugins` entry is a
+package specifier, not a file path — a bare path is ignored silently — so the
+checkout has to be named as a git file URL:
 
 ```jsonc
 {
-  "plugins": ["."]
+  "plugins": ["git+file:///absolute/path/to/oc-flight-deck"]
 }
 ```
 
-That file is deliberately **not** committed. If the plugin is also installed
-globally, declaring it in both places registers the same plugin id twice and the
-host's plugin list shows one of them as failed.
+That installs a **copy, not a symlink**, so re-run the install after editing the
+checkout. This file is deliberately **not** committed: if the plugin is also
+installed globally, declaring it in both places registers the same plugin id
+twice and the host's plugin list shows one of them as failed.
 
 Built on the official
 [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).

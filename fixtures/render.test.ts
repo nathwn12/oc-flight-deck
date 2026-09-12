@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import flightDeck from "../src/tui/index.js";
+import { sparkline } from "../src/tui/stats.js";
 
 // These tests mount the exact JSX the plugin hands to the host, in a real
 // headless OpenTUI renderer, and read the resulting character frame. That is
@@ -22,6 +23,8 @@ interface Claim {
 
 /** A snapshot shaped exactly like the live `Session.Info` observed from the server. */
 const LIVE_SESSION = {
+  id: "ses_test",
+  projectID: "proj_a",
   agent: "orchestrator",
   model: { id: "deepseek-v4.1-flash", providerID: "opencode-go", variant: "high" },
   cost: 0.1913,
@@ -49,6 +52,17 @@ interface HarnessExtras {
   readonly children?: Record<string, unknown>;
   readonly messages?: readonly unknown[];
   readonly models?: readonly unknown[];
+  /**
+   * What `session.list()` returns. Not scoped by the host: that list holds every
+   * session it knows about, across every directory, which is why the `project`
+   * row has to filter it itself.
+   */
+  readonly sessions?: readonly unknown[];
+  /**
+   * Family root for a session id. Defaults to "every session is its own root",
+   * which is what a host without `root()` gives you.
+   */
+  readonly root?: (id: string) => string;
   /** Per-session status; omit for the default idle. May throw for one id. */
   readonly status?: (id: string) => string | undefined;
   readonly shells?: readonly unknown[];
@@ -73,12 +87,15 @@ function harness(options: unknown, directory: string, session: unknown = undefin
       },
       session: {
         get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
-        list: () => [],
+        list: () => extras.sessions ?? [],
         // An explicit undefined from the knob must survive: `??` would turn it
         // back into the default idle and hide the "host said nothing" case.
         status: (id: string) =>
           extras.status === undefined ? (session === undefined ? undefined : "idle") : extras.status(id),
         family: () => extras.family ?? [],
+        // Absent by default, so the "host without root()" path is the one every
+        // other test exercises.
+        ...(extras.root === undefined ? {} : { root: (id: string) => extras.root!(id) }),
         message: { list: () => extras.messages ?? [] },
         permission: { list: () => [] },
       },
@@ -382,4 +399,121 @@ test("omits the status row rather than guess when the host will not say", async 
   expect(frame).toContain("FLIGHT DECK");
   expect(frame).not.toContain("idle");
   expect(frame).not.toContain("running");
+});
+
+// `session.list()` is not scoped by the host: it returns every session the host
+// knows about, across every directory. Summing it unfiltered reads as the whole
+// database while the row claims to be this project, so the row filters by the
+// project id itself.
+
+test("sums only the open session's project, not every session the host knows", async () => {
+  const { context, claims } = harness({ sidebar: { rows: ["project"] } }, workspace(), LIVE_SESSION, {
+    sessions: [
+      { id: "ses_test", projectID: "proj_a", cost: 0.1913 },
+      { id: "ses_sibling", projectID: "proj_a", cost: 0.5 },
+      { id: "ses_third", projectID: "proj_a", cost: 0.25 },
+      { id: "ses_other", projectID: "proj_b", cost: 900 },
+      { id: "ses_legacy", cost: 5 },
+    ],
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  // 0.1913 + 0.5 + 0.25, and the three sessions that carry proj_a.
+  expect(frame).toContain("project   $0.941 · 3 sessions");
+  // Another project, and a session with no project id at all, must not leak in.
+  expect(frame).not.toContain("$900");
+  expect(frame).not.toContain("5 sessions");
+});
+
+test("falls back to every session when the host reports no project id", async () => {
+  const { context, claims } = harness(
+    { sidebar: { rows: ["project"] } },
+    workspace(),
+    { ...LIVE_SESSION, projectID: undefined },
+    { sessions: [{ id: "ses_test", cost: 0.1913 }, { id: "ses_other", cost: 900 }] },
+  );
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  // Documented degradation: no project id means no way to scope, so the
+  // unfiltered total is shown rather than an empty row.
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("project   $900.19 · 2 sessions");
+});
+
+test("the spark row renders as many samples as sparkWidth asks for", async () => {
+  const messages = Array.from({ length: 20 }, (_, index) => ({
+    type: "assistant",
+    tokens: { output: index + 1 },
+  }));
+  const { context, claims } = harness(
+    { sidebar: { rows: ["spark"] }, layout: { sparkWidth: 16 } },
+    workspace(),
+    LIVE_SESSION,
+    { messages },
+  );
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  // The newest 16 samples, scaled against the largest of them.
+  const expected = sparkline(Array.from({ length: 16 }, (_, index) => index + 5));
+  // The whole row, label included: asserting only the shape would also pass if
+  // the row silently fell back to a shorter window, because the tail of the
+  // longer shape is the shorter shape.
+  expect(frame).toContain(`spark     ${expected}`);
+});
+
+test("the turns row counts prompts, not every message record", async () => {
+  const messages = [
+    { type: "user" },
+    { type: "assistant", tokens: { output: 10 } },
+    { type: "system" },
+    { type: "shell" },
+    { type: "user" },
+  ];
+  const { context, claims } = harness({ sidebar: { rows: ["turns"] } }, workspace(), LIVE_SESSION, {
+    messages,
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  // Two user messages. Counting every record would say five.
+  expect(frame).toContain("turns     2");
+  expect(frame).not.toContain("turns     5");
+});
+
+test("a subagent session does not claim its parent's family as its own", async () => {
+  // The host keys `family()` by the family root, so asking from a child returns
+  // the root and every sibling. Merging that into `cost` would report the whole
+  // tree under a label that promises this conversation plus its own subagents.
+  const { context, claims } = harness({ sidebar: { rows: ["cost", "total"] } }, workspace(), LIVE_SESSION, {
+    family: ["ses_root", "ses_test", "ses_sibling"],
+    children: { ses_root: { cost: 5 }, ses_sibling: { cost: 3 } },
+    root: () => "ses_root",
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 8);
+  // Its own figure, and no family row at all.
+  expect(frame).toContain("cost      $0.191");
+  expect(frame).not.toContain("$8");
+  expect(frame).not.toContain("2 subagents");
+  expect(frame).not.toContain("total");
+});
+
+test("a subagent total is still summed for the family root", async () => {
+  const { context, claims } = harness({ sidebar: { rows: ["cost"] } }, workspace(), LIVE_SESSION, {
+    family: ["ses_test", "ses_child"],
+    children: { ses_child: { cost: 0.02 } },
+    root: (id) => id,
+  });
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 8);
+  expect(frame).toContain("cost      $0.211 · 1 subagent");
 });

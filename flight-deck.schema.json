@@ -16,7 +16,7 @@
       "minimum": 0,
       "maximum": 60000,
       "default": 100,
-      "description": "Milliseconds between ticks. Cost and tokens arrive with host events; anything derived from the clock — `elapsed`, the status spinner, and the caution thresholds — needs this timer. 100 turns the spinner once a second. 0 turns the ticker off entirely, which also freezes the annunciator (it works, but only updates on host events). Practical range 16–1000; below 16 is treated as 16."
+      "description": "Milliseconds between ticks. Cost and tokens arrive with host events; anything derived from the clock — `elapsed`, the status spinner, and the caution thresholds — needs this timer. 100 turns the spinner once a second. 0 turns the ticker off entirely, which also freezes the annunciator (it works, but only updates on host events). Practical range 16–1000; 1–15 are treated as 16, while 0 is the deliberate off switch and is never clamped."
     },
 
     "sidebar": {
@@ -34,14 +34,14 @@
           "items": { "type": "string" },
           "default": ["✈ FLIGHT DECK", "─────────────────"],
           "maxItems": 24,
-          "description": "Fixed lines rendered above the live rows, in order. Branding or a separator. These render at full brightness; the live rows below them are dimmed."
+          "description": "Fixed lines rendered above the live rows, in order. Branding or a separator. These render at full brightness; the live rows below them are dimmed. The fixed lines and the live rows together are capped at 24 — anything past that is dropped from the rail."
         },
         "rows": {
           "type": "array",
           "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns"] },
           "default": ["caution", "status", "agent", "model", "branch", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
-          "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. Rows with no data are omitted entirely, so a narrow rail grows rows as a session produces them rather than showing placeholders."
+          "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. Rows with no data are omitted entirely, so a narrow rail grows rows as a session produces them rather than showing placeholders. Counted together with `sidebar.lines` against a 24-line cap on the whole rail."
         }
       }
     },
@@ -141,7 +141,7 @@
           "minimum": 2,
           "maximum": 64,
           "default": 12,
-          "description": "Samples drawn in the `spark` row. The newest turns are kept, so narrowing it keeps the recent shape rather than the oldest."
+          "description": "Samples drawn in the `spark` row. The newest turns are kept, so narrowing it keeps the recent shape rather than the oldest. The row is this many cells wide, so a large value is a wide row — mind a narrow sidebar."
         }
       }
     },

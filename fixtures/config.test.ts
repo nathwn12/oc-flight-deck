@@ -79,7 +79,7 @@ describe("flight deck config", () => {
     });
     expect(sidebarLines(resolution.config)).toEqual(["ok"]);
     expect(footerLine(resolution.config)).toBe(DEFAULT_FOOTER_TEXT);
-    expect(resolution.issues.length).toBeGreaterThanOrEqual(4);
+    expect(resolution.issues).toHaveLength(5);
     expect(resolution.issues.join(" ")).toContain("sidebar.enabled");
     expect(resolution.issues.join(" ")).toContain("footer.enabled");
     expect(resolution.issues.join(" ")).toContain("sidebar.lines[0]");
@@ -212,5 +212,80 @@ describe("flight deck option precedence", () => {
   test("merging two empty sources yields the defaults", () => {
     expect(resolveConfig(mergeOptions(undefined, undefined)).config).toEqual(DEFAULT_CONFIG);
     expect(resolveConfig(mergeOptions({}, {})).config).toEqual(DEFAULT_CONFIG);
+  });
+});
+
+// Validation branches that nothing exercised. Each one silently corrected a bad
+// value, so a regression in any of them would have been invisible — the config
+// would simply do something other than what it says.
+describe("option validation", () => {
+  test("raises a caution threshold that could never be reached", () => {
+    const tool = resolveConfig({ caution: { toolWatchSeconds: 300, toolCautionSeconds: 60 } });
+    expect(tool.config.caution.toolCautionSeconds).toBe(300);
+    expect(tool.issues.join(" ")).toContain("raised to match");
+
+    const turn = resolveConfig({ caution: { turnWatchSeconds: 900, turnCautionSeconds: 60 } });
+    expect(turn.config.caution.turnCautionSeconds).toBe(900);
+    expect(turn.issues.join(" ")).toContain("raised to match");
+  });
+
+  test("rejects a glyph that is empty, too wide, or a control character", () => {
+    const { config, issues } = resolveConfig({ glyphs: { watch: "abc", caution: "\u0007", clear: "" } });
+    expect(config.glyphs).toEqual(DEFAULT_CONFIG.glyphs);
+    expect(issues.join(" ")).toContain("glyphs.watch");
+    expect(issues.join(" ")).toContain("glyphs.caution");
+    expect(issues.join(" ")).toContain("glyphs.clear");
+  });
+
+  test("falls back whole when the exempt list is malformed, but accepts empty", () => {
+    const fallback = DEFAULT_CONFIG.caution.exemptTools;
+    expect(resolveConfig({ caution: { exemptTools: "read" } }).config.caution.exemptTools).toEqual(fallback);
+    expect(resolveConfig({ caution: { exemptTools: ["read", "  "] } }).config.caution.exemptTools).toEqual(fallback);
+    // An empty list is a real choice: exempt nothing at all.
+    expect(resolveConfig({ caution: { exemptTools: [] } }).config.caution.exemptTools).toEqual([]);
+  });
+
+  test("sends an out-of-range layout value back to its default, and says so", () => {
+    const small = resolveConfig({ layout: { labelWidth: 5, barWidth: 0, sparkWidth: 1 } });
+    expect(small.config.layout).toEqual(DEFAULT_CONFIG.layout);
+    expect(small.issues.join(" ")).toContain("layout.labelWidth");
+    expect(small.issues.join(" ")).toContain("layout.barWidth");
+    expect(small.issues.join(" ")).toContain("layout.sparkWidth");
+
+    const large = resolveConfig({ layout: { labelWidth: 30, barWidth: 100, sparkWidth: 500 } });
+    expect(large.config.layout).toEqual(DEFAULT_CONFIG.layout);
+    expect(large.issues).toHaveLength(3);
+
+    // Both ends of every range are accepted exactly as written.
+    expect(resolveConfig({ layout: { labelWidth: 6, barWidth: 1, sparkWidth: 2 } }).issues).toEqual([]);
+    expect(resolveConfig({ layout: { labelWidth: 24, barWidth: 40, sparkWidth: 64 } }).issues).toEqual([]);
+  });
+
+  test("reports the fixed lines and the live rows overrunning the rail together", () => {
+    const { config, issues } = resolveConfig({
+      sidebar: { lines: Array.from({ length: 20 }, (_, index) => `line ${index}`), rows: DEFAULT_CONFIG.sidebar.rows },
+    });
+    // 20 fixed lines plus 13 live rows, against a 24-line rail.
+    expect(issues.join(" ")).toContain("total 33 lines");
+    // With every default row carrying data, the rail stops at the cap.
+    const source = {
+      caution: "▲ x",
+      status: "idle",
+      agent: "x",
+      model: { id: "m" },
+      branch: "b",
+      cost: 1,
+      project: { cost: 1 },
+      tokens: { input: 1, output: 1, cache: { read: 1 } },
+      context: { used: 1 },
+      perms: { count: 1 },
+      elapsedMs: 1_000,
+      tps: 10,
+    };
+    expect(sidebarLines(config, source)).toHaveLength(24);
+  });
+
+  test("says nothing when the rail is comfortably inside its cap", () => {
+    expect(resolveConfig({ sidebar: { lines: ["a", "b"], rows: ["cost"] } }).issues).toEqual([]);
   });
 });

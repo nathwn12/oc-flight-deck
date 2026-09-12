@@ -153,7 +153,14 @@ function sortValue(value: unknown): unknown {
 
 const SEVERITY_ORDER: Record<CautionSeverity, number> = { caution: 0, watch: 1 };
 
-function severityFor(elapsed: number, watchMs: number, cautionMs: number): CautionSeverity {
+/**
+ * Watch or caution, from the elapsed time alone.
+ *
+ * Callers reach this only after the watch threshold has already been crossed, so
+ * there is nothing left to compare against but the escalation. (The watch
+ * threshold used to be passed in and ignored, which read as if it mattered.)
+ */
+function severityFor(elapsed: number, cautionMs: number): CautionSeverity {
   return elapsed >= cautionMs ? "caution" : "watch";
 }
 
@@ -186,7 +193,7 @@ export function detectCautions(input: CautionInput): Caution[] {
 
     found.push({
       kind: "hung-tool",
-      severity: severityFor(elapsedMs, thresholds.toolWatchMs, thresholds.toolCautionMs),
+      severity: severityFor(elapsedMs, thresholds.toolCautionMs),
       tool: call.name,
       status: call.status,
       elapsedMs,
@@ -219,7 +226,7 @@ export function detectCautions(input: CautionInput): Caution[] {
     const existing = found.findIndex((c) => c.kind === "hung-shell");
     const caution: Caution = {
       kind: "hung-shell",
-      severity: severityFor(elapsedMs, thresholds.toolWatchMs, thresholds.toolCautionMs),
+      severity: severityFor(elapsedMs, thresholds.toolCautionMs),
       tool: label,
       status: "running",
       elapsedMs,
@@ -301,7 +308,7 @@ export function detectCautions(input: CautionInput): Caution[] {
       if (elapsedMs >= thresholds.turnWatchMs) {
         found.push({
           kind: "silent-turn",
-          severity: severityFor(elapsedMs, thresholds.turnWatchMs, thresholds.turnCautionMs),
+          severity: severityFor(elapsedMs, thresholds.turnCautionMs),
           elapsedMs,
           key: "silent-turn",
         });
