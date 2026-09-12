@@ -46,25 +46,28 @@ describe("flight deck live rows", () => {
       "agent     orchestrator",
       "model     deepseek-v4.1-flash · high",
       "branch    main",
-      // `cost` carries the family total once subagents have run, because this
-      // session's own figure understates the bill. `total` still exists for
-      // anyone who wants the two on separate rows.
-      "cost      $0.245 · +$0.020 · 2 subagents",
+      // `total` is on this rail, so `cost` stays the session figure and `total`
+      // carries the family total. One number is not repeated.
+      "cost      $0.225",
       "total     $0.245 · 2 subagents",
       "tokens    533k in · 91k out",
       "cache     98% hit · 32M read",
     ]);
   });
 
-  test("the cost row stays a single figure until a subagent actually runs", () => {
-    // One number and its own superset stacked on two rows was the thing to fix,
-    // but inventing a delta with nothing to subtract would be worse.
+  test("cost merges the subagent total only when nothing else shows it", () => {
+    const source = { cost: 0.2246, tree: { cost: 0.2447, count: 2 } };
+
+    // No `total` row on the rail: cost carries the family figure itself.
+    expect(statLine("cost", source)).toBe("cost      $0.245 · 2 subagents");
+    // `total` row present: cost goes back to the session figure.
+    expect(statLine("cost", source, { hasTotalRow: true })).toBe("cost      $0.225");
+
+    // Nothing to merge when no subagent ran, whichever way the rail is set up.
     expect(statLine("cost", { cost: 0.1913 })).toBe("cost      $0.191");
     expect(statLine("cost", { cost: 0.1913, tree: { cost: 0.1913, count: 0 } })).toBe("cost      $0.191");
     expect(statLine("cost", { cost: 0.2, tree: { cost: 0.2, count: 1 } })).toBe("cost      $0.200");
-    expect(statLine("cost", { cost: 0.2, tree: { cost: 0.25, count: 1 } })).toBe(
-      "cost      $0.250 · +$0.050 · 1 subagent",
-    );
+    expect(statLine("cost", { cost: 0.2, tree: { cost: 0.25, count: 1 } })).toBe("cost      $0.250 · 1 subagent");
   });
 
   test("only shows a tree total once a subagent has actually run", () => {
