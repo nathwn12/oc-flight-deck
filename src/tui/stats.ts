@@ -221,7 +221,14 @@ export function statLine(
   const labelWidth = layout.labelWidth ?? DEFAULT_LABEL_WIDTH;
   const barWidth = layout.barWidth ?? DEFAULT_BAR_WIDTH;
   const sparkWidth = layout.sparkWidth ?? DEFAULT_SPARK_WIDTH;
-  const row = (label: string, value: string): string => `${label.padEnd(labelWidth)}${value}`;
+  // At least one space, always.
+  //
+  // `padEnd` returns the label unchanged when it is already wider than the
+  // column, so a label longer than `labelWidth` was glued straight onto its
+  // value: at labelWidth 8 the `reasoning` row rendered as "reasoning153k".
+  // The label is nine characters, which made this reachable from a config file.
+  const row = (label: string, value: string): string =>
+    `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${value}`;
 
   switch (field) {
     case "caution": {
