@@ -73,6 +73,10 @@ export interface FlightDeckConfig {
    * Silent when healthy, which is why it costs nothing visually.
    */
   readonly caution: CautionConfig;
+  /** Geometry of a row. Every value has a sane default. */
+  readonly layout: LayoutConfig;
+  /** Glyphs for the annunciator, for terminals that render the defaults badly. */
+  readonly glyphs: GlyphConfig;
   /**
    * Update cadence in milliseconds for time-derived rows.
    *
@@ -95,6 +99,41 @@ export function cautionThresholds(config: CautionConfig): CautionThresholds {
     exemptTools: config.exemptTools,
   };
 }
+
+/** Pure cosmetics: the geometry of a row. */
+export interface LayoutConfig {
+  /** Width of the row label column. Default `10`. */
+  readonly labelWidth: number;
+  /** Cells in the context gauge. Default `10`. */
+  readonly barWidth: number;
+  /** Samples drawn in the sparkline. Default `12`. */
+  readonly sparkWidth: number;
+}
+
+/**
+ * The annunciator's glyphs.
+ *
+ * Configurable because this is the one row that has to read at a glance, and
+ * some terminals render `⚠` as a box or the wrong width. Swapping it for `!` is
+ * a worse-looking but working panel, which beats an unreadable one.
+ */
+export interface GlyphConfig {
+  readonly watch: string;
+  readonly caution: string;
+  readonly clear: string;
+}
+
+export const DEFAULT_LAYOUT: LayoutConfig = {
+  labelWidth: 10,
+  barWidth: 10,
+  sparkWidth: 12,
+};
+
+export const DEFAULT_GLYPHS: GlyphConfig = {
+  watch: "▲",
+  caution: "⚠",
+  clear: "○",
+};
 
 export const DEFAULT_CAUTION: CautionConfig = {
   enabled: true,
@@ -172,6 +211,8 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
   sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES, rows: DEFAULT_SIDEBAR_ROWS },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
+  layout: DEFAULT_LAYOUT,
+  glyphs: DEFAULT_GLYPHS,
   refresh: DEFAULT_REFRESH_MS,
 };
 
@@ -298,10 +339,10 @@ function readRows(value: unknown, issues: string[]): readonly string[] {
   return rows.slice(0, MAX_LINES);
 }
 
-function sectionOf(
-  options: Record<string, unknown>,
-  key: "sidebar" | "footer" | "caution",
-): Record<string, unknown> {
+/** Every config section that can be set from the file and overridden by the host. */
+type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "glyphs";
+
+function sectionOf(options: Record<string, unknown>, key: SectionKey): Record<string, unknown> {
   const value = options[key];
   return isRecord(value) ? value : {};
 }
@@ -333,7 +374,7 @@ function readRefresh(value: unknown, issues: string[]): number {
 function mergeSection(
   file: Record<string, unknown>,
   host: Record<string, unknown>,
-  key: "sidebar" | "footer" | "caution",
+  key: SectionKey,
 ): unknown {
   const fileValue = file[key];
   const hostValue = host[key];
@@ -360,6 +401,8 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
     sidebar: mergeSection(file, host, "sidebar"),
     footer: mergeSection(file, host, "footer"),
     caution: mergeSection(file, host, "caution"),
+    layout: mergeSection(file, host, "layout"),
+    glyphs: mergeSection(file, host, "glyphs"),
   };
 }
 
@@ -369,17 +412,68 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
  * Used for both seconds and counts: the validation is identical, and the path
  * in the message tells the reader which they are looking at.
  */
-function readNumber(value: unknown, fallback: number, path: string, issues: string[], min: number): number {
+function readNumber(
+  value: unknown,
+  fallback: number,
+  path: string,
+  issues: string[],
+  min: number,
+  max: number = Number.POSITIVE_INFINITY,
+): number {
   if (value === undefined) return fallback;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     issues.push(`${path} must be a number; using the default`);
     return fallback;
   }
-  if (value < min) {
-    issues.push(`${path} must be at least ${min}; using the default`);
+  if (value < min || value > max) {
+    const limit = max === Number.POSITIVE_INFINITY ? `at least ${min}` : `between ${min} and ${max}`;
+    issues.push(`${path} must be ${limit}; using the default`);
     return fallback;
   }
   return Math.floor(value);
+}
+
+function readLayout(section: Record<string, unknown>, issues: string[]): LayoutConfig {
+  return {
+    // The label column has to fit "caution" plus a space, and must not eat the
+    // rail: six is the narrowest still legible, twenty-four is all of it.
+    labelWidth: readNumber(section["labelWidth"], DEFAULT_LAYOUT.labelWidth, "layout.labelWidth", issues, 6, 24),
+    barWidth: readNumber(section["barWidth"], DEFAULT_LAYOUT.barWidth, "layout.barWidth", issues, 1, 40),
+    sparkWidth: readNumber(section["sparkWidth"], DEFAULT_LAYOUT.sparkWidth, "layout.sparkWidth", issues, 2, 64),
+  };
+}
+
+/**
+ * One glyph, validated for width.
+ *
+ * A glyph wider than two cells pushes every row out of alignment, and a control
+ * character can break the renderer outright — so both fall back rather than
+ * being passed through.
+ */
+function readGlyph(value: unknown, fallback: string, path: string, issues: string[]): string {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string") {
+    issues.push(`${path} must be a string; using the default`);
+    return fallback;
+  }
+  const text = value.trim();
+  if (text.length === 0 || [...text].length > 2) {
+    issues.push(`${path} must be one or two characters; using the default`);
+    return fallback;
+  }
+  if (CONTROL_CHAR.test(text)) {
+    issues.push(`${path} contained control characters; using the default`);
+    return fallback;
+  }
+  return text;
+}
+
+function readGlyphs(section: Record<string, unknown>, issues: string[]): GlyphConfig {
+  return {
+    watch: readGlyph(section["watch"], DEFAULT_GLYPHS.watch, "glyphs.watch", issues),
+    caution: readGlyph(section["caution"], DEFAULT_GLYPHS.caution, "glyphs.caution", issues),
+    clear: readGlyph(section["clear"], DEFAULT_GLYPHS.clear, "glyphs.clear", issues),
+  };
 }
 
 /** Tool names, matched exactly. A malformed list falls back whole, not partly. */
@@ -494,6 +588,8 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
   const caution = isRecord(rawCaution) ? rawCaution : {};
+  const layout = isRecord(options.layout) ? options.layout : {};
+  const glyphs = isRecord(options.glyphs) ? options.glyphs : {};
 
   // Writing any footer setting counts as asking for the footer, so the rail
   // turns on as soon as you configure it. It is off only when you said nothing
@@ -512,6 +608,8 @@ export function resolveConfig(options: unknown): ConfigResolution {
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues),
       },
       caution: readCaution(caution, issues),
+      layout: readLayout(layout, issues),
+      glyphs: readGlyphs(glyphs, issues),
       refresh: readRefresh(options.refresh, issues),
     },
     issues,

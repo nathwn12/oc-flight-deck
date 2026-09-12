@@ -18,7 +18,7 @@ import { statRows, type StatSource } from "./stats.js";
  */
 export function sidebarLines(config: FlightDeckConfig, source: StatSource = {}): readonly string[] {
   if (!config.sidebar.enabled) return [];
-  return [...config.sidebar.lines, ...statRows(config.sidebar.rows, source)].slice(0, MAX_LINES);
+  return [...config.sidebar.lines, ...statRows(config.sidebar.rows, source, config.layout)].slice(0, MAX_LINES);
 }
 
 /** Footer text to render, or `undefined` when the footer rail is disabled. */
