@@ -93,13 +93,21 @@ them. On the session this was built against, the parent reported `$0.2246` while
 the true spend was `$0.2447` - **9% low on money, and 54% low on input tokens**.
 
 Rather than spend two rows on a number and its own superset, `cost` shows the
-family total and the delta that produced it:
+family total and the count that explains it:
 
 ```
-cost      $0.245 · +$0.020 · 2 subagents
+cost      $0.245 · 2 subagents
 ```
 
-`total` is still available if you prefer the two figures on separate rows.
+**Add `total` to `sidebar.rows` and `cost` goes back to the session figure
+alone** — the merge only happens when nothing else on the rail already shows it.
+So "one money row or two" is decided by your rows list, not by another setting to
+find.
+
+The row is deliberately short. An earlier version also printed the delta
+(`+ $0.020`), which pushed the row to 40 columns and made it **wrap** in a normal
+sidebar. It was true information that did not earn its width, and a row that
+wraps costs more than a row that says less.
 
 ### `cache` is the row that surprises people
 

@@ -109,6 +109,14 @@ export interface LayoutHint {
   readonly labelWidth?: number;
   readonly barWidth?: number;
   readonly sparkWidth?: number;
+  /**
+   * True when the rail already draws a `total` row.
+   *
+   * The `cost` row merges the subagent total into itself only when nothing else
+   * on the rail already shows it — which makes "do I want one money row or two"
+   * a property of `sidebar.rows`, not a separate setting to find.
+   */
+  readonly hasTotalRow?: boolean;
 }
 
 const DEFAULT_LABEL_WIDTH = 10;
@@ -260,23 +268,30 @@ export function statLine(
       const tree = asRecord(source.tree);
       const treeCost = asCount(tree?.cost);
       const count = asCount(tree?.count);
+      const family = count !== undefined && count > 0 ? count : 0;
 
-      // When subagents ran, this session's own cost understates the bill. Show
-      // the family total and the delta that produced it, rather than spending a
-      // second row on a number that contains the first. `total` still exists for
-      // anyone who wants the two figures on separate rows.
-      if (
+      // Merge only when subagents actually ran, and only when the rail is not
+      // already showing a `total` row. Two rows holding a number and its own
+      // superset was the thing worth fixing; a setting to choose between them
+      // would just be that duplication with extra steps.
+      const merge =
+        layout.hasTotalRow !== true &&
         cost !== undefined &&
         treeCost !== undefined &&
-        count !== undefined &&
-        count > 0 &&
-        treeCost > cost
-      ) {
-        const plural = count === 1 ? "subagent" : "subagents";
-        return row("cost", `${formatCost(treeCost)} · +${formatCost(treeCost - cost)} · ${count} ${plural}`);
+        family > 0 &&
+        treeCost > cost;
+
+      if (!merge) {
+        const value = layout.hasTotalRow === true ? (cost ?? treeCost) : (treeCost ?? cost);
+        return value === undefined ? undefined : row("cost", formatCost(value));
       }
-      const value = cost ?? treeCost;
-      return value === undefined ? undefined : row("cost", formatCost(value));
+
+      // The delta (`+$0.020`) used to be here and pushed the row to 40 columns,
+      // wide enough to wrap in a normal sidebar. It was real information that
+      // did not earn its width: the count already explains why the figure is
+      // higher, and this form is the same width as the old `total` row.
+      const plural = family === 1 ? "subagent" : "subagents";
+      return row("cost", `${formatCost(treeCost as number)} · ${family} ${plural}`);
     }
     case "total": {
       // Only worth a row once a subagent has actually run: subagent sessions are
@@ -342,7 +357,9 @@ export function statLine(
         return row("perms", action === undefined ? `${count} waiting` : `${count} waiting · ${action}`);
       }
       if (action === undefined) return row("perms", "1 waiting");
-      return row("perms", resource === undefined ? action : `${action} · ${clip(resource, 22)}`);
+      // Clipped hard: a row that wraps costs the reader more than a row that
+      // shortens a path, and there is no way to ask the host how wide it is.
+      return row("perms", resource === undefined ? action : `${action} · ${clip(resource, 18)}`);
     }
     case "elapsed": {
       const ms = asCount(source.elapsedMs);
@@ -383,9 +400,13 @@ export function statRows(
   source: StatSource,
   layout: LayoutHint = {},
 ): readonly string[] {
+  // The rows list decides whether `cost` merges the subagent total into itself.
+  // Passing that down means the choice lives in `sidebar.rows`, where someone
+  // is already deciding what the rail shows.
+  const hint: LayoutHint = { ...layout, hasTotalRow: fields.includes("total") };
   const rows: string[] = [];
   for (const field of fields) {
-    const line = statLine(field, source, layout);
+    const line = statLine(field, source, hint);
     if (line !== undefined) rows.push(line);
   }
   return rows;
