@@ -230,8 +230,7 @@ Built on the official
 
 ## Compatibility
 
-The OpenCode plugin API is still in beta. This release targets
-`@opencode/plugin` beta `0.0.0-beta-19425`; pin a host version you've tested.
+Built against `@opencode/plugin` `2.0.2`; pin a host version you've tested.
 
 Requires OpenCode V2 (`opencode2`). Building from source needs Bun 1.4+ or
 Node 22+.
