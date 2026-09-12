@@ -80,7 +80,7 @@ describe("flight deck plugin", () => {
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
     expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "0.0.0-beta-19425" });
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.2" });
     // Deliberate exact pin: a supply-chain guard on the beta we build against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({
