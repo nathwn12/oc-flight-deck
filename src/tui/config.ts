@@ -337,7 +337,13 @@ function readRows(value: unknown, issues: string[]): readonly string[] {
       issues.push(`${path} must be a string; skipping it`);
       return;
     }
-    const name = entry.trim().toLowerCase();
+    // Control characters are normalized before matching, like every other
+    // config string: `cache\n` is the `cache` row, not an unknown field.
+    const name = normalizeText(entry, path, issues).toLowerCase();
+    if (name.length === 0) {
+      issues.push(`${path} is empty; skipping it`);
+      return;
+    }
     if (!isStatField(name)) {
       issues.push(`${path} is not a known field (${STAT_FIELDS.join(", ")}); skipping it`);
       return;

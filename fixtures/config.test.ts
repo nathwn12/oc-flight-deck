@@ -120,6 +120,26 @@ describe("flight deck config", () => {
     expect(resolution.issues.join(" ")).toContain("no usable entries");
   });
 
+  test("normalizes control characters in row names before matching", () => {
+    // A trailing newline is the `cache` row, not an unknown field — and the
+    // normalization is reported, like every other config string.
+    const trailing = resolveConfig({ sidebar: { rows: ["cache\n", "cost"] } });
+    expect(trailing.config.sidebar.rows).toEqual(["cache", "cost"]);
+    expect(trailing.issues.join(" ")).toContain("sidebar.rows[0]");
+    expect(trailing.issues.join(" ")).toContain("control characters");
+
+    // An entry that is still unknown after normalization stays dropped.
+    const ansi = resolveConfig({ sidebar: { rows: ["ca\u001bche"] } });
+    expect(ansi.config.sidebar.rows).toEqual(DEFAULT_CONFIG.sidebar.rows);
+    expect(ansi.issues.join(" ")).toContain("control characters");
+    expect(ansi.issues.join(" ")).toContain("not a known field");
+
+    // Valid entries still resolve cleanly.
+    const clean = resolveConfig({ sidebar: { rows: ["  COST ", "Branch"] } });
+    expect(clean.issues).toEqual([]);
+    expect(clean.config.sidebar.rows).toEqual(["cost", "branch"]);
+  });
+
   test("flattens control characters so a rail can never become two lines", () => {
     const resolution = resolveConfig({
       sidebar: { lines: ["A\nB", "C\td"], persist: false },
