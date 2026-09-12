@@ -53,6 +53,29 @@ function overBudget(source: StatSource, rows?: readonly string[]): string[] {
 }
 
 describe("the rail fits", () => {
+  test("every row separates its label from its value, at any label width", () => {
+    // `reasoning` is nine characters. Before this was fixed, a label wider than
+    // the column was glued to its value - at labelWidth 8 the row rendered as
+    // "reasoning153k". Any label outgrowing any valid width has to stay legible.
+    for (const labelWidth of [6, 8, 9, 10, 12, 16, 24]) {
+      const config = {
+        ...DEFAULT_CONFIG,
+        sidebar: { ...DEFAULT_CONFIG.sidebar, rows: DEFAULT_CONFIG.sidebar.rows },
+        layout: { ...DEFAULT_CONFIG.layout, labelWidth },
+      };
+      const rows = sidebarLines(config, FULL).slice(config.sidebar.lines.length);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const line of rows) {
+        // label, at least one space, then something.
+        expect(line).toMatch(/^\S+\s+\S/);
+      }
+    }
+  });
+
+  test("the shipped default rail fits", () => {
+    expect(overBudget(FULL)).toEqual([]);
+  });
+
   test("no default row exceeds the budget, with every field populated", () => {
     expect(overBudget(FULL)).toEqual([]);
   });
