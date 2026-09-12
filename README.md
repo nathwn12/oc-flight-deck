@@ -140,6 +140,19 @@ tests that mount the panel in a real renderer and assert the exact characters
 that come out. A guard test parses the shipped example config and asserts it
 still matches the real defaults, so the documentation can't drift from the code.
 
+To load the plugin **from this checkout** while working on it, add it to the
+config of the directory you run OpenCode in:
+
+```jsonc
+{
+  "plugins": ["."]
+}
+```
+
+That file is deliberately **not** committed. If the plugin is also installed
+globally, declaring it in both places registers the same plugin id twice and the
+host's plugin list shows one of them as failed.
+
 Built on the official
 [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
 
