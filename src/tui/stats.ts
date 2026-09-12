@@ -120,7 +120,19 @@ export interface LayoutHint {
    * a property of `sidebar.rows`, not a separate setting to find.
    */
   readonly hasTotalRow?: boolean;
+  /**
+   * When true, `statRows` renders one row per named field even when the host
+   * has no data for it, using `placeholder` as the value. Default off when
+   * calling `statRows` directly; `sidebarLines` turns it on from
+   * `config.sidebar.persist`.
+   */
+  readonly persist?: boolean;
+  /** Value shown for a row with no data when `persist` is on. Default `"—"`. */
+  readonly placeholder?: string;
 }
+
+/** Placeholder value for a persistent row with no data yet. */
+export const DEFAULT_PLACEHOLDER = "—";
 
 const DEFAULT_LABEL_WIDTH = 10;
 const DEFAULT_BAR_WIDTH = 10;
@@ -216,6 +228,15 @@ function plain(value: string): string {
 }
 
 /**
+ * One padded rail row: the label in its column, at least one space, then the
+ * flattened value. Shared by live rows and persistent placeholders so both
+ * keep the same column.
+ */
+function formatRow(label: string, value: string, labelWidth: number): string {
+  return `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${plain(value)}`;
+}
+
+/**
  * Recent turn sizes as a shape.
  *
  * Scaled against the largest value in the window rather than an absolute scale,
@@ -256,8 +277,7 @@ export function statLine(
   // column, so a label longer than `labelWidth` was glued straight onto its
   // value: at labelWidth 8 the `reasoning` row rendered as "reasoning153k".
   // The label is nine characters, which made this reachable from a config file.
-  const row = (label: string, value: string): string =>
-    `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${plain(value)}`;
+  const row = (label: string, value: string): string => formatRow(label, value, labelWidth);
 
   switch (field) {
     case "caution": {
@@ -430,7 +450,13 @@ export function statLine(
   }
 }
 
-/** Render every named field that currently has data, in the given order. */
+/** Render every named field, in the given order.
+ *
+ * By default only fields with data render; with `layout.persist` every known
+ * field renders exactly one row, using `layout.placeholder` (default `"—"`)
+ * for the value when the host has nothing to show yet. `statLine` keeps
+ * returning `string | undefined` — persistence lives here, not there.
+ */
 export function statRows(
   fields: readonly string[],
   source: StatSource,
@@ -440,10 +466,20 @@ export function statRows(
   // Passing that down means the choice lives in `sidebar.rows`, where someone
   // is already deciding what the rail shows.
   const hint: LayoutHint = { ...layout, hasTotalRow: fields.includes("total") };
+  const persist = hint.persist === true;
+  const placeholder = hint.placeholder ?? DEFAULT_PLACEHOLDER;
+  const labelWidth = hint.labelWidth ?? DEFAULT_LABEL_WIDTH;
   const rows: string[] = [];
   for (const field of fields) {
     const line = statLine(field, source, hint);
-    if (line !== undefined) rows.push(line);
+    if (line !== undefined) {
+      rows.push(line);
+      continue;
+    }
+    // Unknown names stay skipped even when persistent: a typo must stay a
+    // reported-and-skipped row, not a placeholder that looks intentional.
+    if (!persist || !isStatField(field)) continue;
+    rows.push(formatRow(field, placeholder, labelWidth));
   }
   return rows;
 }
