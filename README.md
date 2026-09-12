@@ -227,7 +227,9 @@ bun run check
 `bun run check` typechecks and runs the suite, including headless OpenTUI render
 tests that mount the panel in a real renderer and assert the exact characters
 that come out. A guard test parses the shipped example config and asserts it
-still matches the real defaults, so the documentation can't drift from the code.
+still matches the real defaults, and a schema test validates that parsed
+example against the shipped schema — defaults, types, and allowed values —
+so the documentation can't drift from the code on either side.
 
 To load the plugin **from this checkout** while working on it, add it to the
 `opencode.jsonc` of the project you run OpenCode in. A `plugins` entry is a

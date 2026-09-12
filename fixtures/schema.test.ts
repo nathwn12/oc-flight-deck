@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, resolveConfig } from "../src/tui/config.js";
+import { parseJsonc } from "../src/tui/file-config.js";
 import { STAT_FIELDS } from "../src/tui/stats.js";
 
 // The schema is how an AI is expected to discover this plugin's settings, so it
@@ -39,6 +40,10 @@ describe("the schema describes the real config", () => {
     expect(props["sidebar"]!.properties.enabled.default).toBe(DEFAULT_CONFIG.sidebar.enabled);
     expect(props["sidebar"]!.properties.lines.default).toEqual([...DEFAULT_CONFIG.sidebar.lines]);
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
+    expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
+    expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
+    expect(DEFAULT_CONFIG.sidebar.persist).toBe(true);
+    expect(DEFAULT_CONFIG.sidebar.placeholder).toBe("—");
     expect(props["footer"]!.properties.text.default).toBe(DEFAULT_CONFIG.footer.text);
 
     expect(props["caution"]!.properties.enabled.default).toBe(DEFAULT_CONFIG.caution.enabled);
@@ -89,5 +94,122 @@ describe("the example config points at the schema", () => {
   test("so an editor or an AI can find the authoritative list", () => {
     expect(example).toContain('"$schema"');
     expect(example).toContain("flight-deck.schema.json");
+  });
+});
+
+// A dependency-free walk of the shipped schema: enough to prove the shipped
+// example is schema-valid and that hostile values are not. A validation
+// library would do more, but it would also be a new install for something the
+// schema's own subset (objects, booleans, strings, integers, arrays, enums,
+// ranges, `additionalProperties: false`) already expresses — and nothing here
+// may ship at runtime.
+interface SchemaNode {
+  readonly type?: string;
+  readonly properties?: Record<string, SchemaNode>;
+  readonly additionalProperties?: boolean;
+  readonly items?: SchemaNode;
+  readonly enum?: readonly unknown[];
+  readonly minLength?: number;
+  readonly maxLength?: number;
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly maxItems?: number;
+  readonly required?: readonly string[];
+}
+
+function schemaErrors(node: SchemaNode, value: unknown, path: string): string[] {
+  const at = path === "" ? "config" : path;
+  if (node.enum !== undefined) {
+    return (node.enum as readonly unknown[]).includes(value) ? [] : [`${at} is not one of the allowed values`];
+  }
+  switch (node.type) {
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return [`${at} must be an object`];
+      const record = value as Record<string, unknown>;
+      const errors: string[] = [];
+      const props = node.properties ?? {};
+      if (node.additionalProperties === false) {
+        for (const key of Object.keys(record)) {
+          if (!(key in props)) errors.push(`${at}.${key} is not a known option`);
+        }
+      }
+      for (const [key, child] of Object.entries(props)) {
+        if (key in record) errors.push(...schemaErrors(child, record[key], `${at}.${key}`));
+      }
+      for (const key of node.required ?? []) {
+        if (!(key in record)) errors.push(`${at}.${key} is required`);
+      }
+      return errors;
+    }
+    case "boolean":
+      return typeof value === "boolean" ? [] : [`${at} must be true or false`];
+    case "string": {
+      if (typeof value !== "string") return [`${at} must be a string`];
+      const errors: string[] = [];
+      if (node.minLength !== undefined && value.length < node.minLength) {
+        errors.push(`${at} must be at least ${node.minLength} characters`);
+      }
+      if (node.maxLength !== undefined && value.length > node.maxLength) {
+        errors.push(`${at} must be at most ${node.maxLength} characters`);
+      }
+      return errors;
+    }
+    case "integer": {
+      if (typeof value !== "number" || !Number.isInteger(value)) return [`${at} must be an integer`];
+      const errors: string[] = [];
+      if (node.minimum !== undefined && value < node.minimum) errors.push(`${at} must be at least ${node.minimum}`);
+      if (node.maximum !== undefined && value > node.maximum) errors.push(`${at} must be at most ${node.maximum}`);
+      return errors;
+    }
+    case "array": {
+      if (!Array.isArray(value)) return [`${at} must be an array`];
+      const errors: string[] = [];
+      if (node.maxItems !== undefined && value.length > node.maxItems) {
+        errors.push(`${at} must have at most ${node.maxItems} items`);
+      }
+      if (node.items !== undefined) {
+        value.forEach((entry, index) => {
+          errors.push(...schemaErrors(node.items as SchemaNode, entry, `${at}[${index}]`));
+        });
+      }
+      return errors;
+    }
+    default:
+      return [];
+  }
+}
+
+describe("the shipped example validates against the shipped schema", () => {
+  test("the example parses and every key, type and default checks out", () => {
+    const parsed = parseJsonc(example) as Record<string, unknown>;
+    expect(schemaErrors(schema as unknown as SchemaNode, parsed, "")).toEqual([]);
+    // The new knobs are written out at their defaults, like every other key.
+    const sidebar = parsed["sidebar"] as Record<string, unknown>;
+    expect(sidebar["persist"]).toBe(true);
+    expect(sidebar["placeholder"]).toBe("—");
+  });
+
+  test("hostile values are rejected by the schema or normalized safely by parseConfig", () => {
+    // Wrong type: the schema rejects it, and the config falls back loudly.
+    const persist = { sidebar: { persist: "yes" } };
+    expect(schemaErrors(schema as unknown as SchemaNode, persist, "")).not.toEqual([]);
+    const persistResolution = resolveConfig(persist);
+    expect(persistResolution.config.sidebar.persist).toBe(true);
+    expect(persistResolution.issues.join(" ")).toContain("sidebar.persist");
+
+    // The schema cannot ban control characters, so the config is the net:
+    // it normalizes the escape away and reports it, never throwing.
+    const placeholder = { sidebar: { placeholder: "x\u001b[31my" } };
+    const placeholderResolution = resolveConfig(placeholder);
+    expect(placeholderResolution.config.sidebar.placeholder).toBe("x [31my");
+    expect(placeholderResolution.issues.join(" ")).toContain("sidebar.placeholder");
+    expect(placeholderResolution.issues.join(" ")).toContain("control characters");
+
+    // A non-string row entry fails the rows enum, and is skipped loudly.
+    const rows = { sidebar: { rows: [42] } };
+    expect(schemaErrors(schema as unknown as SchemaNode, rows, "")).not.toEqual([]);
+    const rowsResolution = resolveConfig(rows);
+    expect(rowsResolution.config.sidebar.rows).toEqual(DEFAULT_CONFIG.sidebar.rows);
+    expect(rowsResolution.issues.join(" ")).toContain("sidebar.rows[0]");
   });
 });
