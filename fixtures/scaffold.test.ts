@@ -97,11 +97,14 @@ describe("flight deck plugin", () => {
     expect(packageJson.scripts.check).toContain("typecheck");
     expect(packageJson.scripts.check).toContain("test");
 
-    // The repo config loads the checkout; the commented template beside it is
-    // what users copy to configure the rail.
-    const opencodeConfig = await readFile(join(root, "opencode.jsonc"), "utf8");
-    expect(opencodeConfig).toContain('"plugins": ["."]');
-    expect(opencodeConfig).toContain("flight-deck.example.jsonc");
+    // There is deliberately no repo-local opencode.jsonc.
+    //
+    // A committed `"plugins": ["."]` makes the repo declare the plugin while it
+    // may also be installed globally, which registers the same plugin id twice
+    // and shows one of them as failed in the host's plugin list. Loading from
+    // source is a per-developer choice, documented in "## Development" in the
+    // README, not a property of the repo.
+    expect(existsSync(join(root, "opencode.jsonc"))).toBe(false);
     expect(existsSync(join(root, "flight-deck.example.jsonc"))).toBe(true);
 
     // Server/core/config orchestration surfaces are gone, including the

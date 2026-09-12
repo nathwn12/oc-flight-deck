@@ -6,3 +6,6 @@ coverage/
 .env.*
 .DS_Store
 Thumbs.db
+
+# Local OpenCode config (plugin loading, per-developer settings).
+.opencode/
