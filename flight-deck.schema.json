@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/nathwn12/oc-flight-deck/flight-deck.schema.json",
+  "title": "Flight Deck configuration",
+  "description": "Configuration for the oc-flight-deck TUI plugin. Every key is optional: install the plugin and it works with no config file at all. Copy flight-deck.example.jsonc to flight-deck.jsonc (or .opencode/flight-deck.jsonc) and edit. Comments and trailing commas are allowed. An invalid value is ignored, its default is restored, and a one-time toast names the key to fix — a typo can never break the TUI.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Points an editor or an AI at this file, which is the authoritative list of every option, type, default and valid value."
+    },
+
+    "refresh": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "default": 100,
+      "description": "Milliseconds between ticks. Cost and tokens arrive with host events; anything derived from the clock — `elapsed`, the status spinner, and the caution thresholds — needs this timer. 100 turns the spinner once a second. 0 turns the ticker off entirely, which also freezes the annunciator (it works, but only updates on host events). Practical range 16–1000; below 16 is treated as 16."
+    },
+
+    "sidebar": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The rail itself: the branding lines and the live rows.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Draw the sidebar rail at all. false leaves the plugin loaded but invisible."
+        },
+        "lines": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["✈ FLIGHT DECK", "─────────────────"],
+          "maxItems": 24,
+          "description": "Fixed lines rendered above the live rows, in order. Branding or a separator. These render at full brightness; the live rows below them are dimmed."
+        },
+        "rows": {
+          "type": "array",
+          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns"] },
+          "default": ["caution", "status", "agent", "model", "branch", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
+          "maxItems": 24,
+          "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. Rows with no data are omitted entirely, so a narrow rail grows rows as a session produces them rather than showing placeholders."
+        }
+      }
+    },
+
+    "footer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A single line in the prompt footer. Off unless configured — writing any footer setting turns it on.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Show the footer line. Defaults to true if any other footer key is present, false if the footer section is absent."
+        },
+        "text": {
+          "type": "string",
+          "default": "Flight Deck",
+          "description": "The footer text. Max 120 characters; control characters are replaced with spaces."
+        }
+      }
+    },
+
+    "caution": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The annunciator: a warning row for the one failure nothing else can see. A hang emits no events at all, so this uses a clock and a baseline rather than a listener. Silent unless something has stopped moving. It reports observations, never verdicts — `shell running 8m41s`, not 'stuck' — and it never aborts, kills, retries or blocks anything.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the annunciator. false means the `caution` row never appears and no timer is spent on it."
+        },
+        "toolWatchSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 180,
+          "description": "A tool running longer than this draws a subdued ▲. 180s is longer than a slow build and short enough to notice before you start wondering. Lower it if you work on fast tools and want to catch stalls sooner."
+        },
+        "toolCautionSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 420,
+          "description": "A tool running longer than this becomes a real ⚠. Raised to match toolWatchSeconds if set below it, and reported."
+        },
+        "turnWatchSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 600,
+          "description": "A running session that has produced nothing for this long draws a ▲. Deliberately generous: a large reasoning model can think for minutes with nothing to show, which is indistinguishable from a wedge by the clock alone. Suppressed entirely while a tool or shell is running."
+        },
+        "turnCautionSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1200,
+          "description": "A quiet session becomes a real ⚠ after this long. Raised to match turnWatchSeconds if set below it, and reported."
+        },
+        "repeatThreshold": {
+          "type": "integer",
+          "minimum": 2,
+          "default": 3,
+          "description": "How many identical consecutive calls count as a loop. Two is a retry; three is a pattern. Applies to both the repeat rule (identical successes) and the failure rule (identical errors)."
+        },
+        "exemptTools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+          "description": "Tools that are slow by nature, so slow is not an anomaly for them. Matched by exact name. Calibrated against 53,672 real tool calls: at the default threshold 307 calls exceed it and 218 of those are these tools — `subagent` alone crossed 152 times with a p99 of 14.7 minutes. Without this list the annunciator lights on every delegated task, which is how an alert gets ignored. Add your own long-running or orchestration tools here."
+        },
+        "toast": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also raise a toast the first time a caution appears, once per distinct problem, re-arming when the session goes quiet. Off by default: the rail is the signal and a notification is an interruption. Worth enabling if you walk away from long runs."
+        }
+      }
+    },
+
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Row geometry. Change these when your terminal is unusually narrow or wide.",
+      "properties": {
+        "labelWidth": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 24,
+          "default": 10,
+          "description": "Width of the label column that every row pads to. 10 fits `caution` plus a space. Narrow it to fit more value on screen, widen it if you rename the labels."
+        },
+        "barWidth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 40,
+          "default": 10,
+          "description": "Cells in the `context` gauge — the filled/empty bar."
+        },
+        "sparkWidth": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 64,
+          "default": 12,
+          "description": "Samples drawn in the `spark` row. The newest turns are kept, so narrowing it keeps the recent shape rather than the oldest."
+        }
+      }
+    },
+
+    "glyphs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The annunciator's characters. Change these when a terminal renders the defaults as a box, or at the wrong width — an ugly-but-readable panel beats an unreadable one. One or two characters each.",
+      "properties": {
+        "watch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2,
+          "default": "▲",
+          "description": "Shown for a watch: something is slower than it should be, but below the caution threshold."
+        },
+        "caution": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2,
+          "default": "⚠",
+          "description": "Shown for a real caution. This is the row that has to read at a glance."
+        },
+        "clear": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2,
+          "default": "○",
+          "description": "Reserved for a future always-visible annunciator state. Not currently drawn: the row is absent when nothing is wrong."
+        }
+      }
+    }
+  }
+}

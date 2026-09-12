@@ -316,11 +316,15 @@ export default Plugin.define({
     // resolves. Nothing here writes, requests, or leaves the process.
     // Only the worst is ever drawn: the rail has one line for this, and two
     // simultaneous observations is one problem with two symptoms.
-    const announce = (sessionID: string): { text: string; severe: boolean } | undefined => {
+    //
+    // Returns a plain string, themed exactly like every other live row. The
+    // annunciator carries its meaning in its glyph, not in a colour of its own:
+    // a row that suddenly brightens reads as a different kind of thing rather
+    // than as the same panel telling you something.
+    const announce = (sessionID: string): string | undefined => {
       if (!config.caution.enabled) return undefined;
       const top = worstCaution(cautionsOf(sessionID, Date.now()));
-      if (top === undefined) return undefined;
-      return { text: cautionText(top), severe: top.severity === "caution" };
+      return top === undefined ? undefined : cautionText(top, config.glyphs);
     };
 
     const snapshot = (sessionID: string): StatSource => {
@@ -398,28 +402,15 @@ export default Plugin.define({
             if (lines.length === 0) return null;
             const offset = Math.min(liveRowOffset(config), lines.length);
 
-            // `caution` is first in the default rows and only renders when there
-            // is something to say, so a real caution is always the row at
-            // `offset`. That makes the bright row a property of the data rather
-            // than of a fixed index, which is why this can be the only row that
-            // ever changes colour.
-            const hot =
-              config.sidebar.rows[0] === "caution" && asRecord(source.caution)?.["severe"] === true;
-
             return (
               // No padding here: the host already lays out and pads the sidebar,
               // so adding our own would push the rows out of alignment with it.
+              //
+              // Every live row gets the same token, the annunciator included. It
+              // is the same panel; only the glyph changes.
               <box flexDirection="column">
                 {lines.map((line, index) => (
-                  <text
-                    fg={
-                      index < offset || (hot && index === offset)
-                        ? context.theme.text.default
-                        : context.theme.text.subdued
-                    }
-                  >
-                    {line}
-                  </text>
+                  <text fg={index < offset ? context.theme.text.default : context.theme.text.subdued}>{line}</text>
                 ))}
               </box>
             );

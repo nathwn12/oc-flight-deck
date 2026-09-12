@@ -131,8 +131,14 @@ describe("flight deck plugin", () => {
     expect(exampleResolution.issues).toEqual([]);
     expect(exampleResolution.config).toEqual(DEFAULT_CONFIG);
     // Every knob must be reachable from the file, not just from the host.
+    // `$schema` is not a setting: it is how an editor or an AI finds the
+    // authoritative list of the ones that are.
     expect(Object.keys(parseJsonc(example) as Record<string, unknown>).sort()).toEqual([
+      "$schema",
+      "caution",
       "footer",
+      "glyphs",
+      "layout",
       "refresh",
       "sidebar",
     ]);

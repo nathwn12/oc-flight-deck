@@ -1,4 +1,6 @@
 {
+  "$schema": "./flight-deck.schema.json",
+
   // ═════════════════════════════════════════════════════════════════════════
   //  ✈  Flight Deck — configuration
   //
@@ -96,5 +98,76 @@
     "enabled": false,
     // Any single line. Empty text is ignored.
     "text": "Flight Deck"
+  },
+
+  // -- Caution ---------------------------------------------------------------
+  // The annunciator: a warning row for the one failure nothing else can see.
+  //
+  // A hang emits NO events - no completion, no error, nothing - so everything
+  // observable about it is the absence of a signal. That is why this uses a
+  // clock and a baseline instead of a listener.
+  //
+  // It is silent unless something has stopped moving, so it costs nothing on a
+  // healthy session. When it speaks it reports what it saw, never what it
+  // means: `shell running 8m41s`, not "stuck". A ten-minute build is not a hang.
+  //
+  // It never aborts, kills, retries or blocks anything. Read-only.
+  "caution": {
+    "enabled": true,
+
+    // A tool running longer than this draws a subdued triangle...
+    "toolWatchSeconds": 180,
+    // ... and longer than this becomes a real caution.
+    // Raised to match the watch value if you set it lower.
+    "toolCautionSeconds": 420,
+
+    // A running session that has produced nothing for this long is noted.
+    // Deliberately generous: a large reasoning model can think for minutes
+    // with nothing to show, which the clock cannot distinguish from a wedge.
+    // Suppressed entirely while a tool or shell is running.
+    "turnWatchSeconds": 600,
+    "turnCautionSeconds": 1200,
+
+    // Identical consecutive calls before it counts as a loop. Two is a retry.
+    // Applies to identical successes and identical failures alike.
+    "repeatThreshold": 3,
+
+    // Tools that are slow by NATURE, so slow is not an anomaly for them.
+    // Matched by exact name.
+    //
+    // Calibrated against 53,672 real tool calls: at the default threshold, 307
+    // calls exceed it and 218 of those are these tools. `subagent` alone
+    // crossed 152 times, with a p99 of 14.7 minutes. Without this list the
+    // annunciator lights on every delegated task - which is how an alert gets
+    // ignored. Add your own long-running or orchestration tools here.
+    "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+
+    // Also raise a toast, once per distinct problem, re-arming when the session
+    // goes quiet. Off by default: the rail is the signal, a notification is an
+    // interruption. Turn it on if you walk away from long runs.
+    "toast": false
+  },
+
+  // -- Layout ----------------------------------------------------------------
+  // Row geometry. Change these when your terminal is unusually narrow or wide.
+  "layout": {
+    // Width of the label column every row pads to. 10 fits "caution" plus a
+    // space. Narrow it to fit more value on screen.
+    "labelWidth": 10,
+    // Cells in the `context` gauge.
+    "barWidth": 10,
+    // Samples drawn in the `spark` row. The newest turns are kept, so
+    // narrowing this keeps the recent shape rather than the oldest.
+    "sparkWidth": 12
+  },
+
+  // -- Glyphs ----------------------------------------------------------------
+  // The annunciator's characters. Change these if your terminal renders a
+  // default as a box or at the wrong width - an ugly but readable panel beats
+  // an unreadable one. One or two characters each.
+  "glyphs": {
+    "watch": "▲",
+    "caution": "⚠",
+    "clear": "○"
   }
 }

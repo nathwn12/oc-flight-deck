@@ -335,14 +335,25 @@ export const WATCH_GLYPH = "▲";
 export const CAUTION_GLYPH = "⚠";
 export const CLEAR_GLYPH = "○";
 
-export function glyphFor(caution: Caution | undefined): string {
-  if (caution === undefined) return CLEAR_GLYPH;
-  return caution.severity === "caution" ? CAUTION_GLYPH : WATCH_GLYPH;
+/**
+ * Glyph overrides, for terminals that render the defaults badly.
+ *
+ * Structural, like `LayoutHint`, so this module stays free of imports.
+ */
+export interface GlyphHint {
+  readonly watch?: string;
+  readonly caution?: string;
+  readonly clear?: string;
+}
+
+export function glyphFor(caution: Caution | undefined, glyphs: GlyphHint = {}): string {
+  if (caution === undefined) return glyphs.clear ?? CLEAR_GLYPH;
+  return caution.severity === "caution" ? (glyphs.caution ?? CAUTION_GLYPH) : (glyphs.watch ?? WATCH_GLYPH);
 }
 
 /** The short value beside the label. Says what was seen, not what it means. */
-export function cautionText(caution: Caution): string {
-  const glyph = glyphFor(caution);
+export function cautionText(caution: Caution, glyphs: GlyphHint = {}): string {
+  const glyph = glyphFor(caution, glyphs);
   const elapsed = caution.elapsedMs === undefined ? "" : ` ${formatElapsed(caution.elapsedMs)}`;
   switch (caution.kind) {
     case "hung-tool": {

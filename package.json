@@ -36,6 +36,7 @@
   "files": [
     "src",
     "flight-deck.example.jsonc",
+    "flight-deck.schema.json",
     "README.md",
     "LICENSE"
   ],

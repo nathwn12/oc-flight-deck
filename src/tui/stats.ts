@@ -31,11 +31,11 @@ export interface StatProject {
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
 export interface StatSource {
   /**
-   * The annunciator, precomputed by the caller as `{ text, severe }`.
+   * The annunciator line, precomputed by the caller.
    *
-   * Kept as a string here on purpose: the rules that decide whether something is
-   * wrong live in ./caution.ts and need the clock and the session snapshot, not
-   * a formatting function.
+   * A plain string on purpose: the rules that decide whether something is wrong
+   * live in ./caution.ts and need the clock and the session snapshot, not a
+   * formatting function. Severity is already encoded in the glyph.
    */
   readonly caution?: unknown;
   readonly agent?: unknown;
@@ -98,12 +98,22 @@ export function isStatField(value: string): value is StatField {
   return (STAT_FIELDS as readonly string[]).includes(value);
 }
 
-const LABEL_WIDTH = 10;
-const BAR_WIDTH = 10;
-
-function row(label: string, value: string): string {
-  return `${label.padEnd(LABEL_WIDTH)}${value}`;
+/**
+ * Row geometry, overridable per call.
+ *
+ * A structural type rather than an import of `FlightDeckConfig`: ./config.ts
+ * imports this module, so reaching back into it would create a cycle. The
+ * shapes are compatible, so the config passes straight through.
+ */
+export interface LayoutHint {
+  readonly labelWidth?: number;
+  readonly barWidth?: number;
+  readonly sparkWidth?: number;
 }
+
+const DEFAULT_LABEL_WIDTH = 10;
+const DEFAULT_BAR_WIDTH = 10;
+const DEFAULT_SPARK_WIDTH = 12;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -146,9 +156,10 @@ export function formatDuration(ms: number): string {
 }
 
 /** A ten-cell gauge, so a percentage is readable at a glance rather than parsed. */
-export function fuelBar(ratio: number): string {
-  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round(ratio * BAR_WIDTH)));
-  return `${"█".repeat(filled)}${"░".repeat(BAR_WIDTH - filled)}`;
+export function fuelBar(ratio: number, width: number = DEFAULT_BAR_WIDTH): string {
+  const cells = Math.max(1, Math.floor(width));
+  const filled = Math.max(0, Math.min(cells, Math.round(ratio * cells)));
+  return `${"█".repeat(filled)}${"░".repeat(cells - filled)}`;
 }
 
 const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
@@ -192,14 +203,25 @@ export function sparkline(values: readonly number[]): string {
  * shows `branch   unknown` before the repo loads looks broken, while a rail
  * that simply grows a row when the data arrives looks alive.
  */
-export function statLine(field: string, source: StatSource): string | undefined {
+export function statLine(
+  field: string,
+  source: StatSource,
+  layout: LayoutHint = {},
+): string | undefined {
+  // Bound here rather than at module scope so a config file can change the
+  // column width without every call site having to know about it.
+  const labelWidth = layout.labelWidth ?? DEFAULT_LABEL_WIDTH;
+  const barWidth = layout.barWidth ?? DEFAULT_BAR_WIDTH;
+  const sparkWidth = layout.sparkWidth ?? DEFAULT_SPARK_WIDTH;
+  const row = (label: string, value: string): string => `${label.padEnd(labelWidth)}${value}`;
+
   switch (field) {
     case "caution": {
       // Rendered only when the caller found something to say, which is what
       // keeps a healthy session visually identical to one without the
-      // annunciator at all.
-      const caution = asRecord(source.caution);
-      const text = asText(caution?.["text"]);
+      // annunciator at all. The string already carries its glyph; nothing here
+      // knows or cares about severity.
+      const text = asText(source.caution);
       return text === undefined ? undefined : row("caution", text);
     }
     case "status": {
@@ -304,7 +326,7 @@ export function statLine(field: string, source: StatSource): string | undefined 
       const ratio = used / limit;
       // Show the percentage whenever the host reports it, but never a bar that
       // reads as more than full.
-      return row("context", `${fuelBar(ratio)} ${Math.round(Math.min(1, ratio) * 100)}%`);
+      return row("context", `${fuelBar(ratio, barWidth)} ${Math.round(Math.min(1, ratio) * 100)}%`);
     }
     case "perms": {
       const perms = asRecord(source.perms);
@@ -334,8 +356,11 @@ export function statLine(field: string, source: StatSource): string | undefined 
     }
     case "spark": {
       const values = Array.isArray(source.spark) ? source.spark.map((value) => asCount(value) ?? 0) : [];
-      if (values.length < 2) return undefined;
-      return row("spark", sparkline(values));
+      // The newest samples are the interesting ones, so a narrowed window keeps
+      // the recent shape rather than the oldest.
+      const windowed = values.slice(-Math.max(2, Math.floor(sparkWidth)));
+      if (windowed.length < 2) return undefined;
+      return row("spark", sparkline(windowed));
     }
     case "reasoning": {
       const reasoning = asCount(asRecord(source.tokens)?.reasoning);
@@ -353,10 +378,14 @@ export function statLine(field: string, source: StatSource): string | undefined 
 }
 
 /** Render every named field that currently has data, in the given order. */
-export function statRows(fields: readonly string[], source: StatSource): readonly string[] {
+export function statRows(
+  fields: readonly string[],
+  source: StatSource,
+  layout: LayoutHint = {},
+): readonly string[] {
   const rows: string[] = [];
   for (const field of fields) {
-    const line = statLine(field, source);
+    const line = statLine(field, source, layout);
     if (line !== undefined) rows.push(line);
   }
   return rows;
