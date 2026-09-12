@@ -596,12 +596,24 @@ export function resolveConfig(options: unknown): ConfigResolution {
   // about it, and an explicit `enabled` always wins either way.
   const footerConfigured = Object.keys(footer).length > 0;
 
+  const lines = readLines(sidebar.lines, issues);
+  const rows = readRows(sidebar.rows, issues);
+  // `sidebarLines` caps the whole rail at MAX_LINES, so the fixed lines and the
+  // live rows draw from one budget. `readLines` already reports its own cut;
+  // this is the other half, which used to be silent — a long `lines` list ate
+  // live rows off the bottom of the rail without saying so.
+  if (lines.length + rows.length > MAX_LINES) {
+    issues.push(
+      `sidebar.lines and sidebar.rows total ${lines.length + rows.length} lines; the rail draws the first ${MAX_LINES}`,
+    );
+  }
+
   return {
     config: {
       sidebar: {
         enabled: readBoolean(sidebar.enabled, DEFAULT_CONFIG.sidebar.enabled, "sidebar.enabled", issues),
-        lines: readLines(sidebar.lines, issues),
-        rows: readRows(sidebar.rows, issues),
+        lines,
+        rows,
       },
       footer: {
         enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),

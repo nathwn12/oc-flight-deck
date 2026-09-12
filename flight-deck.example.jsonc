@@ -54,23 +54,28 @@
     // them freely — an unknown name is ignored with a one-time warning, so a
     // typo can never break the panel.
     //
+    //   caution    the annunciator: silent unless something stopped moving
     //   status     running or idle — the glyph turns while anything is working
     //   agent      which agent is running (orchestrator, build, plan, ...)
     //   model      model id, plus the variant when there is one
     //   branch     current git branch
-    //   cost       what this session has cost so far
-    //   caution    the annunciator: silent unless something stopped moving
-    //   cost       this conversation, plus its subagents when any ran
-    //   project    every session in this repo, not just the one on screen
+    //   cost       this conversation, plus its subagents when any ran; with
+    //              `total` on the rail, the session figure alone
+    //   total      the family total and subagent count on a row of its own
+    //   project    every session in this project, not just the one on screen
     //   tokens     this session's input and output tokens
     //   cache      cache hit rate, then cache reads
     //   context    a gauge of how full the context window is
     //   perms      what is waiting for approval, not just how many
     //   elapsed    wall-clock time since the session started
     //   tps        output tokens per second on the last completed turn
-    //   spark      recent turn sizes as a sparkline (available, off by default)
+    //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
-    //   turns      number of messages in the session
+    //   turns      how many prompts you have sent this session
+    //
+    // A row appears only once the host has data for it — nothing is drawn as a
+    // placeholder. The fixed lines and the live rows together are capped at 24,
+    // and anything past that is dropped.
     "rows": [
       "caution",
       "status",
@@ -135,11 +140,12 @@
     // Tools that are slow by NATURE, so slow is not an anomaly for them.
     // Matched by exact name.
     //
-    // Calibrated against 53,672 real tool calls: at the default threshold, 307
-    // calls exceed it and 218 of those are these tools. `subagent` alone
-    // crossed 152 times, with a p99 of 14.7 minutes. Without this list the
-    // annunciator lights on every delegated task - which is how an alert gets
-    // ignored. Add your own long-running or orchestration tools here.
+    // Calibrated against 54,218 real settled tool calls: at the default
+    // threshold, 307 (0.57%) exceed it and 200 of those are these tools, so
+    // with the list 0.20% of calls light the row. `subagent` alone crossed 152
+    // times, with a p99 of 14.2 minutes. Without this list the annunciator
+    // lights on every delegated task - which is how an alert gets ignored.
+    // Add your own long-running or orchestration tools here.
     "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
 
     // Also raise a toast, once per distinct problem, re-arming when the session
@@ -157,7 +163,8 @@
     // Cells in the `context` gauge.
     "barWidth": 10,
     // Samples drawn in the `spark` row. The newest turns are kept, so
-    // narrowing this keeps the recent shape rather than the oldest.
+    // narrowing this keeps the recent shape rather than the oldest. The row is
+    // this many cells wide, so a large value is a wide row.
     "sparkWidth": 12
   },
 

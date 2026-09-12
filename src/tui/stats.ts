@@ -16,13 +16,16 @@ export interface StatTree {
 
 /** Context-window occupancy for the most recent request. */
 export interface StatContext {
-  /** Prompt tokens sent on the last request: input plus cache reads. */
+  /**
+   * Prompt tokens sent on the last request: input, cache reads, and cache
+   * writes. All three occupy the window, so all three count.
+   */
   readonly used?: unknown;
   /** The model's context window, when the catalog knows it. */
   readonly limit?: unknown;
 }
 
-/** Whole-project spend, across every session in this repository. */
+/** Whole-project spend, across every session in this project. */
 export interface StatProject {
   readonly cost?: unknown;
   readonly count?: unknown;
@@ -142,7 +145,11 @@ function asCount(value: unknown): number | undefined {
 /** `518k`, `29.2M`, `32M`, `940` — short enough for a narrow rail, precise enough to read. */
 export function formatCount(value: number): string {
   if (value < 1_000) return String(Math.round(value));
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
+  // Round *before* choosing the unit. Rounding only inside the `k` branch made
+  // anything from 999,500 to 999,999 print as `1000k` — a number with two
+  // magnitudes in it, and one an agent reads as a different size entirely.
+  const thousands = Math.round(value / 1_000);
+  if (thousands < 1_000) return `${thousands}k`;
   const millions = (value / 1_000_000).toFixed(1);
   return `${millions.endsWith(".0") ? millions.slice(0, -2) : millions}M`;
 }
@@ -180,11 +187,33 @@ const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as
  * truncated path reads as a complete one.
  */
 export function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`;
+  if (text.length <= max) return text;
+  const cut = text.slice(0, Math.max(1, max - 1));
+  // Never cut a surrogate pair in half: the orphaned half renders as a
+  // replacement character, which reads as corruption rather than as a shortened
+  // path. Losing one more column is the cheaper mistake.
+  const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+  return `${safe}…`;
 }
 
 /** Braille frames, advanced by the ticker, shown only while the session runs. */
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+/**
+ * Flatten control characters in anything about to be drawn.
+ *
+ * A rail is one line per row, so a newline or an escape sequence in a
+ * host-supplied string does not get seen — it moves the cursor. Config text is
+ * already flattened in ./config.ts, but a tool name, a permission resource or a
+ * branch name arrives straight from the host, so every row value passes through
+ * here on its way out. `replace` is unconditional rather than `test` + `replace`:
+ * a global regex used with `test` carries `lastIndex` between calls.
+ */
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
+function plain(value: string): string {
+  return value.replace(CONTROL_CHARS, " ");
+}
 
 /**
  * Recent turn sizes as a shape.
@@ -228,7 +257,7 @@ export function statLine(
   // value: at labelWidth 8 the `reasoning` row rendered as "reasoning153k".
   // The label is nine characters, which made this reachable from a config file.
   const row = (label: string, value: string): string =>
-    `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${value}`;
+    `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${plain(value)}`;
 
   switch (field) {
     case "caution": {

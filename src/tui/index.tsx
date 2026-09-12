@@ -33,6 +33,12 @@ function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function asText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text.length === 0 ? undefined : text;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -72,9 +78,26 @@ export default Plugin.define({
       }
     };
 
+    // A subagent session is already inside its parent's family total, and the
+    // host keys `family()` by the family ROOT — so asking from a child returns
+    // its ancestors and siblings as well. Merging that would report the whole
+    // tree as this conversation's own, under a label that promises the
+    // conversation plus *its* subagents. Only a root has a family beneath it.
+    const isFamilyRoot = (sessionID: string): boolean => {
+      try {
+        return context.data.session.root(sessionID) === sessionID;
+      } catch {
+        // A host without `root` keeps the previous behaviour rather than
+        // silently dropping everyone's subagent total.
+        return true;
+      }
+    };
+
     // Subagent sessions are separate sessions, and the parent's `cost` does not
     // include them, so a bare `cost` row understates a swarm. Sum the family.
     const treeTotals = (sessionID: string, ownCost: unknown) => {
+      if (!isFamilyRoot(sessionID)) return undefined;
+
       let ids: readonly string[];
       try {
         ids = context.data.session.family(sessionID) ?? [sessionID];
@@ -143,14 +166,28 @@ export default Plugin.define({
       return elapsed <= 0 ? undefined : elapsed;
     };
 
-    // Project spend: every session the host knows about here, not just the one
-    // on screen. Answers "what has this repo cost me", not "this conversation".
-    const projectTotals = () => {
+    // Project spend: every session in THIS project, not just the one on screen.
+    //
+    // `session.list()` is not scoped - it returns sessions across every
+    // directory the host knows about, so summing it gives "everything you have
+    // ever run" while claiming to be a project total. Filtered by `projectID`
+    // rather than by directory, because one project legitimately spans several
+    // directories (worktrees).
+    //
+    // If the host does not report a project id, the unfiltered list is used, so
+    // this degrades to the old behaviour instead of showing nothing.
+    const projectTotals = (sessionID: string) => {
       try {
         const sessions = context.data.session.list() ?? [];
+        const projectID = asText(asRecord(context.data.session.get(sessionID))?.["projectID"]);
+        const scoped =
+          projectID === undefined
+            ? sessions
+            : sessions.filter((entry) => asText(asRecord(entry)?.["projectID"]) === projectID);
+
         let cost = 0;
-        for (const entry of sessions) cost += asCount(asRecord(entry)?.cost) ?? 0;
-        return { cost, count: sessions.length };
+        for (const entry of scoped) cost += asCount(asRecord(entry)?.["cost"]) ?? 0;
+        return { cost, count: scoped.length };
       } catch {
         return undefined;
       }
@@ -299,7 +336,9 @@ export default Plugin.define({
         if (output === undefined) continue;
         sizes.push(output);
       }
-      return sizes.slice(-12);
+      // Windowed by the configured width, not a hardcoded one: `sparkWidth` is
+      // capped here first, so a wider setting used to be silently impossible.
+      return sizes.slice(-config.layout.sparkWidth);
     };
 
     // A ticker exists only for clock-derived rows; everything else updates from
@@ -327,18 +366,41 @@ export default Plugin.define({
       return top === undefined ? undefined : cautionText(top, config.glyphs);
     };
 
+    // Both of these are host lookups like any other, and the slot render must
+    // not throw: an unreachable default location, or a VCS call on a directory
+    // with no repository, would take the whole rail down with it. Each degrades
+    // to "no branch row", the same way every other missing value does.
+    const locationOf = () => {
+      try {
+        return context.location ?? context.data.location.default();
+      } catch {
+        return context.location;
+      }
+    };
+
+    const branchOf = (location: ReturnType<typeof locationOf>): string | undefined => {
+      try {
+        return context.data.location.vcs.info(location)?.branch?.current;
+      } catch {
+        return undefined;
+      }
+    };
+
     const snapshot = (sessionID: string): StatSource => {
-      const location = context.location ?? context.data.location.default();
+      const location = locationOf();
       const session = context.data.session.get(sessionID) as SessionLike | undefined;
-      const turns = messagesOf(sessionID).length;
+      // A "turn" is one prompt and the work it caused. The host's message list
+      // also carries system, shell and switch records, so counting records
+      // reports several times the turns actually taken.
+      const turns = messagesOf(sessionID).filter((entry) => asRecord(entry)?.["type"] === "user").length;
 
       return {
         ...session,
         caution: announce(sessionID),
-        branch: context.data.location.vcs.info(location)?.branch?.current,
+        branch: branchOf(location),
         tree: treeTotals(sessionID, session?.cost),
         context: contextUsage(sessionID, session?.model),
-        project: projectTotals(),
+        project: projectTotals(sessionID),
         status: statusOf(sessionID),
         busy: busy(sessionID),
         perms: permsOf(sessionID),

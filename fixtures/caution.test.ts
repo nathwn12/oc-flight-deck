@@ -334,3 +334,39 @@ describe("ordering, helpers and wording", () => {
 function settledForTest() {
   return part("read", "completed", { path: "a" }, { ran: NOW - 11 * MINUTE - 1_000, completed: NOW - 11 * MINUTE });
 }
+
+// The threshold comparisons are the whole product: a stroke the wrong way either
+// fires on a normal build or never escalates at all. `>=` and `<` are pinned
+// here so an off-by-one cannot ship quietly.
+describe("threshold boundaries", () => {
+  function runningFor(ms: number) {
+    return part("shell", "running", { command: "bun test" }, { created: NOW - ms, ran: NOW - ms });
+  }
+
+  test("a tool fires exactly at the watch threshold, not a millisecond later", () => {
+    const atWatch = run({ parts: [runningFor(3 * MINUTE)] });
+    expect(kinds(atWatch)).toEqual(["hung-tool"]);
+    expect(atWatch[0]?.severity).toBe("watch");
+    // One millisecond short is silence: nothing has been observed yet.
+    expect(run({ parts: [runningFor(3 * MINUTE - 1)] })).toEqual([]);
+  });
+
+  test("escalates exactly at the caution threshold", () => {
+    expect(run({ parts: [runningFor(7 * MINUTE)] })[0]?.severity).toBe("caution");
+    expect(run({ parts: [runningFor(7 * MINUTE - 1)] })[0]?.severity).toBe("watch");
+  });
+
+  test("a silent turn fires exactly at its watch threshold", () => {
+    const settledAt = NOW - 10 * MINUTE;
+    const atThreshold = run({
+      parts: [part("read", "completed", { path: "a" }, { ran: settledAt, completed: settledAt })],
+    });
+    expect(kinds(atThreshold)).toEqual(["silent-turn"]);
+    expect(atThreshold[0]?.severity).toBe("watch");
+
+    const justShort = NOW - 10 * MINUTE + 1;
+    expect(
+      run({ parts: [part("read", "completed", { path: "a" }, { ran: justShort, completed: justShort })] }),
+    ).toEqual([]);
+  });
+});
