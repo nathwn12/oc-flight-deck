@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
-import { mergeOptions, resolveConfig } from "./config.js";
+import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
+import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
@@ -22,6 +23,9 @@ import { startTicker } from "./ticker.js";
 //   2. `flight-deck.jsonc` (or `.opencode/flight-deck.jsonc`) in the project
 //   3. the sane defaults in ./config.ts
 // See flight-deck.example.jsonc for the commented template.
+
+/** How many trailing messages are inspected for tool parts. */
+const RECENT_MESSAGES = 4;
 
 type SessionLike = { cost?: unknown; model?: unknown; time?: unknown };
 
@@ -160,9 +164,69 @@ export default Plugin.define({
       }
     };
 
-    const permsOf = (sessionID: string): number | undefined => {
+    // Recent tool parts, oldest first. Only the tail is inspected: a loop that is
+    // not currently happening is history, and a hang is by definition now.
+    const recentParts = (sessionID: string): readonly unknown[] => {
+      const parts: unknown[] = [];
+      for (const entry of messagesOf(sessionID).slice(-RECENT_MESSAGES)) {
+        const content = asRecord(entry)?.["content"];
+        if (Array.isArray(content)) parts.push(...content);
+      }
+      return parts;
+    };
+
+    // The host's own shell records, which outlive the tool call: a backgrounded
+    // command returns its result immediately, so its part settles while the
+    // process keeps running. This is the only signal that survives that.
+    const shellsOf = (sessionID: string): readonly unknown[] => {
       try {
-        return context.data.session.permission.list(sessionID)?.length;
+        const shellApi = context.data.shell as unknown as
+          | { listBySession?: (id: string) => readonly unknown[] }
+          | undefined;
+        return shellApi?.listBySession?.(sessionID) ?? [];
+      } catch {
+        return [];
+      }
+    };
+
+    // The newest thing the host recorded for this session that is not a tool
+    // part, so the quiet-turn rule is not blind to a model that is streaming.
+    const lastActivity = (sessionID: string): number | undefined => {
+      const messages = messagesOf(sessionID);
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const time = asRecord(asRecord(messages[index])?.["time"]);
+        const stamp =
+          asCount(time?.["completed"]) ?? asCount(time?.["streamed"]) ?? asCount(time?.["created"]);
+        if (stamp !== undefined) return stamp;
+      }
+      return undefined;
+    };
+
+    const cautionThreshold = cautionThresholds(config.caution);
+
+    const cautionsOf = (sessionID: string, now: number): Caution[] =>
+      detectCautions({
+        parts: recentParts(sessionID),
+        shells: shellsOf(sessionID),
+        now,
+        sessionRunning: statusOf(sessionID) === "running",
+        lastMessageAt: lastActivity(sessionID),
+        thresholds: cautionThreshold,
+      });
+
+    // What is waiting, not just how many. A bare count tells you to go and look;
+    // naming the request tells you whether it is worth looking at.
+    const permsOf = (
+      sessionID: string,
+    ): { count: number; action?: string; resource?: string } | undefined => {
+      try {
+        const requests = context.data.session.permission.list(sessionID);
+        if (requests === undefined || requests.length === 0) return undefined;
+        const first = asRecord(requests[0]);
+        const action = typeof first?.["action"] === "string" ? first["action"] : undefined;
+        const resources = Array.isArray(first?.["resources"]) ? first["resources"] : [];
+        const resource = typeof resources[0] === "string" ? resources[0] : undefined;
+        return { count: requests.length, action, resource };
       } catch {
         return undefined;
       }
@@ -250,6 +314,15 @@ export default Plugin.define({
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
     // resolves. Nothing here writes, requests, or leaves the process.
+    // Only the worst is ever drawn: the rail has one line for this, and two
+    // simultaneous observations is one problem with two symptoms.
+    const announce = (sessionID: string): { text: string; severe: boolean } | undefined => {
+      if (!config.caution.enabled) return undefined;
+      const top = worstCaution(cautionsOf(sessionID, Date.now()));
+      if (top === undefined) return undefined;
+      return { text: cautionText(top), severe: top.severity === "caution" };
+    };
+
     const snapshot = (sessionID: string): StatSource => {
       const location = context.location ?? context.data.location.default();
       const session = context.data.session.get(sessionID) as SessionLike | undefined;
@@ -257,6 +330,7 @@ export default Plugin.define({
 
       return {
         ...session,
+        caution: announce(sessionID),
         branch: context.data.location.vcs.info(location)?.branch?.current,
         tree: treeTotals(sessionID, session?.cost),
         context: contextUsage(sessionID, session?.model),
@@ -274,20 +348,78 @@ export default Plugin.define({
       };
     };
 
+    // The toast is opt-in and deliberately not the signal — the rail is. It
+    // fires on the transition into a caution, once per distinct problem, and
+    // re-arms when the session goes quiet, so a persistent hang cannot nag.
+    // Reading state on a timer rather than inside the render keeps the render a
+    // pure function of what it was given.
+    let watchedSession: string | undefined;
+    let toastedKey: string | undefined;
+    let watchTimer: ReturnType<typeof setInterval> | undefined;
+
+    if (config.caution.enabled && config.caution.toast) {
+      watchTimer = setInterval(() => {
+        const sessionID = watchedSession;
+        if (sessionID === undefined) return;
+        try {
+          const top = worstCaution(cautionsOf(sessionID, Date.now()));
+          if (top === undefined || top.severity !== "caution") {
+            toastedKey = undefined;
+            return;
+          }
+          if (top.key === toastedKey) return;
+          toastedKey = top.key;
+          context.ui.toast.show({
+            title: "Flight Deck",
+            message: cautionDetail(top),
+            variant: "warning",
+          });
+        } catch {
+          // A warning must never be able to break the panel it warns about.
+        }
+      }, config.refresh > 0 ? config.refresh : 1_000);
+    }
+
     if (config.sidebar.enabled) {
       releases.push(
         context.ui.slot({
           append: "sidebar.content",
           render: ({ sessionID }) => {
-            const lines = sidebarLines(config, snapshot(sessionID));
+            // The annunciator is drawn from a timer, so the toast watcher needs
+            // to know which session is on screen. Reading the frame is what
+            // subscribes this render to the host's tick — without it nothing
+            // re-runs between host events, and a stall is precisely the failure
+            // that produces no host events at all.
+            watchedSession = sessionID;
+            void ticker?.frame;
+
+            const source = snapshot(sessionID);
+            const lines = sidebarLines(config, source);
             if (lines.length === 0) return null;
             const offset = Math.min(liveRowOffset(config), lines.length);
+
+            // `caution` is first in the default rows and only renders when there
+            // is something to say, so a real caution is always the row at
+            // `offset`. That makes the bright row a property of the data rather
+            // than of a fixed index, which is why this can be the only row that
+            // ever changes colour.
+            const hot =
+              config.sidebar.rows[0] === "caution" && asRecord(source.caution)?.["severe"] === true;
+
             return (
               // No padding here: the host already lays out and pads the sidebar,
               // so adding our own would push the rows out of alignment with it.
               <box flexDirection="column">
                 {lines.map((line, index) => (
-                  <text fg={index < offset ? context.theme.text.default : context.theme.text.subdued}>{line}</text>
+                  <text
+                    fg={
+                      index < offset || (hot && index === offset)
+                        ? context.theme.text.default
+                        : context.theme.text.subdued
+                    }
+                  >
+                    {line}
+                  </text>
                 ))}
               </box>
             );
@@ -306,6 +438,8 @@ export default Plugin.define({
     }
 
     return () => {
+      if (watchTimer !== undefined) clearInterval(watchTimer);
+      watchTimer = undefined;
       ticker?.dispose();
       for (const release of releases) release();
     };

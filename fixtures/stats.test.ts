@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatCost, formatCount, formatDuration, fuelBar, sparkline, statLine, statRows } from "../src/tui/stats.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline, statLine, statRows } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -46,11 +46,25 @@ describe("flight deck live rows", () => {
       "agent     orchestrator",
       "model     deepseek-v4.1-flash · high",
       "branch    main",
-      "cost      $0.225",
+      // `cost` carries the family total once subagents have run, because this
+      // session's own figure understates the bill. `total` still exists for
+      // anyone who wants the two on separate rows.
+      "cost      $0.245 · +$0.020 · 2 subagents",
       "total     $0.245 · 2 subagents",
       "tokens    533k in · 91k out",
       "cache     98% hit · 32M read",
     ]);
+  });
+
+  test("the cost row stays a single figure until a subagent actually runs", () => {
+    // One number and its own superset stacked on two rows was the thing to fix,
+    // but inventing a delta with nothing to subtract would be worse.
+    expect(statLine("cost", { cost: 0.1913 })).toBe("cost      $0.191");
+    expect(statLine("cost", { cost: 0.1913, tree: { cost: 0.1913, count: 0 } })).toBe("cost      $0.191");
+    expect(statLine("cost", { cost: 0.2, tree: { cost: 0.2, count: 1 } })).toBe("cost      $0.200");
+    expect(statLine("cost", { cost: 0.2, tree: { cost: 0.25, count: 1 } })).toBe(
+      "cost      $0.250 · +$0.050 · 1 subagent",
+    );
   });
 
   test("only shows a tree total once a subagent has actually run", () => {
@@ -120,11 +134,30 @@ describe("flight deck live rows", () => {
     expect(statLine("status", {})).toBeUndefined();
   });
 
-  test("only surfaces pending permissions when something is actually waiting", () => {
+  test("names what is waiting for approval, not just how many", () => {
     expect(statLine("perms", {})).toBeUndefined();
-    expect(statLine("perms", { perms: 0 })).toBeUndefined();
-    expect(statLine("perms", { perms: 1 })).toBe("perms     1 waiting");
-    expect(statLine("perms", { perms: 3 })).toBe("perms     3 waiting");
+    expect(statLine("perms", { perms: { count: 0 } })).toBeUndefined();
+    // One request: name it, because that is the decision being asked for.
+    expect(statLine("perms", { perms: { count: 1, action: "shell", resource: "npm publish" } })).toBe(
+      "perms     shell · npm publish",
+    );
+    // Several: the count leads, because the first is not necessarily the one
+    // about to be shown.
+    expect(statLine("perms", { perms: { count: 3, action: "shell" } })).toBe("perms     3 waiting · shell");
+    expect(statLine("perms", { perms: { count: 3 } })).toBe("perms     3 waiting");
+    // A request with no resource still says what it is.
+    expect(statLine("perms", { perms: { count: 1, action: "edit" } })).toBe("perms     edit");
+    expect(statLine("perms", { perms: { count: 1 } })).toBe("perms     1 waiting");
+  });
+
+  test("shortens a long resource with a visible ellipsis, never silently", () => {
+    const line = statLine("perms", {
+      perms: { count: 1, action: "read", resource: "C:\\Users\\nathan\\.config\\opencode\\opencode.jsonc" },
+    });
+    expect(line).toContain("…");
+    expect(line?.length).toBeLessThan(45);
+    // A short resource is left alone.
+    expect(clip("short", 22)).toBe("short");
   });
 
   test("reports project spend, naming the session count only when it adds meaning", () => {

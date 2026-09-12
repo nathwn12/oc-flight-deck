@@ -57,32 +57,32 @@
     //   model      model id, plus the variant when there is one
     //   branch     current git branch
     //   cost       what this session has cost so far
-    //   total      this session plus all its subagents (hidden until one runs)
+    //   caution    the annunciator: silent unless something stopped moving
+    //   cost       this conversation, plus its subagents when any ran
     //   project    every session in this repo, not just the one on screen
     //   tokens     this session's input and output tokens
     //   cache      cache hit rate, then cache reads
     //   context    a gauge of how full the context window is
-    //   perms      approval requests waiting (only shown when there are some)
+    //   perms      what is waiting for approval, not just how many
     //   elapsed    wall-clock time since the session started
     //   tps        output tokens per second on the last completed turn
-    //   spark      recent turn sizes as a sparkline
+    //   spark      recent turn sizes as a sparkline (available, off by default)
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      number of messages in the session
     "rows": [
+      "caution",
       "status",
       "agent",
       "model",
       "branch",
       "cost",
-      "total",
       "project",
       "tokens",
       "cache",
       "context",
       "perms",
       "elapsed",
-      "tps",
-      "spark"
+      "tps"
     ]
   },
 

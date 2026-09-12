@@ -9,6 +9,7 @@
 // defaults below, so the rail always renders and a typo can never break the TUI.
 
 import { isStatField, STAT_FIELDS } from "./stats.js";
+import type { CautionThresholds } from "./caution.js";
 
 export interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
@@ -32,19 +33,86 @@ export interface FooterConfig {
   readonly text: string;
 }
 
+export interface CautionConfig {
+  /** Show the caution annunciator. Default `true`. */
+  readonly enabled: boolean;
+  /** A tool running longer than this is worth noting. Default `180`. */
+  readonly toolWatchSeconds: number;
+  /** ... and longer than this is a real caution. Default `420`. */
+  readonly toolCautionSeconds: number;
+  /** A running session quiet for this long is worth noting. Default `600`. */
+  readonly turnWatchSeconds: number;
+  /** ... and quieter than this is a real caution. Default `1200`. */
+  readonly turnCautionSeconds: number;
+  /** Identical consecutive calls before it counts as a loop. Default `3`. */
+  readonly repeatThreshold: number;
+  /**
+   * Tools that are slow by nature, so "slow" is not an anomaly for them.
+   *
+   * Calibrated against 53,672 real settled tool calls: at a 180-second watch
+   * threshold, 307 calls exceed it — and 218 of those are these tools.
+   * `subagent` alone accounts for 152, with a p99 of 14.7 minutes. A delegated
+   * agent running a quarter of an hour is working as designed, and an
+   * annunciator that lights on every delegation is one you learn to ignore.
+   * With these exempt, 0.16% of real calls cross the threshold.
+   *
+   * Matching is by exact tool name. Add your own long-running tools.
+   */
+  readonly exemptTools: readonly string[];
+  /** Raise a toast the first time a caution appears, once per distinct problem. */
+  readonly toast: boolean;
+}
+
 export interface FlightDeckConfig {
   readonly sidebar: SidebarConfig;
   readonly footer: FooterConfig;
   /**
+   * The annunciator: the one thing on the rail that is not session state.
+   *
+   * It exists because a hang emits no events, so nothing else here can see it.
+   * Silent when healthy, which is why it costs nothing visually.
+   */
+  readonly caution: CautionConfig;
+  /**
    * Update cadence in milliseconds for time-derived rows.
    *
    * Cost and tokens arrive with events, so they stay current without a timer.
-   * Anything derived from the clock — `elapsed`, and the status spinner's
-   * frames — has nothing to react to, so it needs a tick. `0` turns the ticker
-   * off, leaving every row event-driven.
+   * Anything derived from the clock — `elapsed`, the status spinner's frames,
+   * and the annunciator's escalating thresholds — has nothing to react to, so
+   * it needs a tick. `0` turns the ticker off, leaving every row event-driven.
    */
   readonly refresh: number;
 }
+
+/** The millisecond view the rules in ./caution.ts operate on. */
+export function cautionThresholds(config: CautionConfig): CautionThresholds {
+  return {
+    toolWatchMs: config.toolWatchSeconds * 1_000,
+    toolCautionMs: config.toolCautionSeconds * 1_000,
+    turnWatchMs: config.turnWatchSeconds * 1_000,
+    turnCautionMs: config.turnCautionSeconds * 1_000,
+    repeatThreshold: config.repeatThreshold,
+    exemptTools: config.exemptTools,
+  };
+}
+
+export const DEFAULT_CAUTION: CautionConfig = {
+  enabled: true,
+  toolWatchSeconds: 180,
+  toolCautionSeconds: 420,
+  turnWatchSeconds: 600,
+  turnCautionSeconds: 1200,
+  repeatThreshold: 3,
+  exemptTools: ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+  /**
+   * Off by default. The rail is the signal; a toast is an interruption.
+   *
+   * The annunciator's job is to sit there and be ignorable until it isn't, and a
+   * notification that takes over the screen is the opposite of that. It is worth
+   * turning on if you walk away from long runs, which is why it exists at all.
+   */
+  toast: false,
+};
 
 /**
  * Fixed lines shown above the live rows — branding only.
@@ -64,12 +132,12 @@ export const DEFAULT_SIDEBAR_LINES: readonly string[] = [
  * install shows real numbers with no configuration file at all.
  */
 export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
+  "caution",
   "status",
   "agent",
   "model",
   "branch",
   "cost",
-  "total",
   "project",
   "tokens",
   "cache",
@@ -77,7 +145,6 @@ export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
   "perms",
   "elapsed",
   "tps",
-  "spark",
 ];
 
 /**
@@ -104,6 +171,7 @@ export const DEFAULT_FOOTER_TEXT = "Flight Deck";
 export const DEFAULT_CONFIG: FlightDeckConfig = {
   sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES, rows: DEFAULT_SIDEBAR_ROWS },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
+  caution: DEFAULT_CAUTION,
   refresh: DEFAULT_REFRESH_MS,
 };
 
@@ -230,7 +298,10 @@ function readRows(value: unknown, issues: string[]): readonly string[] {
   return rows.slice(0, MAX_LINES);
 }
 
-function sectionOf(options: Record<string, unknown>, key: "sidebar" | "footer"): Record<string, unknown> {
+function sectionOf(
+  options: Record<string, unknown>,
+  key: "sidebar" | "footer" | "caution",
+): Record<string, unknown> {
   const value = options[key];
   return isRecord(value) ? value : {};
 }
@@ -259,7 +330,11 @@ function readRefresh(value: unknown, issues: string[]): number {
   return value;
 }
 
-function mergeSection(file: Record<string, unknown>, host: Record<string, unknown>, key: "sidebar" | "footer"): unknown {
+function mergeSection(
+  file: Record<string, unknown>,
+  host: Record<string, unknown>,
+  key: "sidebar" | "footer" | "caution",
+): unknown {
   const fileValue = file[key];
   const hostValue = host[key];
   // A malformed section from either source replaces the other and is reported
@@ -284,6 +359,104 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
     ...host,
     sidebar: mergeSection(file, host, "sidebar"),
     footer: mergeSection(file, host, "footer"),
+    caution: mergeSection(file, host, "caution"),
+  };
+}
+
+/**
+ * A non-negative whole number, or the default with a reported issue.
+ *
+ * Used for both seconds and counts: the validation is identical, and the path
+ * in the message tells the reader which they are looking at.
+ */
+function readNumber(value: unknown, fallback: number, path: string, issues: string[], min: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    issues.push(`${path} must be a number; using the default`);
+    return fallback;
+  }
+  if (value < min) {
+    issues.push(`${path} must be at least ${min}; using the default`);
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+/** Tool names, matched exactly. A malformed list falls back whole, not partly. */
+function readToolNames(value: unknown, issues: string[]): readonly string[] {
+  if (value === undefined) return DEFAULT_CAUTION.exemptTools;
+  if (!Array.isArray(value)) {
+    issues.push("caution.exemptTools must be an array of tool names; using the default");
+    return DEFAULT_CAUTION.exemptTools;
+  }
+  const names: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      issues.push("caution.exemptTools must contain only non-empty tool names; using the default");
+      return DEFAULT_CAUTION.exemptTools;
+    }
+    names.push(entry.trim());
+  }
+  return names;
+}
+
+function readCaution(section: Record<string, unknown>, issues: string[]): CautionConfig {
+  const toolWatchSeconds = readNumber(
+    section["toolWatchSeconds"],
+    DEFAULT_CAUTION.toolWatchSeconds,
+    "caution.toolWatchSeconds",
+    issues,
+    0,
+  );
+  const turnWatchSeconds = readNumber(
+    section["turnWatchSeconds"],
+    DEFAULT_CAUTION.turnWatchSeconds,
+    "caution.turnWatchSeconds",
+    issues,
+    0,
+  );
+
+  // A caution threshold at or below its watch threshold makes the escalating
+  // state unreachable. Raise it and say so, rather than accept a config that
+  // cannot do what it claims.
+  let toolCautionSeconds = readNumber(
+    section["toolCautionSeconds"],
+    DEFAULT_CAUTION.toolCautionSeconds,
+    "caution.toolCautionSeconds",
+    issues,
+    0,
+  );
+  let turnCautionSeconds = readNumber(
+    section["turnCautionSeconds"],
+    DEFAULT_CAUTION.turnCautionSeconds,
+    "caution.turnCautionSeconds",
+    issues,
+    0,
+  );
+  if (toolCautionSeconds < toolWatchSeconds) {
+    issues.push("caution.toolCautionSeconds is below caution.toolWatchSeconds; raised to match");
+    toolCautionSeconds = toolWatchSeconds;
+  }
+  if (turnCautionSeconds < turnWatchSeconds) {
+    issues.push("caution.turnCautionSeconds is below caution.turnWatchSeconds; raised to match");
+    turnCautionSeconds = turnWatchSeconds;
+  }
+
+  return {
+    enabled: readBoolean(section["enabled"], DEFAULT_CAUTION.enabled, "caution.enabled", issues),
+    toolWatchSeconds,
+    toolCautionSeconds,
+    turnWatchSeconds,
+    turnCautionSeconds,
+    repeatThreshold: readNumber(
+      section["repeatThreshold"],
+      DEFAULT_CAUTION.repeatThreshold,
+      "caution.repeatThreshold",
+      issues,
+      2,
+    ),
+    exemptTools: readToolNames(section["exemptTools"], issues),
+    toast: readBoolean(section["toast"], DEFAULT_CAUTION.toast, "caution.toast", issues),
   };
 }
 
@@ -307,15 +480,20 @@ export function resolveConfig(options: unknown): ConfigResolution {
 
   const rawSidebar = options.sidebar;
   const rawFooter = options.footer;
+  const rawCaution = options.caution;
   if (rawSidebar !== undefined && !isRecord(rawSidebar)) {
     issues.push("sidebar must be an object; using defaults");
   }
   if (rawFooter !== undefined && !isRecord(rawFooter)) {
     issues.push("footer must be an object; using defaults");
   }
+  if (rawCaution !== undefined && !isRecord(rawCaution)) {
+    issues.push("caution must be an object; using defaults");
+  }
 
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
+  const caution = isRecord(rawCaution) ? rawCaution : {};
 
   // Writing any footer setting counts as asking for the footer, so the rail
   // turns on as soon as you configure it. It is off only when you said nothing
@@ -333,6 +511,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
         enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues),
       },
+      caution: readCaution(caution, issues),
       refresh: readRefresh(options.refresh, issues),
     },
     issues,

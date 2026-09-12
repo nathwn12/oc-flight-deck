@@ -30,6 +30,14 @@ export interface StatProject {
 
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
 export interface StatSource {
+  /**
+   * The annunciator, precomputed by the caller as `{ text, severe }`.
+   *
+   * Kept as a string here on purpose: the rules that decide whether something is
+   * wrong live in ./caution.ts and need the clock and the session snapshot, not
+   * a formatting function.
+   */
+  readonly caution?: unknown;
   readonly agent?: unknown;
   readonly model?: unknown;
   readonly cost?: unknown;
@@ -53,6 +61,7 @@ export interface StatSource {
 
 /** Fields a user may name in `sidebar.rows`, in the order they are documented. */
 export const STAT_FIELDS = [
+  "caution",
   "status",
   "agent",
   "model",
@@ -78,8 +87,12 @@ export type StatField = (typeof STAT_FIELDS)[number];
  *
  * The ticker exists to animate these. When none of them is on screen there is
  * nothing to animate, so the plugin does not start a timer at all.
+ *
+ * `caution` belongs here for a stronger reason than the others: its whole job is
+ * noticing that time has passed without anything happening, so without a tick
+ * its thresholds could never be crossed on screen.
  */
-export const ANIMATED_FIELDS = ["status", "elapsed"] as const;
+export const ANIMATED_FIELDS = ["caution", "status", "elapsed"] as const;
 
 export function isStatField(value: string): value is StatField {
   return (STAT_FIELDS as readonly string[]).includes(value);
@@ -140,6 +153,17 @@ export function fuelBar(ratio: number): string {
 
 const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 
+/**
+ * Shorten a value for a narrow rail.
+ *
+ * The sidebar is roughly thirty-odd columns wide and the label already costs
+ * ten, so a resource path has to be cut. The ellipsis is deliberate: a silently
+ * truncated path reads as a complete one.
+ */
+export function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`;
+}
+
 /** Braille frames, advanced by the ticker, shown only while the session runs. */
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
@@ -170,6 +194,14 @@ export function sparkline(values: readonly number[]): string {
  */
 export function statLine(field: string, source: StatSource): string | undefined {
   switch (field) {
+    case "caution": {
+      // Rendered only when the caller found something to say, which is what
+      // keeps a healthy session visually identical to one without the
+      // annunciator at all.
+      const caution = asRecord(source.caution);
+      const text = asText(caution?.["text"]);
+      return text === undefined ? undefined : row("caution", text);
+    }
     case "status": {
       const status = asText(source.status);
       if (status === undefined && source.busy === undefined) return undefined;
@@ -203,7 +235,26 @@ export function statLine(field: string, source: StatSource): string | undefined 
     }
     case "cost": {
       const cost = asCount(source.cost);
-      return cost === undefined ? undefined : row("cost", formatCost(cost));
+      const tree = asRecord(source.tree);
+      const treeCost = asCount(tree?.cost);
+      const count = asCount(tree?.count);
+
+      // When subagents ran, this session's own cost understates the bill. Show
+      // the family total and the delta that produced it, rather than spending a
+      // second row on a number that contains the first. `total` still exists for
+      // anyone who wants the two figures on separate rows.
+      if (
+        cost !== undefined &&
+        treeCost !== undefined &&
+        count !== undefined &&
+        count > 0 &&
+        treeCost > cost
+      ) {
+        const plural = count === 1 ? "subagent" : "subagents";
+        return row("cost", `${formatCost(treeCost)} · +${formatCost(treeCost - cost)} · ${count} ${plural}`);
+      }
+      const value = cost ?? treeCost;
+      return value === undefined ? undefined : row("cost", formatCost(value));
     }
     case "total": {
       // Only worth a row once a subagent has actually run: subagent sessions are
@@ -256,9 +307,20 @@ export function statLine(field: string, source: StatSource): string | undefined 
       return row("context", `${fuelBar(ratio)} ${Math.round(Math.min(1, ratio) * 100)}%`);
     }
     case "perms": {
-      const perms = asCount(source.perms);
-      if (perms === undefined || perms === 0) return undefined;
-      return row("perms", perms === 1 ? "1 waiting" : `${perms} waiting`);
+      const perms = asRecord(source.perms);
+      const count = asCount(perms?.["count"]);
+      if (count === undefined || count === 0) return undefined;
+      const action = asText(perms?.["action"]);
+      const resource = asText(perms?.["resource"]);
+
+      // One request: name it, because that is the decision you are being asked
+      // to make. Several: the count leads, because the first request in the
+      // queue is not necessarily the one you are about to be shown.
+      if (count > 1) {
+        return row("perms", action === undefined ? `${count} waiting` : `${count} waiting · ${action}`);
+      }
+      if (action === undefined) return row("perms", "1 waiting");
+      return row("perms", resource === undefined ? action : `${action} · ${clip(resource, 22)}`);
     }
     case "elapsed": {
       const ms = asCount(source.elapsedMs);

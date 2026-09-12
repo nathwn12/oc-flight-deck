@@ -19,12 +19,12 @@ describe("flight deck config", () => {
     // With no session data, only the fixed branding line renders.
     expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
     expect(resolution.config.sidebar.rows).toEqual([
+      "caution",
       "status",
       "agent",
       "model",
       "branch",
       "cost",
-      "total",
       "project",
       "tokens",
       "cache",
@@ -32,7 +32,6 @@ describe("flight deck config", () => {
       "perms",
       "elapsed",
       "tps",
-      "spark",
     ]);
     // The ticker is on by default: clock-derived rows have nothing else to
     // react to. It runs at the spinner's frame rate so the glyph reads as
