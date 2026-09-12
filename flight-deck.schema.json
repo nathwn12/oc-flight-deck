@@ -41,7 +41,18 @@
           "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns"] },
           "default": ["caution", "status", "agent", "model", "branch", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
-          "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. Rows with no data are omitted entirely, so a narrow rail grows rows as a session produces them rather than showing placeholders. Counted together with `sidebar.lines` against a 24-line cap on the whole rail."
+          "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail."
+        },
+        "persist": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render every field named in `sidebar.rows` as a persistent row, using `sidebar.placeholder` when the host has no data yet. True keeps the rail a stable shape that fills in as the session produces data; false restores the old behavior of omitting rows with no data."
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 1,
+          "default": "—",
+          "description": "Value shown for a persistent row with no data yet. Used only when `sidebar.persist` is true. Must be a non-empty string; anything else falls back to the default em dash."
         }
       }
     },

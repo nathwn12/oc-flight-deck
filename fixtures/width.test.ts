@@ -136,8 +136,11 @@ describe("the rail fits", () => {
   });
 
   test("every single field fits on its own", () => {
-    const rows = sidebarLines(DEFAULT_CONFIG).slice(DEFAULT_CONFIG.sidebar.lines.length);
-    expect(rows).toEqual([]); // no data, no rows - the rail starts silent
+    // Omission is opt-in now: the default rail is persistent, so pin the
+    // silent start through an explicit `persist: false`.
+    const silent = { ...DEFAULT_CONFIG, sidebar: { ...DEFAULT_CONFIG.sidebar, persist: false } };
+    const rows = sidebarLines(silent).slice(silent.sidebar.lines.length);
+    expect(rows).toEqual([]); // no data, no rows - the rail starts silent when not persistent
     for (const field of DEFAULT_CONFIG.sidebar.rows) {
       expect(overBudget(FULL, [field])).toEqual([]);
     }
@@ -148,7 +151,11 @@ describe("the rail fits", () => {
     // pins that the clipping is what keeps it inside the budget.
     const long = overBudget({
       ...FULL,
-      perms: { count: 1, action: "read", resource: "C:\\Users\\nathan\\.config\\opencode\\opencode.jsonc" },
+      perms: {
+        count: 1,
+        action: "read",
+        resource: "/very/long/path/to/a/config/file/that/needs/clipping/opencode.jsonc",
+      },
     });
     expect(long).toEqual([]);
   });

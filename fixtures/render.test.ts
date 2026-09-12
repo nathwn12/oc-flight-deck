@@ -148,7 +148,7 @@ test("renders the live rail with no configuration at all", async () => {
   // The prompt footer is opt-in, so a default setup claims only the sidebar.
   expect(footer).toBeUndefined();
 
-  const frame = await frameOf(sidebar!.render, 40, 12);
+  const frame = await frameOf(sidebar!.render, 40, 20);
   expect(frame).toContain("FLIGHT DECK");
   expect(frame).toContain("orchestrator");
   expect(frame).toContain("deepseek-v4.1-flash · high");
@@ -205,13 +205,14 @@ test("draws the context gauge, matching provider as well as model id", async () 
 });
 
 test("renders branding alone until the host supplies session data", async () => {
-  const { context, claims } = harness(undefined, workspace());
+  const { context, claims } = harness({ sidebar: { persist: false } }, workspace());
   flightDeck.setup(context);
 
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 4);
   expect(frame).toContain("FLIGHT DECK");
-  // No invented placeholders: a row appears only once it has a value.
+  // With `persist: false` there are no placeholders: a row appears only once
+  // it has a value.
   expect(frame).not.toContain("agent");
   expect(frame).not.toContain("branch");
 });
@@ -251,7 +252,7 @@ test("merges the on-disk config file with host options", async () => {
 
   const { sidebar, footer } = railClaims(claims);
   // Sidebar comes from the file; footer is overridden by the host.
-  expect(await frameOf(sidebar!.render, 40, 4)).toContain("FILE RAIL");
+  expect(await frameOf(sidebar!.render, 40, 16)).toContain("FILE RAIL");
   expect(await frameOf(footer!.render, 60, 3)).toContain("HOST FOOTER");
 });
 
@@ -327,7 +328,7 @@ test("warns and keeps rendering when the config file is broken", async () => {
 
   // Still renders the defaults.
   const { sidebar, footer } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 12)).toContain("FLIGHT DECK");
+  expect(await frameOf(sidebar!.render, 40, 20)).toContain("FLIGHT DECK");
   // A broken file falls back to the off-by-default footer, not a guessed one.
   expect(footer).toBeUndefined();
 });
@@ -489,7 +490,11 @@ test("a subagent session does not claim its parent's family as its own", async (
   // The host keys `family()` by the family root, so asking from a child returns
   // the root and every sibling. Merging that into `cost` would report the whole
   // tree under a label that promises this conversation plus its own subagents.
-  const { context, claims } = harness({ sidebar: { rows: ["cost", "total"] } }, workspace(), LIVE_SESSION, {
+  const { context, claims } = harness(
+    { sidebar: { rows: ["cost", "total"], persist: false } },
+    workspace(),
+    LIVE_SESSION,
+    {
     family: ["ses_root", "ses_test", "ses_sibling"],
     children: { ses_root: { cost: 5 }, ses_sibling: { cost: 3 } },
     root: () => "ses_root",

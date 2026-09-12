@@ -51,7 +51,7 @@ describe("flight deck config file", () => {
     writeFileSync(join(directory, "flight-deck.jsonc"), `{ "footer": { "text": "root" } }`);
     writeFileSync(
       join(directory, ".opencode", "flight-deck.jsonc"),
-      `{ "footer": { "text": "dot-opencode" }, "sidebar": { "lines": ["dot line"] } }`,
+      `{ "footer": { "text": "dot-opencode" }, "sidebar": { "lines": ["dot line"], "persist": false } }`,
     );
     const loaded = loadConfigFile(directory);
     expect(loaded.source).toContain(".opencode");
@@ -116,7 +116,7 @@ describe("flight deck config file", () => {
     const directory = workspace();
     writeFileSync(
       join(directory, "flight-deck.jsonc"),
-      `{ "sidebar": { "lines": ["file"] }, "footer": { "text": "file footer" } }`,
+      `{ "sidebar": { "lines": ["file"], "persist": false }, "footer": { "text": "file footer" } }`,
     );
     const loaded = loadConfigFile(directory);
     const { config } = resolveConfig(mergeOptions(loaded.options, { footer: { text: "host footer" } }));

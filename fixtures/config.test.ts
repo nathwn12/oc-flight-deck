@@ -16,8 +16,19 @@ describe("flight deck config", () => {
     expect(resolution.issues).toEqual([]);
     expect(resolution.config).toEqual(DEFAULT_CONFIG);
     // Literal defaults, so a silent edit to the constants is still caught.
-    // With no session data, only the fixed branding line renders.
-    expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
+    // With no session data, every selected row renders its placeholder.
+    expect(resolution.config.sidebar.persist).toBe(true);
+    expect(resolution.config.sidebar.placeholder).toBe("—");
+    expect(sidebarLines(resolution.config)).toHaveLength(
+      DEFAULT_SIDEBAR_LINES.length + resolution.config.sidebar.rows.length,
+    );
+    expect(sidebarLines(resolution.config)).toContain("cache     —");
+    // And omission is still one flag away.
+    const omitted = {
+      ...resolution.config,
+      sidebar: { ...resolution.config.sidebar, persist: false },
+    };
+    expect(sidebarLines(omitted)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
     expect(resolution.config.sidebar.rows).toEqual([
       "caution",
       "status",
@@ -57,7 +68,7 @@ describe("flight deck config", () => {
 
   test("applies user overrides and trims whitespace", () => {
     const resolution = resolveConfig({
-      sidebar: { enabled: true, lines: ["  MY RAIL  ", "second"] },
+      sidebar: { enabled: true, lines: ["  MY RAIL  ", "second"], persist: false },
       footer: { text: " custom footer " },
     });
     expect(resolution.issues).toEqual([]);
@@ -74,7 +85,7 @@ describe("flight deck config", () => {
 
   test("falls back and reports every malformed value", () => {
     const resolution = resolveConfig({
-      sidebar: { enabled: "yes", lines: [123, "  ", "ok"] },
+      sidebar: { enabled: "yes", lines: [123, "  ", "ok"], persist: false },
       footer: { enabled: "yes", text: "" },
     });
     expect(sidebarLines(resolution.config)).toEqual(["ok"]);
@@ -87,7 +98,7 @@ describe("flight deck config", () => {
   });
 
   test("falls back to the default lines when every entry is unusable", () => {
-    const resolution = resolveConfig({ sidebar: { lines: [42, "   ", null] } });
+    const resolution = resolveConfig({ sidebar: { lines: [42, "   ", null], persist: false } });
     expect(sidebarLines(resolution.config)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
     expect(resolution.issues.join(" ")).toContain("no usable entries");
   });
@@ -110,7 +121,10 @@ describe("flight deck config", () => {
   });
 
   test("flattens control characters so a rail can never become two lines", () => {
-    const resolution = resolveConfig({ sidebar: { lines: ["A\nB", "C\td"] }, footer: { text: "x\u001b[31my" } });
+    const resolution = resolveConfig({
+      sidebar: { lines: ["A\nB", "C\td"], persist: false },
+      footer: { text: "x\u001b[31my" },
+    });
     expect(sidebarLines(resolution.config)).toEqual(["A B", "C d"]);
     expect(footerLine(resolution.config)).toBe("x [31my");
     expect(resolution.issues.join(" ")).toContain("control characters");
@@ -188,7 +202,9 @@ describe("flight deck option precedence", () => {
   // the malformed file section is dropped. (With no host section present, the
   // malformed file value is surfaced instead — see the test above.)
   test("lets a valid host section take over a malformed file section", () => {
-    const { config, issues } = resolveConfig(mergeOptions({ sidebar: "nope" }, { sidebar: { lines: ["host"] } }));
+    const { config, issues } = resolveConfig(
+      mergeOptions({ sidebar: "nope" }, { sidebar: { lines: ["host"], persist: false } }),
+    );
     expect(issues).toEqual([]);
     expect(sidebarLines(config)).toEqual(["host"]);
   });

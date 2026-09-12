@@ -8,7 +8,7 @@
 // Everything is optional. Missing or invalid values fall back to the sane
 // defaults below, so the rail always renders and a typo can never break the TUI.
 
-import { isStatField, STAT_FIELDS } from "./stats.js";
+import { DEFAULT_PLACEHOLDER, isStatField, STAT_FIELDS } from "./stats.js";
 import type { CautionThresholds } from "./caution.js";
 
 export interface SidebarConfig {
@@ -18,6 +18,13 @@ export interface SidebarConfig {
   readonly lines: readonly string[];
   /** Live session fields to render, top to bottom. Default `DEFAULT_SIDEBAR_ROWS`. */
   readonly rows: readonly string[];
+  /**
+   * Render every named row even when the host has no data for it, using
+   * `placeholder` as the value. Default `true`; `false` restores omission.
+   */
+  readonly persist: boolean;
+  /** Value shown for a row with no data when `persist` is on. Default `"—"`. */
+  readonly placeholder: string;
 }
 
 export interface FooterConfig {
@@ -208,7 +215,13 @@ export const MIN_REFRESH_MS = 16;
 export const DEFAULT_FOOTER_TEXT = "Flight Deck";
 
 export const DEFAULT_CONFIG: FlightDeckConfig = {
-  sidebar: { enabled: true, lines: DEFAULT_SIDEBAR_LINES, rows: DEFAULT_SIDEBAR_ROWS },
+  sidebar: {
+    enabled: true,
+    lines: DEFAULT_SIDEBAR_LINES,
+    rows: DEFAULT_SIDEBAR_ROWS,
+    persist: true,
+    placeholder: DEFAULT_PLACEHOLDER,
+  },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
   layout: DEFAULT_LAYOUT,
@@ -614,6 +627,13 @@ export function resolveConfig(options: unknown): ConfigResolution {
         enabled: readBoolean(sidebar.enabled, DEFAULT_CONFIG.sidebar.enabled, "sidebar.enabled", issues),
         lines,
         rows,
+        persist: readBoolean(sidebar.persist, DEFAULT_CONFIG.sidebar.persist, "sidebar.persist", issues),
+        placeholder: readText(
+          sidebar.placeholder,
+          DEFAULT_CONFIG.sidebar.placeholder,
+          "sidebar.placeholder",
+          issues,
+        ),
       },
       footer: {
         enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),

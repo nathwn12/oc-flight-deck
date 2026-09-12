@@ -73,9 +73,10 @@
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session
     //
-    // A row appears only once the host has data for it — nothing is drawn as a
-    // placeholder. The fixed lines and the live rows together are capped at 24,
-    // and anything past that is dropped.
+    // Every named row renders persistently, so the rail keeps a stable shape:
+    // a row with no data yet shows the placeholder below, in the same label
+    // column as a live row. The fixed lines and the live rows together are
+    // capped at 24, and anything past that is dropped.
     "rows": [
       "caution",
       "status",
@@ -90,7 +91,15 @@
       "perms",
       "elapsed",
       "tps"
-    ]
+    ],
+
+    // Every named row renders persistently: with no data yet it shows the
+    // placeholder below, in the same label column as a live row. Set to false
+    // to omit rows with no data instead.
+    "persist": true,
+
+    // Value shown for a persistent row with no data yet. Any non-empty string.
+    "placeholder": "—"
   },
 
   // ── Footer ───────────────────────────────────────────────────────────────

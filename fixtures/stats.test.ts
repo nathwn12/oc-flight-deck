@@ -107,6 +107,9 @@ describe("flight deck live rows", () => {
     expect(statLine("branch", {})).toBeUndefined();
     expect(statLine("agent", {})).toBeUndefined();
     expect(statLine("cache", { tokens: { cache: { read: 0 } } })).toBeUndefined();
+    // Omission is `persist: false`: the default for a direct `statRows` call,
+    // and the opt-out for `sidebarLines`.
+    expect(statRows(["agent", "cost"], {}, { persist: false })).toEqual([]);
     expect(statRows(["agent", "cost"], {})).toEqual([]);
   });
 
@@ -155,7 +158,7 @@ describe("flight deck live rows", () => {
 
   test("shortens a long resource with a visible ellipsis, never silently", () => {
     const line = statLine("perms", {
-      perms: { count: 1, action: "read", resource: "C:\\Users\\nathan\\.config\\opencode\\opencode.jsonc" },
+      perms: { count: 1, action: "read", resource: "/very/long/path/to/a/config/file/that/needs/clipping/opencode.jsonc" },
     });
     expect(line).toContain("…");
     expect(line?.length).toBeLessThan(45);

@@ -123,6 +123,26 @@ wraps costs more than a row that says less.
 A 98% hit rate is why millions of tokens can cost cents. The moment that number
 drops, your bill doesn't.
 
+### Every selected row stays on the rail
+
+Each field named in `sidebar.rows` renders exactly one row, in order. When the
+host has nothing to show yet, the row shows the `sidebar.placeholder` value
+(default `"—"`) in the same label column as a live row — so `cache` is visible
+before the first cache hit, and the rail keeps a stable shape instead of
+growing rows as the session produces data.
+
+```jsonc
+{
+  "sidebar": {
+    "persist": true, // the default: stable rows with a placeholder
+    "placeholder": "—"
+  }
+}
+```
+
+Set `"persist": false` to restore omission: rows with no data are then left out
+entirely, which is also how a narrow rail stays shortest.
+
 ## Configuration
 
 **You don't need any.** Install it and the panel works. But every knob is
