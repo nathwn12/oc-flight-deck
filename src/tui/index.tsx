@@ -5,6 +5,7 @@ import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
+import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
 
 // Flight Deck is a read-only instrument panel for the OpenCode V2 CLI/TUI. It
@@ -350,6 +351,13 @@ export default Plugin.define({
       config.sidebar.rows.some((name) => (ANIMATED_FIELDS as readonly string[]).includes(name));
     const ticker = startTicker(context, animated ? config.refresh : 0);
 
+    // The guard row is opt-in and polls its own RPC: starting the bridge only
+    // when the row is on the rail means no timer and no request for a row
+    // nobody renders. The bridge resolves `status` from `context.client` on
+    // every poll, so installing guard later appears within its interval.
+    const wantGuard = config.sidebar.enabled && config.sidebar.rows.includes("guard");
+    const bridge = wantGuard ? startGuardBridge(context) : undefined;
+
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
     // resolves. Nothing here writes, requests, or leaves the process.
@@ -408,6 +416,7 @@ export default Plugin.define({
         spark: sparkValues(sessionID),
         elapsedMs: sessionElapsed(session),
         turns,
+        guard: bridge?.status,
         // Read the tick inside the render so the host registers a dependency on
         // it; that read is what makes the rail re-run on the ticker's schedule.
         frame: ticker?.frame ?? 0,
@@ -457,7 +466,12 @@ export default Plugin.define({
             // re-runs between host events, and a stall is precisely the failure
             // that produces no host events at all.
             watchedSession = sessionID;
+            // Keep the guard bridge on the rendered session: the follow fetches
+            // immediately on change, and the status read below subscribes this
+            // render to the bridge's host store, so polls re-run the rail.
+            bridge?.follow(sessionID);
             void ticker?.frame;
+            void bridge?.status;
 
             const source = snapshot(sessionID);
             const lines = sidebarLines(config, source);
@@ -494,6 +508,7 @@ export default Plugin.define({
       if (watchTimer !== undefined) clearInterval(watchTimer);
       watchTimer = undefined;
       ticker?.dispose();
+      bridge?.dispose();
       for (const release of releases) release();
     };
   },
