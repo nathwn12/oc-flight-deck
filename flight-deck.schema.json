@@ -38,7 +38,7 @@
         },
         "rows": {
           "type": "array",
-          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns"] },
+          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard"] },
           "default": ["caution", "status", "agent", "model", "branch", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
           "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail."

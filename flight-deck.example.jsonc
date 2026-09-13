@@ -72,6 +72,8 @@
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session
+    //   guard      harness status from oc-harness-guard: breaches, orphans,
+    //              findings, or ok. Available, off by default.
     //
     // Every named row renders persistently, so the rail keeps a stable shape:
     // a row with no data yet shows the placeholder below, in the same label

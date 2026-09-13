@@ -60,6 +60,8 @@ export interface StatSource {
   readonly spark?: unknown;
   /** Animation frame counter, advanced by the ticker. */
   readonly frame?: unknown;
+  /** Harness status from oc-harness-guard's RPC, via the guard bridge. Untrusted. */
+  readonly guard?: unknown;
 }
 
 /** Fields a user may name in `sidebar.rows`, in the order they are documented. */
@@ -81,6 +83,7 @@ export const STAT_FIELDS = [
   "spark",
   "reasoning",
   "turns",
+  "guard",
 ] as const;
 
 export type StatField = (typeof STAT_FIELDS)[number];
@@ -152,6 +155,65 @@ function asText(value: unknown): string | undefined {
 
 function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * A guard count: a non-negative whole number, or an array counted by length.
+ *
+ * The RPC aggregates are numbers, but an array (findings, breaches) reads the
+ * same way — how many — so both count. Anything else is dropped to `undefined`
+ * so the caller can fall back to zero rather than print garbage.
+ */
+function asGuardCount(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
+  if (Array.isArray(value)) return value.length;
+  return undefined;
+}
+
+function guardCountOrZero(...candidates: readonly unknown[]): number {
+  for (const candidate of candidates) {
+    const count = asGuardCount(candidate);
+    if (count !== undefined) return count;
+  }
+  return 0;
+}
+
+/**
+ * Short harness token for the `guard` row, or `undefined` when there is no
+ * usable data (the persist layer then renders the placeholder).
+ *
+ * A section counts as usable only with an explicit boolean `available`: a
+ * present section with a missing or garbage flag is dropped, not read as
+ * either `ok` or `unknown`. Any usable section reporting `available: false`
+ * reads as `unknown` — a failed or disabled source never renders a false `ok`.
+ * Otherwise the worst signal wins: breaches, then orphans, then findings.
+ * ASCII, short, no padding.
+ */
+function guardToken(value: unknown): string | undefined {
+  const top = asRecord(value);
+  if (top === undefined) return undefined;
+
+  const air = asRecord(top.airworthiness);
+  const war = asRecord(top.warden);
+  const plan = asRecord(top.flightPlan);
+
+  const airUsable = air !== undefined && (air.available === true || air.available === false);
+  const warUsable = war !== undefined && (war.available === true || war.available === false);
+  const planUsable = plan !== undefined && (plan.available === true || plan.available === false);
+  if (!airUsable && !warUsable && !planUsable) return undefined;
+
+  if ((airUsable && air.available === false) || (warUsable && war.available === false) || (planUsable && plan.available === false)) {
+    return "unknown";
+  }
+
+  const breaches = warUsable ? guardCountOrZero(war.breaches) : 0;
+  const orphans = warUsable ? guardCountOrZero(war.orphans) : 0;
+  const findings = airUsable ? guardCountOrZero(air.findings, air.counts) : 0;
+
+  if (breaches > 0) return `${breaches} breach`;
+  if (orphans > 0) return `${orphans} orphan`;
+  if (findings > 0) return `${findings} finding`;
+  return "ok";
 }
 
 /** `518k`, `29.2M`, `32M`, `940` — short enough for a narrow rail, precise enough to read. */
@@ -444,6 +506,10 @@ export function statLine(
       const turns = asCount(source.turns);
       if (turns === undefined || turns === 0) return undefined;
       return row("turns", String(turns));
+    }
+    case "guard": {
+      const token = guardToken(source.guard);
+      return token === undefined ? undefined : row("guard", token);
     }
     default:
       return undefined;
