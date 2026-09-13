@@ -261,11 +261,19 @@ function resolveStatusFn(host: GuardHost, deps: GuardDeps | undefined): GuardDep
     // only have to satisfy the generic bound, not match the server exactly.
     // The payload is normalized defensively after the call, so drift degrades
     // to the placeholder instead of throwing.
-    const caller = rpc as (definition: typeof GUARD_CONTRACT) => { readonly status?: unknown };
-    const remote = caller.call(client, GUARD_CONTRACT) as { readonly status?: unknown };
+    //
+    // NEVER use `.call`/`.apply` on the rpc factory itself: the real client
+    // attaches its raw API onto the callable (`Object.assign(makeRpc(...),
+    // raw.rpc)`), so the factory's `.call` is the raw `rpc.call` endpoint —
+    // not `Function.prototype.call`. Using it would POST
+    // `/api/rpc/undefined/undefined` and silently yield `undefined`. Invoke
+    // the factory directly; the resulting `status` is a plain function, so a
+    // direct call is safe there too.
+    const factory = rpc as (definition: typeof GUARD_CONTRACT) => { readonly status?: unknown };
+    const remote = factory(GUARD_CONTRACT) as { readonly status?: unknown };
     const status = (remote as Record<string, unknown>).status;
     if (typeof status !== "function") return undefined;
-    return (input) => (status as (arg: { readonly sessionID: string }) => Promise<unknown>).call(remote, input);
+    return (input) => (status as (arg: { readonly sessionID: string }) => Promise<unknown>)(input);
   } catch {
     return undefined;
   }
@@ -310,6 +318,16 @@ export function startGuardBridge(
   const cadence = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : GUARD_POLL_MS;
   let currentSessionID: string | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  // Generation invalidated on dispose and on every follow() session change, so
+  // a poll that outlives its session — or its bridge, after disposal or a hot
+  // reload where the host memory store is shared — cannot overwrite newer data.
+  let generation = 0;
+  // Monotonic request sequence so overlapping polls for the same session
+  // resolve in start order, not finish order: only the newest request of the
+  // current generation may write.
+  let nextSeq = 0;
+  let latestSeq = 0;
+  let disposed = false;
 
   const stopTimer = () => {
     if (timer !== undefined) clearInterval(timer);
@@ -317,24 +335,35 @@ export function startGuardBridge(
   };
 
   const poll = async (sessionID: string | undefined): Promise<void> => {
+    if (disposed) return;
     if (sessionID === undefined || sessionID.length === 0) return;
+    const myGeneration = generation;
+    const mySeq = ++nextSeq;
+    latestSeq = mySeq;
+    const stillCurrent = () => myGeneration === generation && mySeq === latestSeq && !disposed;
     let raw: unknown;
     try {
       const statusFn = resolveStatusFn(host, deps);
       if (statusFn === undefined) {
-        writeValue(opened, null);
+        if (!stillCurrent()) return;
+        if (currentSessionID !== sessionID) return;
+        if (!writeValue(opened, null)) stopTimer();
         return;
       }
       raw = await statusFn({ sessionID });
     } catch {
       // `refused`, unavailable, or any transport failure: no data, not an error.
       // Abort check below still applies so a late session change wins.
+      if (!stillCurrent()) return;
       if (currentSessionID !== sessionID) return;
       if (!writeValue(opened, null)) stopTimer();
       return;
     }
-    // A session change during the await makes this response stale; the fresh
-    // session's own poll will overwrite, so drop it rather than flash it.
+    // A session change, a newer request, or disposal during the await makes
+    // this response stale; the fresh request's own poll will overwrite, so
+    // drop it rather than flash it. The generation check also covers A→B→A,
+    // where the session ID matches again but the response is still stale.
+    if (!stillCurrent()) return;
     if (currentSessionID !== sessionID) return;
     let normalized: GuardStatus | null;
     try {
@@ -357,11 +386,15 @@ export function startGuardBridge(
     },
     follow(sessionID: string | undefined) {
       try {
+        if (disposed) return;
         const next = typeof sessionID === "string" && sessionID.length > 0 ? sessionID : undefined;
         if (next === currentSessionID) return;
+        // Every session change invalidates in-flight polls, including A→B→A
+        // where the ID matches again but the earlier response is still stale.
+        generation += 1;
         currentSessionID = next;
         if (next === undefined) {
-          writeValue(opened, null);
+          if (!writeValue(opened, null)) stopTimer();
           return;
         }
         // Clear stale per-session data immediately so a switch never flashes
@@ -378,6 +411,8 @@ export function startGuardBridge(
       }
     },
     dispose() {
+      disposed = true;
+      generation += 1;
       stopTimer();
     },
   };
