@@ -211,15 +211,17 @@ toast naming the key to fix.
 
 Flight Deck shows what OpenCode already knows.
 
-- **No network calls.** Nothing is fetched, nothing is sent.
+- **No network calls while the opt-in `guard` row stays off.** Nothing is fetched, nothing is sent. When the `guard` row is enabled, the panel polls the local guard RPC (same machine, no telemetry) about every ten seconds, plus right away on session change.
 - **No telemetry.** Nothing is collected or phoned home.
 - **Nothing on disk.** The one thing it writes is an animation counter in the
   host's in-memory plugin state, so the spinner and `elapsed` keep moving
   between turns. It is scoped to this plugin and dies with the TUI; it is never
   persisted, and `"refresh": 0` removes even that.
-- **No polling of your session** — cost, tokens, and permissions update from the
+- **No polling of your session while the opt-in `guard` row stays off** — cost, tokens, and permissions update from the
   host's own events. The timer only re-reads state the host already holds in
-  memory, and only so the clock-derived rows keep moving.
+  memory, and only so the clock-derived rows keep moving. When the `guard` row
+  is enabled, the panel additionally polls the local guard RPC on its own
+  ten-second cadence.
 - **Theme-native.** Every line uses your active theme's text tokens, so it blends
   with whatever look you already run.
 

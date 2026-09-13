@@ -162,7 +162,33 @@ describe("guard row tokens", () => {
     for (const source of hostile) {
       expect(() => statLine("guard", (source ?? {}) as never)).not.toThrow();
     }
-    expect(() => statLine("guard", { guard: { get available() { throw new Error("x"); } } })).not.toThrow();
+    // The getter sits on a path `guardToken` actually reads (`warden`, and a
+    // count inside it), so this proves the read path is defensive — not just
+    // that an unread property is ignored.
+    expect(() => statLine("guard", { guard: { get warden() { throw new Error("x"); } } })).not.toThrow();
+    expect(statLine("guard", { guard: { get warden() { throw new Error("x"); } } })).toBeUndefined();
+    expect(
+      () => statLine("guard", { guard: { warden: { available: true, get breaches() { throw new Error("x"); } } } }),
+    ).not.toThrow();
+  });
+
+  test("abbreviates huge counts so the token stays short and ascii", () => {
+    expect(statLine("guard", { guard: { warden: { available: true, breaches: 1_500_000 } } })).toBe(
+      "guard     1.5M breach",
+    );
+    expect(statLine("guard", { guard: { warden: { available: true, orphans: 12_000 } } })).toBe(
+      "guard     12k orphan",
+    );
+    expect(statLine("guard", { guard: { airworthiness: { available: true, findings: 2_500_000 } } })).toBe(
+      "guard     2.5M finding",
+    );
+    for (const line of [
+      statLine("guard", { guard: { warden: { available: true, breaches: 9_999_999_999 } } }),
+      statLine("guard", { guard: { airworthiness: { available: true, findings: 1_000_000_000 } } }),
+    ]) {
+      expect(line).toMatch(/^[\x00-\x7F]*$/);
+      expect(line!.length).toBeLessThanOrEqual(24);
+    }
   });
 });
 
@@ -375,6 +401,166 @@ describe("guard bridge", () => {
     expect(bridge?.status).toBeUndefined();
     state.value = null;
     expect(bridge?.status).toBeUndefined();
+    bridge?.dispose();
+  });
+
+  test("invokes the real-client rpc factory directly, never via .call", async () => {
+    // The real client builds `client.rpc` as
+    // `Object.assign(makeRpc(...), raw.rpc)`, so the callable factory carries
+    // a `.call` property (the raw `rpc.call` endpoint) that shadows
+    // `Function.prototype.call`. The bridge must invoke the factory directly.
+    const factoryInputs: unknown[] = [];
+    const remoteInputs: string[] = [];
+    let callPropHits = 0;
+    const fakeRpc = ((definition: unknown) => {
+      factoryInputs.push(definition);
+      return {
+        status: async (input: { readonly sessionID: string }) => {
+          remoteInputs.push(input.sessionID);
+          return HEALTHY;
+        },
+      };
+    }) as unknown as ((definition: unknown) => unknown) & { call: unknown };
+    (fakeRpc as { call: unknown }).call = (..._args: unknown[]) => {
+      callPropHits += 1;
+      throw new Error("must not use .call on the rpc factory");
+    };
+    const { host } = fakeHost();
+    (host as { client: unknown }).client = { rpc: fakeRpc };
+    const bridge = startGuardBridge(host, undefined, 1_000);
+    expect(bridge).toBeDefined();
+    bridge?.follow("ses_real");
+    await sleep(30);
+    expect(factoryInputs.length).toBeGreaterThanOrEqual(1);
+    expect(factoryInputs[0]).toBe(GUARD_CONTRACT);
+    expect(callPropHits).toBe(0);
+    expect(remoteInputs).toContain("ses_real");
+    expect(bridge?.status?.warden?.available).toBe(true);
+    bridge?.dispose();
+  });
+
+  test("a pending poll never writes after disposal", async () => {
+    const { host, state } = fakeHost();
+    let release!: (value: unknown) => void;
+    const gate = new Promise<unknown>((resolve) => {
+      release = resolve;
+    });
+    const bridge = startGuardBridge(host, { status: () => gate }, 1_000);
+    bridge?.follow("ses_a");
+    // The immediate clear wrote null; the gated poll is still in flight.
+    expect(state.value).toBeNull();
+    bridge?.dispose();
+    release(HEALTHY);
+    await sleep(20);
+    expect(state.value).toBeNull();
+    expect(bridge?.status).toBeUndefined();
+  });
+
+  test("only the newest overlapping poll for a session may write", async () => {
+    const { host, state } = fakeHost();
+    let calls = 0;
+    const deps: GuardDeps = {
+      status: async () => {
+        calls += 1;
+        if (calls === 1) {
+          await sleep(50);
+          return { warden: { available: true, breaches: 9 } };
+        }
+        return HEALTHY;
+      },
+    };
+    const bridge = startGuardBridge(host, deps, 5);
+    bridge?.follow("ses_a");
+    // The first poll is slow; timer polls overlap and finish first with the
+    // healthy payload. The stale breach must never overwrite them.
+    await sleep(80);
+    expect(bridge?.status?.warden?.breaches).toBe(0);
+    expect(statLine("guard", { guard: bridge?.status })).toBe("guard     ok");
+    expect((state.value as { warden?: { breaches?: number } } | null)?.warden?.breaches ?? 0).toBe(0);
+    bridge?.dispose();
+  });
+
+  test("a stale A response cannot overwrite after A→B→A", async () => {
+    const { host } = fakeHost();
+    const pending: Array<{ sessionID: string; resolve: (value: unknown) => void }> = [];
+    const deps: GuardDeps = {
+      status: ({ sessionID }: { readonly sessionID: string }) =>
+        new Promise<unknown>((resolve) => {
+          pending.push({ sessionID, resolve });
+        }),
+    };
+    const bridge = startGuardBridge(host, deps, 1_000);
+    bridge?.follow("ses_a");
+    bridge?.follow("ses_b");
+    bridge?.follow("ses_a");
+    expect(pending.map((entry) => entry.sessionID)).toEqual(["ses_a", "ses_b", "ses_a"]);
+    const breachy = { warden: { available: true, breaches: 4 } };
+    // Resolve newest first, then stale ones out of order.
+    pending[2]!.resolve(HEALTHY);
+    await sleep(10);
+    expect(bridge?.status?.warden?.breaches).toBe(0);
+    pending[0]!.resolve(breachy);
+    await sleep(10);
+    expect(bridge?.status?.warden?.breaches).toBe(0);
+    pending[1]!.resolve(breachy);
+    await sleep(10);
+    expect(bridge?.status?.warden?.breaches).toBe(0);
+    expect(statLine("guard", { guard: bridge?.status })).toBe("guard     ok");
+    bridge?.dispose();
+  });
+
+  test("a failing store on the missing-RPC path stops the timer", async () => {
+    let writes = 0;
+    const failing: GuardHost = {
+      storage: {
+        memory: () => {
+          const store = { value: null as unknown };
+          return [
+            store,
+            () => {
+              writes += 1;
+              throw new Error("store closed");
+            },
+          ];
+        },
+      },
+      client: {},
+    };
+    const bridge = startGuardBridge(failing, undefined, 5);
+    expect(bridge).toBeDefined();
+    bridge?.follow("ses_a");
+    await sleep(30);
+    // Without the fix this keeps failing on every tick; stopped means one write.
+    expect(writes).toBe(1);
+    bridge?.dispose();
+  });
+
+  test("a failing store on follow(undefined) stops the timer", async () => {
+    let writes = 0;
+    const { host } = fakeHost();
+    const state: { value: unknown } = { value: null };
+    const flaky: GuardHost = {
+      storage: {
+        memory: () => [
+          state,
+          () => {
+            writes += 1;
+            throw new Error("store closed");
+          },
+        ],
+      },
+      client: {},
+    };
+    void host;
+    const bridge = startGuardBridge(flaky, depsReturning(HEALTHY), 5);
+    bridge?.follow("ses_a");
+    await sleep(20);
+    const afterFollow = writes;
+    expect(afterFollow).toBeGreaterThanOrEqual(1);
+    bridge?.follow(undefined);
+    await sleep(30);
+    // No further timer writes after the failing clear stopped it.
+    expect(writes).toBe(afterFollow + 1);
     bridge?.dispose();
   });
 });

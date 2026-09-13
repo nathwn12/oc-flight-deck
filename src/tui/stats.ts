@@ -190,8 +190,9 @@ function guardCountOrZero(...candidates: readonly unknown[]): number {
  * ASCII, short, no padding.
  */
 function guardToken(value: unknown): string | undefined {
-  const top = asRecord(value);
-  if (top === undefined) return undefined;
+  try {
+    const top = asRecord(value);
+    if (top === undefined) return undefined;
 
   const air = asRecord(top.airworthiness);
   const war = asRecord(top.warden);
@@ -210,10 +211,14 @@ function guardToken(value: unknown): string | undefined {
   const orphans = warUsable ? guardCountOrZero(war.orphans) : 0;
   const findings = airUsable ? guardCountOrZero(air.findings, air.counts) : 0;
 
-  if (breaches > 0) return `${breaches} breach`;
-  if (orphans > 0) return `${orphans} orphan`;
-  if (findings > 0) return `${findings} finding`;
+  // Abbreviated so a huge count cannot exceed the rail width; stays ASCII.
+  if (breaches > 0) return `${formatCount(breaches)} breach`;
+  if (orphans > 0) return `${formatCount(orphans)} orphan`;
+  if (findings > 0) return `${formatCount(findings)} finding`;
   return "ok";
+  } catch {
+    return undefined;
+  }
 }
 
 /** `518k`, `29.2M`, `32M`, `940` — short enough for a narrow rail, precise enough to read. */
