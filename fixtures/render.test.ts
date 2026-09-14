@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import flightDeck from "../src/tui/index.js";
 import { sparkline } from "../src/tui/stats.js";
@@ -11,8 +11,9 @@ import { sparkline } from "../src/tui/stats.js";
 // the only way to prove the slot bodies render — calling them outside a
 // renderer throws "No renderer found".
 //
-// Every test pins `location.directory` to a throwaway workspace, so the result
-// never depends on whatever config file happens to sit in the repo root.
+// Config is global, so `location.directory` no longer isolates anything. Every
+// test instead points `$XDG_CONFIG_HOME` at a throwaway directory, so the rail
+// never depends on the config file on the machine running the suite.
 
 type Render = (input: { sessionID: string }) => unknown;
 
@@ -32,6 +33,8 @@ const LIVE_SESSION = {
 };
 
 const created: string[] = [];
+let savedXdg: string | undefined;
+let xdgDirectory: string | undefined;
 
 function workspace(): string {
   const directory = mkdtempSync(join(tmpdir(), "flight-deck-render-"));
@@ -39,7 +42,25 @@ function workspace(): string {
   return directory;
 }
 
+/** The one config file the plugin will read, inside this test's XDG root. */
+function globalConfigFile(): string {
+  const directory = join(xdgDirectory!, "opencode");
+  mkdirSync(directory, { recursive: true });
+  return join(directory, "flight-deck.jsonc");
+}
+
+beforeEach(() => {
+  savedXdg = process.env.XDG_CONFIG_HOME;
+  xdgDirectory = workspace();
+  process.env.XDG_CONFIG_HOME = xdgDirectory;
+});
+
 afterEach(() => {
+  // An unset variable must go back to being unset, never the string "undefined".
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+  savedXdg = undefined;
+  xdgDirectory = undefined;
   while (created.length > 0) {
     const directory = created.pop();
     if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
@@ -237,9 +258,8 @@ test("renders the text a user configured, alongside the live rows", async () => 
 });
 
 test("merges the on-disk config file with host options", async () => {
-  const directory = workspace();
   writeFileSync(
-    join(directory, "flight-deck.jsonc"),
+    globalConfigFile(),
     `{
       // file config
       "sidebar": { "lines": ["FILE RAIL"] },
@@ -247,7 +267,7 @@ test("merges the on-disk config file with host options", async () => {
     }`,
   );
 
-  const { context, claims } = harness({ footer: { text: "HOST FOOTER" } }, directory);
+  const { context, claims } = harness({ footer: { text: "HOST FOOTER" } }, workspace());
   flightDeck.setup(context);
 
   const { sidebar, footer } = railClaims(claims);
@@ -257,10 +277,9 @@ test("merges the on-disk config file with host options", async () => {
 });
 
 test("uses the config file alone when the host sends nothing", async () => {
-  const directory = workspace();
-  writeFileSync(join(directory, "flight-deck.jsonc"), `{ "footer": { "text": "FILE ONLY" } }`);
+  writeFileSync(globalConfigFile(), `{ "footer": { "text": "FILE ONLY" } }`);
 
-  const { context, claims } = harness(undefined, directory);
+  const { context, claims } = harness(undefined, workspace());
   flightDeck.setup(context);
 
   const { footer } = railClaims(claims);
@@ -302,8 +321,7 @@ test("summarises additional config problems", async () => {
 });
 
 test("warns and keeps rendering when the config file is broken", async () => {
-  const directory = workspace();
-  writeFileSync(join(directory, "flight-deck.jsonc"), `{ "footer": { "text": }`);
+  writeFileSync(globalConfigFile(), `{ "footer": { "text": }`);
 
   const warnings: string[] = [];
   const original = console.warn;
@@ -314,7 +332,7 @@ test("warns and keeps rendering when the config file is broken", async () => {
   let claims: Claim[] = [];
   let toasts: string[] = [];
   try {
-    const built = harness(undefined, directory, LIVE_SESSION);
+    const built = harness(undefined, workspace(), LIVE_SESSION);
     claims = built.claims;
     toasts = built.toasts;
     await flightDeck.setup(built.context);

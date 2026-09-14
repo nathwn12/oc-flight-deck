@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, resolveConfig } from "../src/tui/config.js";
 import { parseJsonc } from "../src/tui/file-config.js";
 import flightDeck from "../src/tui/index.js";
@@ -10,8 +10,22 @@ import { footerLine, sidebarLines } from "../src/tui/presentation.js";
 
 const root = join(import.meta.dir, "..");
 const created: string[] = [];
+let savedXdg: string | undefined;
+
+beforeEach(() => {
+  // `setup()` reads one global config file, so every test points the lookup at
+  // an empty throwaway directory: the real machine config can never leak in.
+  savedXdg = process.env.XDG_CONFIG_HOME;
+  const xdg = mkdtempSync(join(tmpdir(), "flight-deck-xdg-"));
+  created.push(xdg);
+  process.env.XDG_CONFIG_HOME = xdg;
+});
 
 afterEach(() => {
+  // An unset variable must go back to being unset, never the string "undefined".
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+  savedXdg = undefined;
   while (created.length > 0) {
     const directory = created.pop();
     if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
@@ -21,8 +35,8 @@ afterEach(() => {
 function stubContext(options: Record<string, unknown> = {}) {
   const slots: { readonly path: string; readonly release: () => void }[] = [];
   const memoryCalls: string[] = [];
-  // Point at an empty workspace so the result never depends on a config file
-  // that happens to exist in the repo root.
+  // A workspace for `location.directory`; config isolation comes from the
+  // `$XDG_CONFIG_HOME` the enclosing `beforeEach` points at a throwaway dir.
   const directory = mkdtempSync(join(tmpdir(), "flight-deck-scaffold-"));
   created.push(directory);
   const context = {
@@ -152,7 +166,7 @@ describe("flight deck plugin", () => {
     expect(source).toContain("context.ui.slot");
     expect(source).toContain("context.theme");
     expect(source).toContain("resolveConfig(mergeOptions(file.options, context.options))");
-    expect(source).toContain("loadConfigFile(directory)");
+    expect(source).toContain("loadConfigFile()");
     expect(source).toContain("context.data.session.get");
     expect(source).not.toMatch(/client\.rpc|context\.keymap|context\.storage|server\/|config\//);
     // Reading session state is the whole data surface: nothing is written out.

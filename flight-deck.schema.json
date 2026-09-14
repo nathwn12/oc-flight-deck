@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/nathwn12/oc-flight-deck/flight-deck.schema.json",
   "title": "Flight Deck configuration",
-  "description": "Configuration for the oc-flight-deck TUI plugin. Every key is optional: install the plugin and it works with no config file at all. Copy flight-deck.example.jsonc to flight-deck.jsonc (or .opencode/flight-deck.jsonc) and edit. Comments and trailing commas are allowed. An invalid value is ignored, its default is restored, and a one-time toast names the key to fix — a typo can never break the TUI.",
+  "description": "Configuration for the oc-flight-deck TUI plugin. Every key is optional: install the plugin and it works with no config file at all — a missing file is normal and silent. Copy flight-deck.example.jsonc to the one global path, ~/.config/opencode/flight-deck.jsonc ($XDG_CONFIG_HOME/opencode/flight-deck.jsonc when XDG_CONFIG_HOME is set), and edit; that single file applies to every project. There is no per-project lookup: a flight-deck.jsonc in a project root or in .opencode/ is not read. Comments and trailing commas are allowed. An invalid value is ignored, its default is restored, and a one-time toast names the key to fix — a typo can never break the TUI.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
