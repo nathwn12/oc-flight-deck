@@ -21,7 +21,8 @@ import { startTicker } from "./ticker.js";
 //
 // Appearance comes from, in order of precedence:
 //   1. `context.options` — the host's plugin options, when the host forwards them
-//   2. `flight-deck.jsonc` (or `.opencode/flight-deck.jsonc`) in the project
+//   2. the one global config file, `flight-deck.jsonc` in the opencode
+//      configuration directory
 //   3. the sane defaults in ./config.ts
 // See flight-deck.example.jsonc for the commented template.
 
@@ -49,8 +50,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 export default Plugin.define({
   id: "flight-deck-tui",
   setup(context) {
-    const directory = context.location?.directory ?? process.cwd();
-    const file = loadConfigFile(directory);
+    const file = loadConfigFile();
     const { config, issues } = resolveConfig(mergeOptions(file.options, context.options));
 
     if (file.issue !== undefined && file.source !== undefined) {

@@ -9,12 +9,22 @@
   //  you can see exactly what there is to change. Delete any key and its
   //  default comes straight back.
   //
-  //  TO USE IT: copy this file to `flight-deck.jsonc` at your project root, or
-  //  to `.opencode/flight-deck.jsonc`. Comments and trailing commas are fine.
+  //  TO USE IT: copy this file to `~/.config/opencode/flight-deck.jsonc` (or
+  //  `flight-deck.json` — the `.jsonc` name is tried first), then edit. Comments
+  //  and trailing commas are fine.
   //
-  //  Flight Deck looks in this order and uses the first file it finds:
-  //    .opencode/flight-deck.jsonc   .opencode/flight-deck.json
-  //    flight-deck.jsonc             flight-deck.json
+  //  There is ONE config file, global to your user, so the same values apply to
+  //  every project. Flight Deck does NOT look in a project root or in a
+  //  project's `.opencode/` directory: a copy left there configures nothing.
+  //
+  //  If `$XDG_CONFIG_HOME` is set, the path is
+  //  `$XDG_CONFIG_HOME/opencode/flight-deck.jsonc` instead.
+  //
+  //  The file is optional. Having none is the normal case, and it is silent —
+  //  the defaults below are what you get.
+  //
+  //  Upgrading from 0.4.0? A `flight-deck.jsonc` in a project root or in
+  //  `.opencode/` is no longer read; move it to the global path above.
   //
   //  The same values can also be passed as plugin options in opencode.jsonc /
   //  cli.json, which take precedence on hosts that forward them.
