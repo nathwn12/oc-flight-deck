@@ -94,6 +94,7 @@ interface HarnessExtras {
 function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
   const claims: Claim[] = [];
   const toasts: string[] = [];
+  const counts = { sessionList: 0, modelList: 0 };
   const context = {
     options,
     location: { directory },
@@ -104,11 +105,19 @@ function harness(options: unknown, directory: string, session: unknown = undefin
         vcs: {
           info: () => (extras.branch === undefined ? undefined : { branch: { current: extras.branch } }),
         },
-        model: { list: () => extras.models ?? [] },
+        model: {
+          list: () => {
+            counts.modelList += 1;
+            return extras.models ?? [];
+          },
+        },
       },
       session: {
         get: (id: string) => (id === "ses_test" ? session : extras.children?.[id]),
-        list: () => extras.sessions ?? [],
+        list: () => {
+          counts.sessionList += 1;
+          return extras.sessions ?? [];
+        },
         // An explicit undefined from the knob must survive: `??` would turn it
         // back into the default idle and hide the "host said nothing" case.
         status: (id: string) =>
@@ -121,7 +130,7 @@ function harness(options: unknown, directory: string, session: unknown = undefin
         permission: { list: () => [] },
       },
       // Shell support is optional so its absence can be pinned as well.
-      ...(extras.omitShell === true ? {} : { shell: { listBySession: () => extras.shells ?? [] } }),
+      ...(extras.omitShell === true ? {} : { shell: { list: () => extras.shells ?? [] } }),
     },
     ui: {
       slot: (claim: { append?: string; prepend?: string; render: Render }) => {
@@ -139,7 +148,7 @@ function harness(options: unknown, directory: string, session: unknown = undefin
       },
     },
   };
-  return { context: context as unknown as Parameters<typeof flightDeck.setup>[0], claims, toasts };
+  return { context: context as unknown as Parameters<typeof flightDeck.setup>[0], claims, toasts, counts };
 }
 
 async function frameOf(render: Render, width: number, height: number): Promise<string> {
@@ -372,7 +381,7 @@ test("keeps the glyph turning while a subagent runs, though the parent reads idl
 test("keeps the glyph turning while a shell command runs", async () => {
   const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
     status: () => "idle",
-    shells: [{ status: "running", command: "bun test" }],
+    shells: [{ status: "running", command: "bun test", metadata: { sessionID: "ses_test" } }],
   });
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
@@ -398,7 +407,7 @@ test("finds a running subagent even when a sibling status cannot be read", async
 test("reads idle only when nothing anywhere is running", async () => {
   const { context, claims } = harness(undefined, workspace(), LIVE_SESSION, {
     status: () => "idle",
-    shells: [{ status: "exited", command: "bun test" }],
+    shells: [{ status: "exited", command: "bun test", metadata: { sessionID: "ses_test" } }],
   });
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
@@ -504,6 +513,23 @@ test("the turns row counts prompts, not every message record", async () => {
   expect(frame).not.toContain("turns     5");
 });
 
+test("derives only the rows actually on the rail", async () => {
+  const { context, claims, counts } = harness(
+    { sidebar: { rows: ["agent"], persist: false } },
+    workspace(),
+    LIVE_SESSION,
+  );
+  flightDeck.setup(context);
+
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  expect(frame).toContain("orchestrator");
+  // The rows that were not asked for must not cost a walk of the session
+  // database (`project`) or the model catalog (`context`).
+  expect(counts.sessionList).toBe(0);
+  expect(counts.modelList).toBe(0);
+});
+
 test("a subagent session does not claim its parent's family as its own", async () => {
   // The host keys `family()` by the family root, so asking from a child returns
   // the root and every sibling. Merging that into `cost` would report the whole
@@ -539,4 +565,24 @@ test("a subagent total is still summed for the family root", async () => {
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 8);
   expect(frame).toContain("cost      $0.211 · 1 subagent");
+});
+
+test("reads tps as the whole family's session average", async () => {
+  // The main chat's own 30,000 output tokens plus a subagent's 10,000, over a
+  // minute of session life: 40,000 / 60s = 667 tok/s. The session's average,
+  // not the last turn's rate — the parent alone would read 500 tok/s.
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false } },
+    workspace(),
+    { time: { created: 0, updated: 60_000 }, tokens: { output: 30_000 } },
+    {
+      family: ["ses_test", "ses_child"],
+      children: { ses_child: { tokens: { output: 10_000 } } },
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  expect(frame).toContain("667 tok/s");
+  expect(frame).not.toContain("500 tok/s");
 });

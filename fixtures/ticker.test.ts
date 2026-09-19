@@ -222,4 +222,28 @@ describe("flight deck ticker", () => {
     // collide with another plugin's key.
     expect(TICKER_KEY).toBe("flight-deck.frame");
   });
+
+  // The spinner is the only reason the tick exists, and it is hidden while
+  // nothing is running. When idle the store write is skipped on all but one tick
+  // a second, so the host's reactive graph is not woken for an unchanged picture.
+  test("backs the store write off while nothing is running", async () => {
+    const idle = fakeHost();
+    const idleTicker = startTicker(idle.host, 5, () => false);
+    expect(idleTicker).toBeDefined();
+    await sleep(60);
+    expect(idle.seen.writes).toBe(0);
+    idleTicker?.dispose();
+
+    const busy = fakeHost();
+    const busyTicker = startTicker(busy.host, 5, () => true);
+    expect(busyTicker).toBeDefined();
+    await sleep(60);
+    expect(busy.seen.writes).toBeGreaterThanOrEqual(5);
+
+    // Disposal still stops the timer, not merely the reporting.
+    busyTicker?.dispose();
+    const frozen = busy.seen.writes;
+    await sleep(40);
+    expect(busy.seen.writes).toBe(frozen);
+  });
 });

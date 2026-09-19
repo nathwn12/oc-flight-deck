@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline, statLine, statRows } from "../src/tui/stats.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -176,6 +176,21 @@ describe("flight deck live rows", () => {
   test("reports measured throughput, not an estimate", () => {
     expect(statLine("tps", { tps: 106.3 })).toBe("tps       106 tok/s");
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
+  });
+
+  test("computes overall session throughput, floored at one second", () => {
+    // Nothing to divide: absent, zero or negative on either side.
+    expect(sessionThroughput(0, 10_000)).toBeUndefined();
+    expect(sessionThroughput(-5, 10_000)).toBeUndefined();
+    expect(sessionThroughput(undefined, 10_000)).toBeUndefined();
+    expect(sessionThroughput(600, 0)).toBeUndefined();
+    expect(sessionThroughput(600, -1)).toBeUndefined();
+    expect(sessionThroughput(600, undefined)).toBeUndefined();
+    // A sub-second session is floored at 1000ms, so a sliver of time cannot
+    // flash an absurd rate: 10 tokens over 200ms reads as 10 tok/s, not 50.
+    expect(sessionThroughput(10, 200)).toBe(10);
+    // The ordinary case: 600 tokens over two seconds.
+    expect(sessionThroughput(600, 2_000)).toBe(300);
   });
 
   test("draws recent turn sizes as a sparkline", () => {
