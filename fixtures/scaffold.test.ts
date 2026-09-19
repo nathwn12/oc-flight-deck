@@ -54,7 +54,7 @@ function stubContext(options: Record<string, unknown> = {}) {
         permission: { list: () => [] },
       },
       // Session-scoped shells keep the spinner turning while a command runs.
-      shell: { listBySession: () => [] },
+      shell: { list: () => [] },
     },
     // The animation tick lives in the host's memory store, so the stub provides
     // one the way a real host does: a readable frame plus a mutation that lands
@@ -94,7 +94,7 @@ describe("flight deck plugin", () => {
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
     expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.2" });
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.10" });
     // Deliberate exact pin: a supply-chain guard on the beta we build against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({

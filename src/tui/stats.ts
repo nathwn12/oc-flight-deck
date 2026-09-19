@@ -53,6 +53,11 @@ export interface StatSource {
   /** True when anything is working: this session, a subagent, or a shell. */
   readonly busy?: unknown;
   readonly perms?: unknown;
+  /**
+   * Overall session throughput: output tokens over the session's lifetime,
+   * with subagents summed in. A whole-conversation average, so it reads lower
+   * than a peak per-turn rate.
+   */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;
   readonly turns?: unknown;
@@ -236,6 +241,22 @@ export function formatCount(value: number): string {
 /** Sub-dollar sessions keep a third decimal so a cheap run never reads `$0.00`. */
 export function formatCost(value: number): string {
   return `$${value.toFixed(value < 1 ? 3 : 2)}`;
+}
+
+/**
+ * Overall session throughput: output tokens over the session's lifetime.
+ *
+ * Unlike a per-turn rate, this is the whole conversation's average, so it
+ * includes every subagent and every pause. A just-started session is floored
+ * at one second so it cannot divide by a sliver of time and flash an absurd
+ * rate. Returns `undefined` when there is nothing to divide.
+ */
+export function sessionThroughput(outputTokens: unknown, elapsedMs: unknown): number | undefined {
+  const output = asCount(outputTokens);
+  const elapsed = asCount(elapsedMs);
+  if (output === undefined || output <= 0) return undefined;
+  if (elapsed === undefined || elapsed <= 0) return undefined;
+  return output / (Math.max(elapsed, 1_000) / 1_000);
 }
 
 /** `45s`, `14m`, `2h 14m`. */

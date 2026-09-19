@@ -4,7 +4,7 @@ import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution 
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
-import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
+import { ANIMATED_FIELDS, sessionThroughput, type StatSource } from "./stats.js";
 import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
 
@@ -29,7 +29,7 @@ import { startTicker } from "./ticker.js";
 /** How many trailing messages are inspected for tool parts. */
 const RECENT_MESSAGES = 4;
 
-type SessionLike = { cost?: unknown; model?: unknown; time?: unknown };
+type SessionLike = { cost?: unknown; model?: unknown; time?: unknown; tokens?: unknown };
 
 function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -52,6 +52,12 @@ export default Plugin.define({
   setup(context) {
     const file = loadConfigFile();
     const { config, issues } = resolveConfig(mergeOptions(file.options, context.options));
+
+    // Only the rows actually on the rail are worth deriving: the rail re-runs on
+    // every tick, and a figure nobody asked to see should not cost a walk of the
+    // session database or the model catalog.
+    const rows = config.sidebar.enabled ? new Set(config.sidebar.rows) : new Set<string>();
+    const wants = (name: string): boolean => rows.has(name);
 
     if (file.issue !== undefined && file.source !== undefined) {
       console.warn(`[flight-deck] ${file.issue}`);
@@ -177,10 +183,23 @@ export default Plugin.define({
     //
     // If the host does not report a project id, the unfiltered list is used, so
     // this degrades to the old behaviour instead of showing nothing.
+    // `project` walks every session the host knows about, and that collection grows
+    // with your history rather than staying a handful. It moves slowly, so the walk
+    // is held briefly instead of repeated on every tick.
+    const PROJECT_CACHE_MS = 5_000;
+    let projectCache:
+      | { readonly projectID: string | undefined; readonly at: number; readonly value: { cost: number; count: number } }
+      | undefined;
+
     const projectTotals = (sessionID: string) => {
       try {
-        const sessions = context.data.session.list() ?? [];
         const projectID = asText(asRecord(context.data.session.get(sessionID))?.["projectID"]);
+        const cached = projectCache;
+        if (cached !== undefined && cached.projectID === projectID && Date.now() - cached.at < PROJECT_CACHE_MS) {
+          return cached.value;
+        }
+
+        const sessions = context.data.session.list() ?? [];
         const scoped =
           projectID === undefined
             ? sessions
@@ -188,7 +207,9 @@ export default Plugin.define({
 
         let cost = 0;
         for (const entry of scoped) cost += asCount(asRecord(entry)?.["cost"]) ?? 0;
-        return { cost, count: scoped.length };
+        const value = { cost, count: scoped.length };
+        projectCache = { projectID, at: Date.now(), value };
+        return value;
       } catch {
         return undefined;
       }
@@ -216,12 +237,16 @@ export default Plugin.define({
     // The host's own shell records, which outlive the tool call: a backgrounded
     // command returns its result immediately, so its part settles while the
     // process keeps running. This is the only signal that survives that.
+    //
+    // Shells are listed per LOCATION, not per session, so the session is matched
+    // on the record's own `metadata.sessionID` — the documented shape, rather
+    // than a session-scoped accessor the published API does not carry.
     const shellsOf = (sessionID: string): readonly unknown[] => {
       try {
-        const shellApi = context.data.shell as unknown as
-          | { listBySession?: (id: string) => readonly unknown[] }
-          | undefined;
-        return shellApi?.listBySession?.(sessionID) ?? [];
+        const shells = context.data.shell.list(locationOf()) ?? [];
+        return shells.filter(
+          (entry) => asText(asRecord(asRecord(entry)?.["metadata"])?.["sessionID"]) === sessionID,
+        );
       } catch {
         return [];
       }
@@ -292,38 +317,53 @@ export default Plugin.define({
       }
 
       try {
-        // `listBySession` is on the reactive client the host hands the plugin,
-        // but not on every published type surface, so it is reached defensively:
-        // a host without it still falls back to the session's own status.
-        const shellApi = context.data.shell as unknown as
-          | { listBySession?: (id: string) => readonly unknown[] }
-          | undefined;
-        const shells = shellApi?.listBySession?.(sessionID);
-        if (shells !== undefined && shells.some((entry) => asRecord(entry)?.status === "running")) return true;
+        if (shellsOf(sessionID).some((entry) => asRecord(entry)?.["status"] === "running")) return true;
       } catch {
-        // Same again: unreadable shells just mean no shell signal.
+        // Unreadable shells just mean no shell signal.
       }
 
       return status === undefined ? undefined : false;
     };
 
-    // Throughput of the last completed turn. The host records when streaming
-    // finished, so this is measured rather than estimated from wall-clock.
-    const lastTps = (sessionID: string): number | undefined => {
-      const messages = messagesOf(sessionID);
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = asRecord(messages[index]);
-        const tokens = asRecord(message?.tokens);
-        const output = asCount(tokens?.output);
-        const time = asRecord(message?.time);
-        const created = asCount(time?.created);
-        const streamed = asCount(time?.streamed);
-        if (output === undefined || created === undefined || streamed === undefined) continue;
-        const duration = streamed - created;
-        if (duration <= 0) continue;
-        return output / (duration / 1_000);
+    // Overall session throughput: every output token the conversation has
+    // produced, divided by how long the session has been alive. Subagents run as
+    // separate sessions, so their output is summed in — this is the whole
+    // session's rate, not the main chat's last turn. Measured from the session's
+    // own clock (`time.updated`, falling back to now) so a finished session
+    // settles on a stable figure instead of decaying as it sits on screen.
+    const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
+      const time = asRecord(session?.time);
+      const created = asCount(time?.["created"]);
+      if (created === undefined) return undefined;
+      const updated = asCount(time?.["updated"]);
+      const end = updated === undefined ? Date.now() : Math.min(Date.now(), updated);
+      const elapsed = end - created;
+      if (elapsed <= 0) return undefined;
+
+      const own = asCount(asRecord(session?.tokens)?.["output"]);
+      let output = own;
+      // Only a family root owns the tree beneath it; a child asking `family()`
+      // gets its ancestors and siblings too, so it keeps its own figure.
+      if (isFamilyRoot(sessionID)) {
+        try {
+          const ids = context.data.session.family(sessionID) ?? [];
+          if (ids.length > 1) {
+            let total = 0;
+            let sawOne = false;
+            for (const id of ids) {
+              const member = context.data.session.get(id) as SessionLike | undefined;
+              const out = asCount(asRecord(member?.tokens)?.["output"]);
+              if (out === undefined) continue;
+              total += out;
+              sawOne = true;
+            }
+            if (sawOne) output = total;
+          }
+        } catch {
+          // No family on this host: the session's own tokens still stand.
+        }
       }
-      return undefined;
+      return sessionThroughput(output, elapsed);
     };
 
     // Recent turn sizes, oldest first. Drawn from messages the host already
@@ -349,7 +389,8 @@ export default Plugin.define({
     const animated =
       config.sidebar.enabled &&
       config.sidebar.rows.some((name) => (ANIMATED_FIELDS as readonly string[]).includes(name));
-    const ticker = startTicker(context, animated ? config.refresh : 0);
+    let spinnerNeeded = false;
+    const ticker = startTicker(context, animated ? config.refresh : 0, () => spinnerNeeded);
 
     // The guard row is opt-in and polls its own RPC: starting the bridge only
     // when the row is on the rail means no timer and no request for a row
@@ -397,24 +438,31 @@ export default Plugin.define({
     const snapshot = (sessionID: string): StatSource => {
       const location = locationOf();
       const session = context.data.session.get(sessionID) as SessionLike | undefined;
+      const isBusy = busy(sessionID);
+      // The fast tick exists for the spinner, and the spinner is only drawn while
+      // something is moving. Everything else on the rail reads in seconds.
+      spinnerNeeded = wants("status") && isBusy === true;
+
       // A "turn" is one prompt and the work it caused. The host's message list
       // also carries system, shell and switch records, so counting records
       // reports several times the turns actually taken.
-      const turns = messagesOf(sessionID).filter((entry) => asRecord(entry)?.["type"] === "user").length;
+      const turns = wants("turns")
+        ? messagesOf(sessionID).filter((entry) => asRecord(entry)?.["type"] === "user").length
+        : undefined;
 
       return {
         ...session,
-        caution: announce(sessionID),
-        branch: branchOf(location),
-        tree: treeTotals(sessionID, session?.cost),
-        context: contextUsage(sessionID, session?.model),
-        project: projectTotals(sessionID),
-        status: statusOf(sessionID),
-        busy: busy(sessionID),
-        perms: permsOf(sessionID),
-        tps: lastTps(sessionID),
-        spark: sparkValues(sessionID),
-        elapsedMs: sessionElapsed(session),
+        caution: wants("caution") ? announce(sessionID) : undefined,
+        branch: wants("branch") ? branchOf(location) : undefined,
+        tree: wants("cost") || wants("total") ? treeTotals(sessionID, session?.cost) : undefined,
+        context: wants("context") ? contextUsage(sessionID, session?.model) : undefined,
+        project: wants("project") ? projectTotals(sessionID) : undefined,
+        status: wants("status") ? statusOf(sessionID) : undefined,
+        busy: isBusy,
+        perms: wants("perms") ? permsOf(sessionID) : undefined,
+        tps: wants("tps") ? sessionTps(sessionID, session) : undefined,
+        spark: wants("spark") ? sparkValues(sessionID) : undefined,
+        elapsedMs: wants("elapsed") ? sessionElapsed(session) : undefined,
         turns,
         guard: bridge?.status,
         // Read the tick inside the render so the host registers a dependency on

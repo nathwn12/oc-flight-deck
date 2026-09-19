@@ -22,7 +22,7 @@ tokens     533k in · 91k out
 cache      98% hit · 32M read
 context    ██░░░░░░░░ 18%
 elapsed    2h 14m
-tps        106 tok/s
+tps        18 tok/s
 spark      ▁▃▂▅█▄▃▂
 ```
 
@@ -54,7 +54,7 @@ learn. The panel appears beside an open session and starts reading.
 | `context` | A gauge of how full the window is. |
 | `perms` | What is waiting for approval, not just how many. |
 | `elapsed` | How long you've been at it. |
-| `tps` | Output tokens per second, measured from the last completed turn. |
+| `tps` | Overall session throughput: every output token over the session's life, subagents included. A whole-conversation average, so it reads lower than a peak rate. |
 | `spark` | Recent turn sizes as a shape. Available, off by default. |
 | `reasoning` | Reasoning tokens, when the model emits them. Available, off by default. |
 | `turns` | How many prompts you have sent this session. Available, off by default. |
@@ -183,7 +183,9 @@ all you get exactly the defaults written out below.
 ```jsonc
 {
   // Tick rate in ms. The spinner has ten frames, so 100 turns it once a
-  // second. 0 turns the timer off entirely.
+  // second. 0 turns the timer off entirely. While nothing is running the
+  // tick backs off to about once a second — the spinner is hidden then, and
+  // the clock only reads in whole seconds.
   "refresh": 100,
 
   "sidebar": {
@@ -282,7 +284,7 @@ Built on the official
 
 ## Compatibility
 
-Built against `@opencode/plugin` `2.0.2`; pin a host version you've tested.
+Built against `@opencode/plugin` `2.0.10`; pin a host version you've tested.
 
 Requires OpenCode V2 (`opencode2`). Building from source needs Bun 1.4+ or
 Node 22+.

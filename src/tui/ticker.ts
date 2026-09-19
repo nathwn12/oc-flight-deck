@@ -20,6 +20,11 @@
 // this plugin, gone when the TUI exits. Not the durable store, not a session,
 // not a file, not the network.
 //
+// The tick serves the spinner first, but the spinner is only drawn while work
+// is happening. When nothing is moving the store is written about once a second
+// instead of on every interval — see `IDLE_REFRESH_MS` — so the host's reactive
+// graph is woken a tenth as often for a picture that has not changed.
+//
 // The host is a beta and its store is reached across a version boundary, so
 // everything about it is validated at runtime and every failure path degrades to
 // "no ticker" rather than raising into the TUI.
@@ -64,6 +69,17 @@ export interface Ticker {
 /** Namespaced so it cannot collide with another plugin's memory keys. */
 export const TICKER_KEY = "flight-deck.frame";
 
+/**
+ * How often the frame still advances while nothing is moving.
+ *
+ * The spinner needs ~10 frames a second, but it is only drawn while work is
+ * happening. When idle, only `elapsed` and the annunciator still need a tick,
+ * and both read in whole seconds — so the host renderer is woken once a second
+ * instead of ten times. The timer itself keeps firing (cheap); it is the store
+ * write, which wakes the host's reactive graph, that is skipped.
+ */
+export const IDLE_REFRESH_MS = 1_000;
+
 // Untrusted store values are normalised here rather than at the render, so a
 // corrupt frame can never reach the spinner's array index.
 function readFrame(store: FrameStore | undefined): number {
@@ -96,7 +112,11 @@ function openStore(storage: NonNullable<TickerHost["storage"]>): { store: FrameS
  * on host events, which is exactly how it behaved before the ticker was fixed.
  * Degrading quietly keeps a cosmetic panel from ever breaking the TUI.
  */
-export function startTicker(host: TickerHost | undefined, intervalMs: number): Ticker | undefined {
+export function startTicker(
+  host: TickerHost | undefined,
+  intervalMs: number,
+  isBusy: () => boolean = () => true,
+): Ticker | undefined {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) return undefined;
 
   const storage = host?.storage;
@@ -105,7 +125,23 @@ export function startTicker(host: TickerHost | undefined, intervalMs: number): T
   const opened = openStore(storage);
   if (opened === undefined) return undefined;
 
+  const idleEvery = Math.max(1, Math.round(IDLE_REFRESH_MS / intervalMs));
+  let ticks = 0;
+
   let timer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+    ticks += 1;
+
+    // A broken busy predicate must never freeze the spinner, so it degrades to
+    // "busy" rather than propagating.
+    let busy = true;
+    try {
+      busy = isBusy();
+    } catch {
+      busy = true;
+    }
+    // While idle, skip the store write on all but every `idleEvery`th tick.
+    if (!busy && ticks % idleEvery !== 0) return;
+
     try {
       opened.update((draft) => {
         draft.frame = readFrame(draft) + 1;

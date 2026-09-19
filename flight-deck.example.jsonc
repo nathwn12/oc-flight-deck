@@ -39,6 +39,10 @@
   // `elapsed` plus the spinner are the reason this exists. Without a tick they
   // would sit frozen between turns.
   //
+  // While nothing is running the tick backs off to about once a second: the
+  // spinner is hidden then, and `elapsed` only reads in whole seconds, so the
+  // host's renderer is woken a tenth as often for the same picture.
+  //
   //    100  default — the spinner turns once a second, the clock stays live
   //     50  twice as lively, still negligible work per tick
   //   1000  a calm wall-clock tick, but the spinner visibly stutters
@@ -78,7 +82,9 @@
     //   context    a gauge of how full the context window is
     //   perms      what is waiting for approval, not just how many
     //   elapsed    wall-clock time since the session started
-    //   tps        output tokens per second on the last completed turn
+    //   tps        overall session throughput: output tokens over the
+    //              session's life, subagents included (an average, so it
+    //              reads lower than a peak rate)
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session
