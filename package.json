@@ -1,6 +1,6 @@
 {
   "name": "oc-flight-deck",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Live OpenCode V2 session telemetry — agent, model, branch, cost, tokens, cache hit rate and context usage in your sidebar.",
   "keywords": [
     "opencode",

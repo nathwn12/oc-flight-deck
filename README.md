@@ -54,7 +54,7 @@ learn. The panel appears beside an open session and starts reading.
 | `context` | A gauge of how full the window is. |
 | `perms` | What is waiting for approval, not just how many. |
 | `elapsed` | How long you've been at it. |
-| `tps` | Overall session throughput: every output token over the session's life, subagents included. A whole-conversation average, so it reads lower than a peak rate. |
+| `tps` | Current speed: output tokens in the last 60 seconds, divided by that window, subagents included. Idle longer than the window and it hides — the `status` row already says `idle`. On a host that exposes no per-message timestamps it falls back to the lifetime average, which reads lower than a peak per-turn rate. Fixed at 60 s, not configurable. |
 | `spark` | Recent turn sizes as a shape. Available, off by default. |
 | `reasoning` | Reasoning tokens, when the model emits them. Available, off by default. |
 | `turns` | How many prompts you have sent this session. Available, off by default. |

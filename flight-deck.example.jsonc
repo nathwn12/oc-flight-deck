@@ -82,9 +82,10 @@
     //   context    a gauge of how full the context window is
     //   perms      what is waiting for approval, not just how many
     //   elapsed    wall-clock time since the session started
-    //   tps        overall session throughput: output tokens over the
-    //              session's life, subagents included (an average, so it
-    //              reads lower than a peak rate)
+    //   tps        current speed: output tokens in the last 60 seconds,
+    //              subagents included. Hides while idle longer than the
+    //              window; falls back to the session's lifetime average on
+    //              hosts with no per-message timestamps
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session

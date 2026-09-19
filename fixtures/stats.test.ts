@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows } from "../src/tui/stats.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, TPS_WINDOW_MS, windowedThroughput } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -193,6 +193,11 @@ describe("flight deck live rows", () => {
     expect(sessionThroughput(600, 2_000)).toBe(300);
   });
 
+  test("hides the tps row rather than printing a zero rate", () => {
+    expect(statLine("tps", { tps: 0 })).toBeUndefined();
+    expect(statLine("tps", { tps: Number.NaN })).toBeUndefined();
+  });
+
   test("draws recent turn sizes as a sparkline", () => {
     expect(sparkline([])).toBe("");
     expect(sparkline([0, 0])).toBe("▁▁");
@@ -270,3 +275,78 @@ describe("host text is flattened before it is drawn", () => {
     expect(statLine("caution", { caution: "⚠ sh\u0007ell running" })).toBe("caution   ⚠ sh ell running");
   });
 });
+
+// The windowed rate is the whole point of the tps row on a modern host: a single
+// trailing minute rather than a whole-conversation average. These pin the
+// arithmetic, the clamp that keeps a fresh session honest, and the guards that
+// make an idle window report nothing at all rather than a decaying number.
+describe("windowed throughput", () => {
+  const NOW = 1_800_000_000_000;
+  const LONG_AGO = NOW - 600_000;
+
+  test("returns undefined when nothing usable is inside the window", () => {
+    expect(windowedThroughput([], NOW, TPS_WINDOW_MS, LONG_AGO)).toBeUndefined();
+    // Older than the window is not a zero rate: it is no rate at all, which is
+    // what hides the row of an idle session.
+    expect(
+      windowedThroughput([{ tokens: 500, at: NOW - TPS_WINDOW_MS - 1 }], NOW, TPS_WINDOW_MS, LONG_AGO),
+    ).toBeUndefined();
+  });
+
+  test("sums only the output inside a settled window", () => {
+    const samples = [
+      { tokens: 120, at: NOW - 5_000 },
+      { tokens: 180, at: NOW - 55_000 },
+      // Outside the window: must not inflate the rate.
+      { tokens: 9_999, at: NOW - TPS_WINDOW_MS - 1 },
+    ];
+    // 300 tokens over a full 60s window.
+    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(5);
+  });
+
+  test("clamps a fresh session's denominator to its real age", () => {
+    // Alive two seconds, so 100 tokens reads as 50 tok/s, not 1.67.
+    expect(windowedThroughput([{ tokens: 100, at: NOW - 500 }], NOW, TPS_WINDOW_MS, NOW - 2_000)).toBe(50);
+    // A sub-second session is floored at one second, the same floor the lifetime
+    // average uses, so a sliver of time cannot flash an absurd rate.
+    expect(windowedThroughput([{ tokens: 10, at: NOW - 100 }], NOW, TPS_WINDOW_MS, NOW - 200)).toBe(10);
+  });
+
+  test("uses the full window when the session age is unusable", () => {
+    expect(windowedThroughput([{ tokens: 60, at: NOW - 1_000 }], NOW, TPS_WINDOW_MS, Number.NaN)).toBe(1);
+  });
+
+  test("rejects a window or clock it cannot trust", () => {
+    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, 0, LONG_AGO)).toBeUndefined();
+    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, -1, LONG_AGO)).toBeUndefined();
+    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, Number.NaN, LONG_AGO)).toBeUndefined();
+    expect(windowedThroughput([{ tokens: 10, at: NOW }], Number.NaN, TPS_WINDOW_MS, LONG_AGO)).toBeUndefined();
+  });
+
+  test("skips a sample with no usable timestamp or no positive output", () => {
+    const samples = [
+      { tokens: 120, at: NOW - 1_000 },
+      { tokens: 120 }, // no timestamp at all
+      { at: NOW - 1_000 }, // no token count
+      { tokens: 0, at: NOW - 1_000 },
+      { tokens: -5, at: NOW - 1_000 },
+      { tokens: 120, at: "not a number" },
+      { tokens: 120, at: Number.NaN },
+      { tokens: 120, at: Number.POSITIVE_INFINITY },
+    ];
+    // Only the first sample counts: 120 over a full window is 2 tok/s.
+    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(2);
+  });
+
+  test("counts both window boundaries as inside", () => {
+    const start = NOW - TPS_WINDOW_MS;
+    const samples = [
+      { tokens: 60, at: start },
+      { tokens: 60, at: NOW },
+      { tokens: 60, at: start - 1 }, // one millisecond too old
+      { tokens: 60, at: NOW + 1 }, // one millisecond into the future
+    ];
+    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(2);
+  });
+});
+
