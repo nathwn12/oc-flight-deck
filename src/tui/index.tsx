@@ -4,7 +4,7 @@ import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution 
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
-import { ANIMATED_FIELDS, sessionThroughput, type StatSource } from "./stats.js";
+import { ANIMATED_FIELDS, sessionThroughput, TPS_WINDOW_MS, windowedThroughput, type StatSource, type ThroughputSample } from "./stats.js";
 import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
 
@@ -30,6 +30,16 @@ import { startTicker } from "./ticker.js";
 const RECENT_MESSAGES = 4;
 
 type SessionLike = { cost?: unknown; model?: unknown; time?: unknown; tokens?: unknown };
+
+/** What one session's message list contributes to a throughput window. */
+interface TpsScan {
+  /** False only when the host refused to list the session's messages. */
+  readonly ok: boolean;
+  /** Assistant messages seen, whether or not they carried a timestamp. */
+  readonly assistant: number;
+  /** Samples that carried a usable timestamp. */
+  readonly samples: readonly ThroughputSample[];
+}
 
 function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -325,16 +335,65 @@ export default Plugin.define({
       return status === undefined ? undefined : false;
     };
 
-    // Overall session throughput: every output token the conversation has
-    // produced, divided by how long the session has been alive. Subagents run as
-    // separate sessions, so their output is summed in — this is the whole
-    // session's rate, not the main chat's last turn. Measured from the session's
-    // own clock (`time.updated`, falling back to now) so a finished session
-    // settles on a stable figure instead of decaying as it sits on screen.
-    const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
-      const time = asRecord(session?.time);
-      const created = asCount(time?.["created"]);
-      if (created === undefined) return undefined;
+    // Overall session throughput, from two sources chosen by host capability and
+    // never by the moment. A host that stamps its messages gets a trailing-window
+    // rate — output tokens over the last minute, subagents summed in — so the
+    // figure reflects current speed rather than a whole-conversation average. A
+    // host proven to expose no message timestamps uses the lifetime average.
+    //
+    // The capability is learned once and remembered for the process. `undefined`
+    // means "not yet known": a read that failed, or carried no assistant turns,
+    // tells us nothing and must not choose a metric. Once known it is sticky in
+    // BOTH directions, so a transient `message.list` failure can never flip a
+    // stamped host back to the lifetime average (nor an unstamped host off it) —
+    // a failure just hides the row. One value for the whole host, deliberately
+    // not keyed by session.
+    //
+    // The rail re-runs on the fast tick, and walking every family message for
+    // every session would repeat the same work fifty times a second, so the
+    // result is held briefly. `undefined` is cached too: an idle window must not
+    // be re-derived on each tick either.
+    const TPS_CACHE_MS = 1_000;
+    let hostStamps: boolean | undefined;
+    let tpsCache:
+      | { readonly sessionID: string; readonly at: number; readonly value: number | undefined }
+      | undefined;
+
+    const scanMessages = (id: string): TpsScan => {
+      let messages: readonly unknown[];
+      try {
+        messages = context.data.session.message.list(id) ?? [];
+      } catch {
+        // A refused read is not "this host has no messages".
+        return { ok: false, assistant: 0, samples: [] };
+      }
+      const samples: ThroughputSample[] = [];
+      let assistant = 0;
+      for (const entry of messages) {
+        const message = asRecord(entry);
+        if (message?.["type"] !== "assistant") continue;
+        assistant += 1;
+        const stamp = asRecord(message["time"]);
+        const at =
+          asCount(stamp?.["completed"]) ?? asCount(stamp?.["streamed"]) ?? asCount(stamp?.["created"]);
+        // "Stamped" depends only on the timestamp, never on the output count: a
+        // batch of zero-output assistant turns still proves the host stamps.
+        if (at === undefined) continue;
+        samples.push({ tokens: asRecord(message["tokens"])?.["output"], at });
+      }
+      return { ok: true, assistant, samples };
+    };
+
+    // The lifetime average, the metric of last resort for a host that exposes no
+    // per-message timestamps. Measured from the session's own clock
+    // (`time.updated`, falling back to now) so a finished session settles on a
+    // stable figure instead of decaying as it sits on screen.
+    const lifetimeTps = (
+      sessionID: string,
+      session: SessionLike | undefined,
+      created: number,
+      time: Record<string, unknown> | undefined,
+    ): number | undefined => {
       const updated = asCount(time?.["updated"]);
       const end = updated === undefined ? Date.now() : Math.min(Date.now(), updated);
       const elapsed = end - created;
@@ -364,6 +423,63 @@ export default Plugin.define({
         }
       }
       return sessionThroughput(output, elapsed);
+    };
+
+    const computeTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
+      const time = asRecord(session?.time);
+      const created = asCount(time?.["created"]);
+      if (created === undefined) return undefined;
+
+      // A host proven unstamped needs no message read at all: its metric is the
+      // lifetime average whether or not the read would have succeeded.
+      if (hostStamps === false) return lifetimeTps(sessionID, session, created, time);
+
+      // Timestamped assistant output this session has produced, plus — only from
+      // a family root — every subagent session's. A child asking `family()` gets
+      // its ancestors and siblings back, so it keeps its own samples.
+      const scans: TpsScan[] = [scanMessages(sessionID)];
+      if (isFamilyRoot(sessionID)) {
+        try {
+          for (const id of context.data.session.family(sessionID) ?? []) {
+            if (id !== sessionID) scans.push(scanMessages(id));
+          }
+        } catch {
+          // No family on this host: the session's own samples still stand.
+        }
+      }
+
+      const samples: ThroughputSample[] = [];
+      let assistant = 0;
+      let readOk = false;
+      for (const scan of scans) {
+        samples.push(...scan.samples);
+        assistant += scan.assistant;
+        readOk = readOk || scan.ok;
+      }
+
+      if (hostStamps === undefined) {
+        // A stamped assistant turn proves the host stamps. Assistant turns with
+        // no timestamp prove it does not. Neither, and the capability stays
+        // unknown so the row hides rather than guessing a metric.
+        if (samples.length > 0) hostStamps = true;
+        else if (readOk && assistant > 0) hostStamps = false;
+        else return undefined;
+      }
+
+      if (hostStamps === true) {
+        return windowedThroughput(samples, Date.now(), TPS_WINDOW_MS, created);
+      }
+      return lifetimeTps(sessionID, session, created, time);
+    };
+
+    const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
+      const cached = tpsCache;
+      if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
+        return cached.value;
+      }
+      const value = computeTps(sessionID, session);
+      tpsCache = { sessionID, at: Date.now(), value };
+      return value;
     };
 
     // Recent turn sizes, oldest first. Drawn from messages the host already
