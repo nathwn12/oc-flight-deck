@@ -56,12 +56,12 @@ export interface CautionConfig {
   /**
    * Tools that are slow by nature, so "slow" is not an anomaly for them.
    *
-   * Calibrated against 53,672 real settled tool calls: at a 180-second watch
-   * threshold, 307 calls exceed it — and 218 of those are these tools.
+   * Calibrated against 54,218 real settled tool calls: at a 180-second watch
+   * threshold, 307 calls exceed it — and 200 of those are these tools.
    * `subagent` alone accounts for 152, with a p99 of 14.7 minutes. A delegated
    * agent running a quarter of an hour is working as designed, and an
    * annunciator that lights on every delegation is one you learn to ignore.
-   * With these exempt, 0.16% of real calls cross the threshold.
+   * With these exempt, 0.20% of real calls cross the threshold.
    *
    * Matching is by exact tool name. Add your own long-running tools.
    */
