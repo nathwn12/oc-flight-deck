@@ -118,7 +118,7 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
-          "description": "Tools that are slow by nature, so slow is not an anomaly for them. Matched by exact name. Calibrated against 53,672 real tool calls: at the default threshold 307 calls exceed it and 218 of those are these tools — `subagent` alone crossed 152 times with a p99 of 14.7 minutes. Without this list the annunciator lights on every delegated task, which is how an alert gets ignored. Add your own long-running or orchestration tools here."
+          "description": "Tools that are slow by nature, so slow is not an anomaly for them. Matched by exact name. Calibrated against 54,218 real settled tool calls: at the default threshold 307 calls exceed it and 200 of those are these tools — `subagent` alone crossed 152 times with a p99 of 14.7 minutes. Without this list the annunciator lights on every delegated task, which is how an alert gets ignored. Add your own long-running or orchestration tools here."
         },
         "toast": {
           "type": "boolean",
