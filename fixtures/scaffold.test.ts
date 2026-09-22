@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, resolveConfig } from "../src/tui/config.js";
 import { parseJsonc } from "../src/tui/file-config.js";
+import { STAT_FIELDS } from "../src/tui/stats.js";
 import flightDeck from "../src/tui/index.js";
 import { footerLine, sidebarLines } from "../src/tui/presentation.js";
 
@@ -94,7 +95,7 @@ describe("flight deck plugin", () => {
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
     expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.10" });
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.12" });
     // Deliberate exact pin: a supply-chain guard on the beta we build against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({
@@ -116,8 +117,8 @@ describe("flight deck plugin", () => {
     // A committed `"plugins": ["."]` makes the repo declare the plugin while it
     // may also be installed globally, which registers the same plugin id twice
     // and shows one of them as failed in the host's plugin list. Loading from
-    // source is a per-developer choice, documented in "## Development" in the
-    // README, not a property of the repo.
+    // source is a per-developer choice, documented in the README's Development
+    // section, not a property of the repo.
     expect(existsSync(join(root, "opencode.jsonc"))).toBe(false);
     expect(existsSync(join(root, "flight-deck.example.jsonc"))).toBe(true);
 
@@ -127,14 +128,28 @@ describe("flight deck plugin", () => {
       expect(existsSync(join(root, ...gone.split("/")))).toBe(false);
     }
 
-    // The public README installs and configures the plugin without leaking a
-    // specific development machine.
+    // The public README installs and configures the plugin, documents every
+    // row it can render, and never leaks a specific development machine.
+    // Headings are the README's own business, so these assert the substance a
+    // reader acts on: the plugin entry, the restart, the one config file's
+    // real path, and the official API link.
     const readme = await readFile(join(root, "README.md"), "utf8");
-    expect(readme).toContain("## Install");
-    expect(readme).toContain("## Configuration");
-    expect(readme).toContain("oc-flight-deck");
+    expect(readme).toMatch(/"plugins"\s*:\s*\[\s*"oc-flight-deck"\s*\]/);
+    expect(readme).toMatch(/\brestart\b/i);
     expect(readme).toContain("flight-deck.jsonc");
+    expect(readme).toContain("~/.config/opencode/flight-deck.jsonc");
+    expect(readme).toContain("XDG_CONFIG_HOME");
     expect(readme).toContain("https://opencode.ai/v2/docs/build/plugins/cli");
+    // Every row the code can render has to stay named in the README. A summary
+    // table that lists only the default rows is exactly how `spark`,
+    // `reasoning`, `turns`, `total`, and `guard` vanished from the docs before
+    // while this guard stayed green.
+    for (const field of STAT_FIELDS) {
+      expect(readme).toContain(`\`${field}\``);
+    }
+    // Loading from source is a per-developer choice, so the README has to keep
+    // saying how: the plugin entry names a git file URL, never a bare path.
+    expect(readme).toContain("git+file://");
     expect(readme).not.toContain("Q:\\");
     expect(readme).not.toContain("Q:/");
 
