@@ -171,7 +171,7 @@ Built on the official [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/b
 
 | | |
 |---|---|
-| Built against | `@opencode/plugin` `2.0.12` — pin a host version you've tested |
+| Built against | `@opencode/plugin` `2.0.16` — pin a host version you've tested |
 | Host | OpenCode V2 (`opencode2`) |
 | Building from source | Node ≥ 22 or Bun ≥ 1.4 |
 | Writes | In-memory counters only — the animation tick, plus the `guard` row's polled status when `guard` is on; nothing to disk |
@@ -180,7 +180,7 @@ Built on the official [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/b
 
 <div align="center">
 
-Built against `@opencode/plugin` 2.0.12 · Node ≥ 22 / Bun ≥ 1.4 · OpenCode V2
+Built against `@opencode/plugin` 2.0.16 · Node ≥ 22 / Bun ≥ 1.4 · OpenCode V2
 
 **MIT © 2026 nathwn12** · For OpenCode. Free.
 

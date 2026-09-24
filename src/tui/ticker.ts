@@ -54,7 +54,7 @@ export interface TickerHost {
   };
 }
 
-export interface Ticker {
+interface Ticker {
   /**
    * Current frame, read from the host's store.
    *
@@ -78,7 +78,7 @@ export const TICKER_KEY = "flight-deck.frame";
  * instead of ten times. The timer itself keeps firing (cheap); it is the store
  * write, which wakes the host's reactive graph, that is skipped.
  */
-export const IDLE_REFRESH_MS = 1_000;
+const IDLE_REFRESH_MS = 1_000;
 
 // Untrusted store values are normalised here rather than at the render, so a
 // corrupt frame can never reach the spinner's array index.

@@ -4,9 +4,13 @@ import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution 
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
-import { ANIMATED_FIELDS, sessionThroughput, TPS_WINDOW_MS, windowedThroughput, type StatSource, type ThroughputSample } from "./stats.js";
+import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
 import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
+import { asCount, asRecord, type SessionLike } from "./coerce.js";
+import { createProjectTotals } from "./project-totals.js";
+import { createSessionReads, locationOf } from "./session-reads.js";
+import { createTpsReader } from "./session-tps.js";
 
 // Flight Deck is a read-only instrument panel for the OpenCode V2 CLI/TUI. It
 // shows the open session's agent, model, branch, cost, tokens, and cache hit
@@ -25,37 +29,6 @@ import { startTicker } from "./ticker.js";
 //      configuration directory
 //   3. the sane defaults in ./config.ts
 // See flight-deck.example.jsonc for the commented template.
-
-/** How many trailing messages are inspected for tool parts. */
-const RECENT_MESSAGES = 4;
-
-type SessionLike = { cost?: unknown; model?: unknown; time?: unknown; tokens?: unknown };
-
-/** What one session's message list contributes to a throughput window. */
-interface TpsScan {
-  /** False only when the host refused to list the session's messages. */
-  readonly ok: boolean;
-  /** Assistant messages seen, whether or not they carried a timestamp. */
-  readonly assistant: number;
-  /** Samples that carried a usable timestamp. */
-  readonly samples: readonly ThroughputSample[];
-}
-
-function asCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function asText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  return text.length === 0 ? undefined : text;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 export default Plugin.define({
   id: "flight-deck-tui",
@@ -85,195 +58,22 @@ export default Plugin.define({
     const footer = footerLine(config);
     const releases: Array<() => void> = [];
 
-    // The host owns these caches; a failure to read one must never break the
-    // rail, so every lookup degrades to "no data" instead of throwing.
-    const messagesOf = (sessionID: string): readonly unknown[] => {
-      try {
-        return context.data.session.message.list(sessionID) ?? [];
-      } catch {
-        return [];
-      }
-    };
+    const reads = createSessionReads(context);
+    const {
+      messagesOf,
+      isFamilyRoot,
+      treeTotals,
+      contextUsage,
+      sessionElapsed,
+      statusOf,
+      recentParts,
+      shellsOf,
+      lastActivity,
+      permsOf,
+      busy,
+    } = reads;
 
-    // A subagent session is already inside its parent's family total, and the
-    // host keys `family()` by the family ROOT — so asking from a child returns
-    // its ancestors and siblings as well. Merging that would report the whole
-    // tree as this conversation's own, under a label that promises the
-    // conversation plus *its* subagents. Only a root has a family beneath it.
-    const isFamilyRoot = (sessionID: string): boolean => {
-      try {
-        return context.data.session.root(sessionID) === sessionID;
-      } catch {
-        // A host without `root` keeps the previous behaviour rather than
-        // silently dropping everyone's subagent total.
-        return true;
-      }
-    };
-
-    // Subagent sessions are separate sessions, and the parent's `cost` does not
-    // include them, so a bare `cost` row understates a swarm. Sum the family.
-    const treeTotals = (sessionID: string, ownCost: unknown) => {
-      if (!isFamilyRoot(sessionID)) return undefined;
-
-      let ids: readonly string[];
-      try {
-        ids = context.data.session.family(sessionID) ?? [sessionID];
-      } catch {
-        return undefined;
-      }
-      if (ids.length <= 1) return undefined;
-
-      let cost = asCount(ownCost) ?? 0;
-      let count = 0;
-      for (const id of ids) {
-        if (id === sessionID) continue;
-        const child = context.data.session.get(id) as SessionLike | undefined;
-        if (child === undefined) continue;
-        count += 1;
-        cost += asCount(child.cost) ?? 0;
-      }
-      return count === 0 ? undefined : { cost, count };
-    };
-
-    // A message's own totals are per-request, so the last assistant message's
-    // prompt size *is* the current context occupancy — not a running total.
-    const contextUsage = (sessionID: string, model: unknown) => {
-      const messages = messagesOf(sessionID);
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const tokens = asRecord(asRecord(messages[index])?.tokens);
-        const input = asCount(tokens?.input);
-        if (tokens === undefined || input === undefined) continue;
-        const cache = asRecord(tokens.cache);
-        const used = input + (asCount(cache?.read) ?? 0) + (asCount(cache?.write) ?? 0);
-        if (used === 0) return undefined;
-        return { used, limit: contextLimit(model) };
-      }
-      return undefined;
-    };
-
-    // The window lives at `limit.context` on the catalog entry, and two
-    // providers can expose the same model id with different windows — so the
-    // provider has to match too, or the gauge would read the wrong ceiling.
-    const contextLimit = (model: unknown): number | undefined => {
-      const ref = asRecord(model);
-      const id = ref?.id;
-      const providerID = ref?.providerID;
-      if (typeof id !== "string") return undefined;
-      try {
-        const location = context.location ?? context.data.location.default();
-        for (const entry of context.data.location.model.list(location) ?? []) {
-          const record = asRecord(entry);
-          if (record === undefined || record.id !== id) continue;
-          if (typeof providerID === "string" && record.providerID !== providerID) continue;
-          const limit = asRecord(record.limit);
-          return asCount(limit?.context) ?? asCount(record.context) ?? asCount(record.contextWindow);
-        }
-      } catch {
-        return undefined;
-      }
-      return undefined;
-    };
-
-    // Measured against the clock rather than the session's last update, so the
-    // row keeps moving between events instead of freezing between turns.
-    const sessionElapsed = (session: SessionLike | undefined): number | undefined => {
-      const created = asCount(asRecord(session?.time)?.created);
-      if (created === undefined) return undefined;
-      const elapsed = Date.now() - created;
-      return elapsed <= 0 ? undefined : elapsed;
-    };
-
-    // Project spend: every session in THIS project, not just the one on screen.
-    //
-    // `session.list()` is not scoped - it returns sessions across every
-    // directory the host knows about, so summing it gives "everything you have
-    // ever run" while claiming to be a project total. Filtered by `projectID`
-    // rather than by directory, because one project legitimately spans several
-    // directories (worktrees).
-    //
-    // If the host does not report a project id, the unfiltered list is used, so
-    // this degrades to the old behaviour instead of showing nothing.
-    // `project` walks every session the host knows about, and that collection grows
-    // with your history rather than staying a handful. It moves slowly, so the walk
-    // is held briefly instead of repeated on every tick.
-    const PROJECT_CACHE_MS = 5_000;
-    let projectCache:
-      | { readonly projectID: string | undefined; readonly at: number; readonly value: { cost: number; count: number } }
-      | undefined;
-
-    const projectTotals = (sessionID: string) => {
-      try {
-        const projectID = asText(asRecord(context.data.session.get(sessionID))?.["projectID"]);
-        const cached = projectCache;
-        if (cached !== undefined && cached.projectID === projectID && Date.now() - cached.at < PROJECT_CACHE_MS) {
-          return cached.value;
-        }
-
-        const sessions = context.data.session.list() ?? [];
-        const scoped =
-          projectID === undefined
-            ? sessions
-            : sessions.filter((entry) => asText(asRecord(entry)?.["projectID"]) === projectID);
-
-        let cost = 0;
-        for (const entry of scoped) cost += asCount(asRecord(entry)?.["cost"]) ?? 0;
-        const value = { cost, count: scoped.length };
-        projectCache = { projectID, at: Date.now(), value };
-        return value;
-      } catch {
-        return undefined;
-      }
-    };
-
-    const statusOf = (sessionID: string): string | undefined => {
-      try {
-        return context.data.session.status(sessionID);
-      } catch {
-        return undefined;
-      }
-    };
-
-    // Recent tool parts, oldest first. Only the tail is inspected: a loop that is
-    // not currently happening is history, and a hang is by definition now.
-    const recentParts = (sessionID: string): readonly unknown[] => {
-      const parts: unknown[] = [];
-      for (const entry of messagesOf(sessionID).slice(-RECENT_MESSAGES)) {
-        const content = asRecord(entry)?.["content"];
-        if (Array.isArray(content)) parts.push(...content);
-      }
-      return parts;
-    };
-
-    // The host's own shell records, which outlive the tool call: a backgrounded
-    // command returns its result immediately, so its part settles while the
-    // process keeps running. This is the only signal that survives that.
-    //
-    // Shells are listed per LOCATION, not per session, so the session is matched
-    // on the record's own `metadata.sessionID` — the documented shape, rather
-    // than a session-scoped accessor the published API does not carry.
-    const shellsOf = (sessionID: string): readonly unknown[] => {
-      try {
-        const shells = context.data.shell.list(locationOf()) ?? [];
-        return shells.filter(
-          (entry) => asText(asRecord(asRecord(entry)?.["metadata"])?.["sessionID"]) === sessionID,
-        );
-      } catch {
-        return [];
-      }
-    };
-
-    // The newest thing the host recorded for this session that is not a tool
-    // part, so the quiet-turn rule is not blind to a model that is streaming.
-    const lastActivity = (sessionID: string): number | undefined => {
-      const messages = messagesOf(sessionID);
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const time = asRecord(asRecord(messages[index])?.["time"]);
-        const stamp =
-          asCount(time?.["completed"]) ?? asCount(time?.["streamed"]) ?? asCount(time?.["created"]);
-        if (stamp !== undefined) return stamp;
-      }
-      return undefined;
-    };
+    const { projectTotals } = createProjectTotals(context);
 
     const cautionThreshold = cautionThresholds(config.caution);
 
@@ -287,200 +87,7 @@ export default Plugin.define({
         thresholds: cautionThreshold,
       });
 
-    // What is waiting, not just how many. A bare count tells you to go and look;
-    // naming the request tells you whether it is worth looking at.
-    const permsOf = (
-      sessionID: string,
-    ): { count: number; action?: string; resource?: string } | undefined => {
-      try {
-        const requests = context.data.session.permission.list(sessionID);
-        if (requests === undefined || requests.length === 0) return undefined;
-        const first = asRecord(requests[0]);
-        const action = typeof first?.["action"] === "string" ? first["action"] : undefined;
-        const resources = Array.isArray(first?.["resources"]) ? first["resources"] : [];
-        const resource = typeof resources[0] === "string" ? resources[0] : undefined;
-        return { count: requests.length, action, resource };
-      } catch {
-        return undefined;
-      }
-    };
-
-    // Anything genuinely working keeps the status glyph turning: this session
-    // (thinking, streaming, running tools), any subagent in its tree, or a shell
-    // command still running. Returns `undefined` when the host has not said
-    // either way, so the rail can omit the row rather than invent "idle".
-    const busy = (sessionID: string): boolean | undefined => {
-      const status = statusOf(sessionID);
-      if (status === "running") return true;
-
-      try {
-        for (const id of context.data.session.family(sessionID) ?? []) {
-          if (id === sessionID) continue;
-          try {
-            if (context.data.session.status(id) === "running") return true;
-          } catch {
-            // One unreadable child must not hide a running sibling.
-          }
-        }
-      } catch {
-        // No subagent status on this host; the shell check below still applies.
-      }
-
-      try {
-        if (shellsOf(sessionID).some((entry) => asRecord(entry)?.["status"] === "running")) return true;
-      } catch {
-        // Unreadable shells just mean no shell signal.
-      }
-
-      return status === undefined ? undefined : false;
-    };
-
-    // Overall session throughput, from two sources chosen by host capability and
-    // never by the moment. A host that stamps its messages gets a trailing-window
-    // rate — output tokens over the last minute, subagents summed in — so the
-    // figure reflects current speed rather than a whole-conversation average. A
-    // host proven to expose no message timestamps uses the lifetime average.
-    //
-    // The capability is learned once and remembered for the process. `undefined`
-    // means "not yet known": a read that failed, or carried no assistant turns,
-    // tells us nothing and must not choose a metric. Once known it is sticky in
-    // BOTH directions, so a transient `message.list` failure can never flip a
-    // stamped host back to the lifetime average (nor an unstamped host off it) —
-    // a failure just hides the row. One value for the whole host, deliberately
-    // not keyed by session.
-    //
-    // The rail re-runs on the fast tick, and walking every family message for
-    // every session would repeat the same work fifty times a second, so the
-    // result is held briefly. `undefined` is cached too: an idle window must not
-    // be re-derived on each tick either.
-    const TPS_CACHE_MS = 1_000;
-    let hostStamps: boolean | undefined;
-    let tpsCache:
-      | { readonly sessionID: string; readonly at: number; readonly value: number | undefined }
-      | undefined;
-
-    const scanMessages = (id: string): TpsScan => {
-      let messages: readonly unknown[];
-      try {
-        messages = context.data.session.message.list(id) ?? [];
-      } catch {
-        // A refused read is not "this host has no messages".
-        return { ok: false, assistant: 0, samples: [] };
-      }
-      const samples: ThroughputSample[] = [];
-      let assistant = 0;
-      for (const entry of messages) {
-        const message = asRecord(entry);
-        if (message?.["type"] !== "assistant") continue;
-        assistant += 1;
-        const stamp = asRecord(message["time"]);
-        const at =
-          asCount(stamp?.["completed"]) ?? asCount(stamp?.["streamed"]) ?? asCount(stamp?.["created"]);
-        // "Stamped" depends only on the timestamp, never on the output count: a
-        // batch of zero-output assistant turns still proves the host stamps.
-        if (at === undefined) continue;
-        samples.push({ tokens: asRecord(message["tokens"])?.["output"], at });
-      }
-      return { ok: true, assistant, samples };
-    };
-
-    // The lifetime average, the metric of last resort for a host that exposes no
-    // per-message timestamps. Measured from the session's own clock
-    // (`time.updated`, falling back to now) so a finished session settles on a
-    // stable figure instead of decaying as it sits on screen.
-    const lifetimeTps = (
-      sessionID: string,
-      session: SessionLike | undefined,
-      created: number,
-      time: Record<string, unknown> | undefined,
-    ): number | undefined => {
-      const updated = asCount(time?.["updated"]);
-      const end = updated === undefined ? Date.now() : Math.min(Date.now(), updated);
-      const elapsed = end - created;
-      if (elapsed <= 0) return undefined;
-
-      const own = asCount(asRecord(session?.tokens)?.["output"]);
-      let output = own;
-      // Only a family root owns the tree beneath it; a child asking `family()`
-      // gets its ancestors and siblings too, so it keeps its own figure.
-      if (isFamilyRoot(sessionID)) {
-        try {
-          const ids = context.data.session.family(sessionID) ?? [];
-          if (ids.length > 1) {
-            let total = 0;
-            let sawOne = false;
-            for (const id of ids) {
-              const member = context.data.session.get(id) as SessionLike | undefined;
-              const out = asCount(asRecord(member?.tokens)?.["output"]);
-              if (out === undefined) continue;
-              total += out;
-              sawOne = true;
-            }
-            if (sawOne) output = total;
-          }
-        } catch {
-          // No family on this host: the session's own tokens still stand.
-        }
-      }
-      return sessionThroughput(output, elapsed);
-    };
-
-    const computeTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
-      const time = asRecord(session?.time);
-      const created = asCount(time?.["created"]);
-      if (created === undefined) return undefined;
-
-      // A host proven unstamped needs no message read at all: its metric is the
-      // lifetime average whether or not the read would have succeeded.
-      if (hostStamps === false) return lifetimeTps(sessionID, session, created, time);
-
-      // Timestamped assistant output this session has produced, plus — only from
-      // a family root — every subagent session's. A child asking `family()` gets
-      // its ancestors and siblings back, so it keeps its own samples.
-      const scans: TpsScan[] = [scanMessages(sessionID)];
-      if (isFamilyRoot(sessionID)) {
-        try {
-          for (const id of context.data.session.family(sessionID) ?? []) {
-            if (id !== sessionID) scans.push(scanMessages(id));
-          }
-        } catch {
-          // No family on this host: the session's own samples still stand.
-        }
-      }
-
-      const samples: ThroughputSample[] = [];
-      let assistant = 0;
-      let readOk = false;
-      for (const scan of scans) {
-        samples.push(...scan.samples);
-        assistant += scan.assistant;
-        readOk = readOk || scan.ok;
-      }
-
-      if (hostStamps === undefined) {
-        // A stamped assistant turn proves the host stamps. Assistant turns with
-        // no timestamp prove it does not. Neither, and the capability stays
-        // unknown so the row hides rather than guessing a metric.
-        if (samples.length > 0) hostStamps = true;
-        else if (readOk && assistant > 0) hostStamps = false;
-        else return undefined;
-      }
-
-      if (hostStamps === true) {
-        return windowedThroughput(samples, Date.now(), TPS_WINDOW_MS, created);
-      }
-      return lifetimeTps(sessionID, session, created, time);
-    };
-
-    const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
-      const cached = tpsCache;
-      if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
-        return cached.value;
-      }
-      const value = computeTps(sessionID, session);
-      tpsCache = { sessionID, at: Date.now(), value };
-      return value;
-    };
+    const { sessionTps } = createTpsReader(context, isFamilyRoot);
 
     // Recent turn sizes, oldest first. Drawn from messages the host already
     // holds, so the sparkline needs no history of our own to accumulate.
@@ -504,7 +111,7 @@ export default Plugin.define({
     // host's reactive graph rather than ours, or it re-renders nothing at all.
     const animated =
       config.sidebar.enabled &&
-      config.sidebar.rows.some((name) => (ANIMATED_FIELDS as readonly string[]).includes(name));
+      config.sidebar.rows.some((name) => ANIMATED_FIELDS.some((field) => field === name));
     let spinnerNeeded = false;
     const ticker = startTicker(context, animated ? config.refresh : 0, () => spinnerNeeded);
 
@@ -531,18 +138,10 @@ export default Plugin.define({
       return top === undefined ? undefined : cautionText(top, config.glyphs);
     };
 
-    // Both of these are host lookups like any other, and the slot render must
-    // not throw: an unreachable default location, or a VCS call on a directory
-    // with no repository, would take the whole rail down with it. Each degrades
-    // to "no branch row", the same way every other missing value does.
-    const locationOf = () => {
-      try {
-        return context.location ?? context.data.location.default();
-      } catch {
-        return context.location;
-      }
-    };
-
+    // A VCS call on a directory with no repository must not throw and take the
+    // whole rail down with it, so it degrades to "no branch row", the same way
+    // every other missing value does. `locationOf` (from ./session-reads.js) is
+    // shared so both sides resolve the host location the same way.
     const branchOf = (location: ReturnType<typeof locationOf>): string | undefined => {
       try {
         return context.data.location.vcs.info(location)?.branch?.current;
@@ -552,7 +151,7 @@ export default Plugin.define({
     };
 
     const snapshot = (sessionID: string): StatSource => {
-      const location = locationOf();
+      const location = locationOf(context);
       const session = context.data.session.get(sessionID) as SessionLike | undefined;
       const isBusy = busy(sessionID);
       // The fast tick exists for the spinner, and the spinner is only drawn while

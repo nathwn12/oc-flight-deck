@@ -30,9 +30,9 @@
 // caution light that cries wolf is worse than no caution light.
 
 /** Flight Deck's rail has one line for this, so only the worst is ever drawn. */
-export type CautionSeverity = "watch" | "caution";
+type CautionSeverity = "watch" | "caution";
 
-export type CautionKind = "hung-tool" | "hung-shell" | "repeat-loop" | "failure-loop" | "silent-turn";
+type CautionKind = "hung-tool" | "hung-shell" | "repeat-loop" | "failure-loop" | "silent-turn";
 
 export interface CautionThresholds {
   readonly toolWatchMs: number;
@@ -56,7 +56,7 @@ export interface Caution {
   readonly key: string;
 }
 
-export interface CautionInput {
+interface CautionInput {
   /** The snapshot's tool parts, oldest first. */
   readonly parts: readonly unknown[];
   /** Running shells from `context.data.shell`, when the host exposes them. */
@@ -90,7 +90,7 @@ function asText(value: unknown): string | undefined {
 /** Statuses that mean a tool has stopped. Anything else counts as live. */
 const SETTLED_TOOL = new Set(["completed", "error", "aborted", "cancelled"]);
 
-export interface ToolCall {
+interface ToolCall {
   readonly name: string;
   readonly status: string;
   /** Canonical form of the input, for comparing one call with the next. */
@@ -340,14 +340,14 @@ export function worstCaution(cautions: readonly Caution[]): Caution | undefined 
 
 export const WATCH_GLYPH = "▲";
 export const CAUTION_GLYPH = "⚠";
-export const CLEAR_GLYPH = "○";
+const CLEAR_GLYPH = "○";
 
 /**
  * Glyph overrides, for terminals that render the defaults badly.
  *
  * Structural, like `LayoutHint`, so this module stays free of imports.
  */
-export interface GlyphHint {
+interface GlyphHint {
   readonly watch?: string;
   readonly caution?: string;
   readonly clear?: string;

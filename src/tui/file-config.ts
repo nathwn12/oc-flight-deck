@@ -48,7 +48,7 @@ export interface FileConfig {
  * Find the first config file that exists in `directory`, which defaults to the
  * global config directory. A missing directory simply has no candidates.
  */
-export function findConfigFile(directory: string = globalConfigDirectory()): string | undefined {
+function findConfigFile(directory: string = globalConfigDirectory()): string | undefined {
   for (const candidate of CONFIG_FILE_CANDIDATES) {
     const path = join(directory, candidate);
     if (existsSync(path)) return path;
