@@ -5,9 +5,10 @@
 // write: this module turns a session snapshot into strings.
 //
 // The implementation is split by responsibility: ./stat-fields.js holds the
-// vocabulary and the coercion guards, ./format.js the short strings and glyph
-// strips, ./throughput.js the rates, and ./rows.js the row rendering. This
-// module re-exports the same public surface it has always had.
+// vocabulary, ./coerce.js the coercion guards, ./format.js the short strings
+// and glyph strips, ./guard-tokens.js the guard token, ./throughput.js the
+// rates, and ./rows.js the row rendering. This module re-exports the same
+// public surface it has always had.
 
 export { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline } from "./format.js";
 export { statLine, statRows } from "./rows.js";

@@ -1,12 +1,10 @@
 // Session throughput: output tokens per second, as a lifetime average or as a
 // trailing-window rate.
 //
-// Pure and dependency-free: no clock, no I/O, no rendering. Untrusted sample
-// fields are coerced here so a garbage value is skipped rather than guessed at.
+// Pure: no clock, no I/O, no rendering. Untrusted sample fields are coerced
+// through ./coerce.js so a garbage value is skipped rather than guessed at.
 
-function asCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
+import { asCount } from "./coerce.js";
 
 /**
  * Overall session throughput: output tokens over the session's lifetime.
@@ -53,7 +51,7 @@ export interface ThroughputSample {
  * idle session therefore reports no rate rather than a decaying one. The window
  * is inclusive at both ends (`start <= at <= now`) so a boundary sample counts.
  *
- * Pure and dependency-free: no clock, no I/O, no rendering.
+ * Pure: no clock, no I/O, no rendering.
  */
 export function windowedThroughput(
   samples: readonly ThroughputSample[],

@@ -1,10 +1,9 @@
-// The rail's stat vocabulary and the guards that read untrusted host values.
+// The rail's stat vocabulary.
 //
 // `StatSource` is the subset of a session snapshot the rail reads; `STAT_FIELDS`
 // is the set a user may name in `sidebar.rows`; `ANIMATED_FIELDS` drives the
-// ticker; `LayoutHint` carries per-call row geometry. The coercion guards are the
-// only place the rail turns a raw value into something it can use, so the row
-// renderer reads through them rather than re-checking shapes.
+// ticker; `LayoutHint` carries per-call row geometry. Untrusted values are read
+// through ./coerce.js rather than re-checked here.
 
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
 export interface StatSource {
@@ -67,7 +66,7 @@ export const STAT_FIELDS = [
   "guard",
 ] as const;
 
-export type StatField = (typeof STAT_FIELDS)[number];
+type StatField = (typeof STAT_FIELDS)[number];
 
 /**
  * Fields whose value only ever changes on a clock tick.
@@ -121,18 +120,3 @@ export const DEFAULT_PLACEHOLDER = "—";
 export const DEFAULT_LABEL_WIDTH = 10;
 export const DEFAULT_SPARK_WIDTH = 12;
 
-export function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-export function asText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  return text.length === 0 ? undefined : text;
-}
-
-export function asCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}

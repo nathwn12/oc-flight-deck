@@ -9,7 +9,7 @@ import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
 import { createProjectTotals } from "./project-totals.js";
-import { createSessionReads } from "./session-reads.js";
+import { createSessionReads, locationOf } from "./session-reads.js";
 import { createTpsReader } from "./session-tps.js";
 
 // Flight Deck is a read-only instrument panel for the OpenCode V2 CLI/TUI. It
@@ -138,18 +138,10 @@ export default Plugin.define({
       return top === undefined ? undefined : cautionText(top, config.glyphs);
     };
 
-    // Both of these are host lookups like any other, and the slot render must
-    // not throw: an unreachable default location, or a VCS call on a directory
-    // with no repository, would take the whole rail down with it. Each degrades
-    // to "no branch row", the same way every other missing value does.
-    const locationOf = () => {
-      try {
-        return context.location ?? context.data.location.default();
-      } catch {
-        return context.location;
-      }
-    };
-
+    // A VCS call on a directory with no repository must not throw and take the
+    // whole rail down with it, so it degrades to "no branch row", the same way
+    // every other missing value does. `locationOf` (from ./session-reads.js) is
+    // shared so both sides resolve the host location the same way.
     const branchOf = (location: ReturnType<typeof locationOf>): string | undefined => {
       try {
         return context.data.location.vcs.info(location)?.branch?.current;
@@ -159,7 +151,7 @@ export default Plugin.define({
     };
 
     const snapshot = (sessionID: string): StatSource => {
-      const location = locationOf();
+      const location = locationOf(context);
       const session = context.data.session.get(sessionID) as SessionLike | undefined;
       const isBusy = busy(sessionID);
       // The fast tick exists for the spinner, and the spinner is only drawn while

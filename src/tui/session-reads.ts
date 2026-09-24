@@ -10,6 +10,19 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { asCount, asRecord, asText, type SessionLike } from "./coerce.js";
 
+/**
+ * The location the rail reads shell records and VCS from: the host's current
+ * location, or its default when no location is set. A host that cannot resolve
+ * a default degrades to "no location" rather than taking the rail down.
+ */
+export function locationOf(context: Plugin.Context) {
+  try {
+    return context.location ?? context.data.location.default();
+  } catch {
+    return context.location;
+  }
+}
+
 export function createSessionReads(context: Plugin.Context) {
   /** How many trailing messages are inspected for tool parts. */
   const RECENT_MESSAGES = 4;
@@ -140,21 +153,12 @@ export function createSessionReads(context: Plugin.Context) {
   // than a session-scoped accessor the published API does not carry.
   const shellsOf = (sessionID: string): readonly unknown[] => {
     try {
-      const shells = context.data.shell.list(locationOf()) ?? [];
+      const shells = context.data.shell.list(locationOf(context)) ?? [];
       return shells.filter(
         (entry) => asText(asRecord(asRecord(entry)?.["metadata"])?.["sessionID"]) === sessionID,
       );
     } catch {
       return [];
-    }
-  };
-
-  // The host's own shell records are listed per location, not per session.
-  const locationOf = () => {
-    try {
-      return context.location ?? context.data.location.default();
-    } catch {
-      return context.location;
     }
   };
 
