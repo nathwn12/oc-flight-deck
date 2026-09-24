@@ -53,6 +53,13 @@
           "minLength": 1,
           "default": "—",
           "description": "Value shown for a persistent row with no data yet. Used only when `sidebar.persist` is true. Must be a non-empty string; anything else falls back to the default em dash."
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 24,
+          "default": 24,
+          "description": "Maximum height of the whole rail, including fixed lines and live rows. Defaults to 24 and may be lowered from 1 to 23; lines past the limit are dropped."
         }
       }
     },
@@ -196,6 +203,61 @@
           "maxLength": 2,
           "default": "○",
           "description": "Reserved for a future always-visible annunciator state. Not currently drawn: the row is absent when nothing is wrong."
+        }
+      }
+    },
+
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional per-line text styling. Colors are theme roles, not ANSI codes; attributes use OpenTUI text descriptor names. An absent style keeps the theme-native default appearance.",
+      "properties": {
+        "lines": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": { "color": "default", "attributes": [] },
+          "description": "Appearance shared by the fixed branding and separator lines. Defaults to the theme's primary text color with no attributes.",
+          "properties": {
+            "color": {
+              "type": "string",
+              "enum": ["default", "subdued", "warning", "error", "success", "info"],
+              "default": "default",
+              "description": "Theme color role for fixed lines. Valid roles are default, subdued, warning, error, success, and info; default follows the active theme's primary text color."
+            },
+            "attributes": {
+              "type": "array",
+              "items": { "enum": ["bold", "dim", "italic", "underline", "blink", "inverse", "hidden", "strikethrough"] },
+              "default": [],
+              "description": "OpenTUI text attributes applied to fixed lines. Choose any combination of bold, dim, italic, underline, blink, inverse, hidden, and strikethrough; an empty list adds none."
+            }
+          }
+        },
+        "rows": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Appearance for the wildcard or one live row. Missing fields inherit the wildcard style.",
+            "properties": {
+              "color": {
+                "type": "string",
+                "enum": ["default", "subdued", "warning", "error", "success", "info"],
+                "default": "subdued",
+                "description": "Theme color role for this row. The wildcard defaults to subdued; a row override that omits color inherits the wildcard role."
+              },
+              "attributes": {
+                "type": "array",
+                "items": { "enum": ["bold", "dim", "italic", "underline", "blink", "inverse", "hidden", "strikethrough"] },
+                "default": [],
+                "description": "OpenTUI text attributes for this row. The wildcard defaults to none; a row override that omits attributes inherits the wildcard list."
+              }
+            }
+          },
+          "propertyNames": {
+            "enum": ["*", "caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard"]
+          },
+          "default": { "*": { "color": "subdued", "attributes": [] } },
+          "description": "Style all live rows under `*`, then optionally override any known row name such as `cost`. A row can change one field and inherit the other from `*`; unknown row names are reported and ignored."
         }
       }
     }

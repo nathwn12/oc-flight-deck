@@ -171,6 +171,7 @@ describe("flight deck plugin", () => {
       "layout",
       "refresh",
       "sidebar",
+      "style",
     ]);
 
     // The shipped TUI source stays inside its boundary: slot claims, theme

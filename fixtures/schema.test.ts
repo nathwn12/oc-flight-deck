@@ -42,6 +42,7 @@ describe("the schema describes the real config", () => {
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
+    expect(props["sidebar"]!.properties.maxLines.default).toBe(DEFAULT_CONFIG.sidebar.maxLines);
     expect(DEFAULT_CONFIG.sidebar.persist).toBe(true);
     expect(DEFAULT_CONFIG.sidebar.placeholder).toBe("—");
     expect(props["footer"]!.properties.text.default).toBe(DEFAULT_CONFIG.footer.text);
@@ -62,6 +63,54 @@ describe("the schema describes the real config", () => {
     expect(props["glyphs"]!.properties.watch.default).toBe(DEFAULT_CONFIG.glyphs.watch);
     expect(props["glyphs"]!.properties.caution.default).toBe(DEFAULT_CONFIG.glyphs.caution);
     expect(props["glyphs"]!.properties.clear.default).toBe(DEFAULT_CONFIG.glyphs.clear);
+
+    expect(props["style"]!.properties.lines.default).toEqual(DEFAULT_CONFIG.style.lines);
+    expect(props["style"]!.properties.lines.properties.color.default).toBe(DEFAULT_CONFIG.style.lines.color);
+    expect(props["style"]!.properties.lines.properties.attributes.default).toEqual([
+      ...DEFAULT_CONFIG.style.lines.attributes,
+    ]);
+    expect(props["style"]!.properties.rows.default).toEqual({
+      "*": {
+        color: DEFAULT_CONFIG.style.rows.wildcard.color,
+        attributes: [...DEFAULT_CONFIG.style.rows.wildcard.attributes],
+      },
+    });
+    expect(props["style"]!.properties.lines.properties.color.enum).toEqual([
+      "default",
+      "subdued",
+      "warning",
+      "error",
+      "success",
+      "info",
+    ]);
+    expect(props["style"]!.properties.lines.properties.attributes.items.enum).toEqual([
+      "bold",
+      "dim",
+      "italic",
+      "underline",
+      "blink",
+      "inverse",
+      "hidden",
+      "strikethrough",
+    ]);
+    const rowStyle = props["style"]!.properties.rows.additionalProperties;
+    expect(rowStyle.properties.color.enum).toEqual(props["style"]!.properties.lines.properties.color.enum);
+    expect(rowStyle.properties.color.default).toBe(DEFAULT_CONFIG.style.rows.wildcard.color);
+    expect(rowStyle.properties.attributes.default).toEqual([
+      ...DEFAULT_CONFIG.style.rows.wildcard.attributes,
+    ]);
+    expect(rowStyle.properties.attributes.items.enum).toEqual(
+      props["style"]!.properties.lines.properties.attributes.items.enum,
+    );
+    expect(props["style"]!.properties.rows.propertyNames.enum).toEqual(["*", ...STAT_FIELDS]);
+    for (const option of [
+      props["style"]!.properties.lines.properties.color,
+      props["style"]!.properties.lines.properties.attributes,
+      rowStyle.properties.color,
+      rowStyle.properties.attributes,
+    ]) {
+      expect(option.description.length).toBeGreaterThanOrEqual(20);
+    }
   });
 
   test("the rows enum is the real list of fields", () => {
@@ -106,9 +155,10 @@ describe("the example config points at the schema", () => {
 interface SchemaNode {
   readonly type?: string;
   readonly properties?: Record<string, SchemaNode>;
-  readonly additionalProperties?: boolean;
+  readonly additionalProperties?: boolean | SchemaNode;
   readonly items?: SchemaNode;
   readonly enum?: readonly unknown[];
+  readonly propertyNames?: SchemaNode;
   readonly minLength?: number;
   readonly maxLength?: number;
   readonly minimum?: number;
@@ -128,13 +178,21 @@ function schemaErrors(node: SchemaNode, value: unknown, path: string): string[] 
       const record = value as Record<string, unknown>;
       const errors: string[] = [];
       const props = node.properties ?? {};
-      if (node.additionalProperties === false) {
+      if (node.propertyNames !== undefined) {
         for (const key of Object.keys(record)) {
-          if (!(key in props)) errors.push(`${at}.${key} is not a known option`);
+          errors.push(...schemaErrors(node.propertyNames, key, `${at} property name`));
         }
       }
       for (const [key, child] of Object.entries(props)) {
         if (key in record) errors.push(...schemaErrors(child, record[key], `${at}.${key}`));
+      }
+      for (const [key, childValue] of Object.entries(record)) {
+        if (key in props) continue;
+        if (node.additionalProperties === false) {
+          errors.push(`${at}.${key} is not a known option`);
+        } else if (typeof node.additionalProperties === "object") {
+          errors.push(...schemaErrors(node.additionalProperties, childValue, `${at}.${key}`));
+        }
       }
       for (const key of node.required ?? []) {
         if (!(key in record)) errors.push(`${at}.${key} is required`);
@@ -187,6 +245,10 @@ describe("the shipped example validates against the shipped schema", () => {
     const sidebar = parsed["sidebar"] as Record<string, unknown>;
     expect(sidebar["persist"]).toBe(true);
     expect(sidebar["placeholder"]).toBe("—");
+    expect(sidebar["maxLines"]).toBe(DEFAULT_CONFIG.sidebar.maxLines);
+    const style = parsed["style"] as Record<string, unknown>;
+    expect(resolveConfig(parsed).config.style).toEqual(DEFAULT_CONFIG.style);
+    expect(style["rows"]).toEqual({ "*": { color: "subdued", attributes: [] } });
   });
 
   test("hostile values are rejected by the schema or normalized safely by parseConfig", () => {
@@ -211,5 +273,11 @@ describe("the shipped example validates against the shipped schema", () => {
     const rowsResolution = resolveConfig(rows);
     expect(rowsResolution.config.sidebar.rows).toEqual(DEFAULT_CONFIG.sidebar.rows);
     expect(rowsResolution.issues.join(" ")).toContain("sidebar.rows[0]");
+
+    const maxLines = { sidebar: { maxLines: 25 } };
+    expect(schemaErrors(schema as unknown as SchemaNode, maxLines, "")).not.toEqual([]);
+    const maxLinesResolution = resolveConfig(maxLines);
+    expect(maxLinesResolution.config.sidebar.maxLines).toBe(DEFAULT_CONFIG.sidebar.maxLines);
+    expect(maxLinesResolution.issues.join(" ")).toContain("sidebar.maxLines");
   });
 });

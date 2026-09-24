@@ -106,13 +106,18 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 > **Upgrading from 0.4.0 — the config file moved.** The per-project search is gone. A `flight-deck.jsonc` in a project root or in `.opencode/` is no longer read; move it to `~/.config/opencode/flight-deck.jsonc` (or the `$XDG_CONFIG_HOME` path above) to keep your settings.
 
-`sidebar.rows` picks the rows and their order; `layout.labelWidth` fits your terminal; `format.duration` switches the `elapsed` row between `spaced` (`2h 14m 37s`, the default) and `compact` (`2h14m37s`). Everything else lives in the example file, documented inline — a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.
+`sidebar.rows` picks the rows and their order; `sidebar.maxLines` caps the whole rail (fixed lines plus rows, default 24, configurable from 1 to 24); `layout.labelWidth` fits your terminal; `format.duration` switches the `elapsed` row between `spaced` (`2h 14m 37s`, the default) and `compact` (`2h14m37s`).
+
+Optional styling lives under `style`: `style.lines` controls fixed branding/separator lines, `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
+
+Everything else lives in the example file, documented inline - a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.
 
 ```jsonc
 // ~/.config/opencode/flight-deck.jsonc
 {
   "refresh": 100,
   "sidebar": {
+    "maxLines": 24,
     "rows": [
       "caution", "status", "agent", "model", "branch", "cost", "project",
       "tokens", "cache", "context", "perms", "elapsed", "tps"
@@ -120,7 +125,14 @@ The file is optional, and a missing file is normal and silent: with no file at a
   },
   // spaced separates the units (2h 14m 37s, the default); "compact" hugs them (2h14m37s)
   "format": { "duration": "spaced" },
-  "caution": { "toast": false }
+  "caution": { "toast": false },
+  "style": {
+    "lines": { "color": "default", "attributes": [] },
+    "rows": {
+      "*": { "color": "subdued", "attributes": [] },
+      "cost": { "color": "success", "attributes": ["bold"] }
+    }
+  }
 }
 ```
 
