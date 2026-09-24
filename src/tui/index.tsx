@@ -3,8 +3,9 @@ import { Plugin } from "@opencode/plugin/tui";
 import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
-import { footerLine, liveRowOffset, sidebarLines } from "./presentation.js";
+import { footerLine, railLines, railLineStyle } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
+import { attributeMask, themeColor } from "./style.js";
 import { startGuardBridge } from "./guard.js";
 import { startTicker } from "./ticker.js";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
@@ -237,20 +238,34 @@ export default Plugin.define({
             void bridge?.status;
 
             const source = snapshot(sessionID);
-            const lines = sidebarLines(config, source);
+            const lines = railLines(config, source);
             if (lines.length === 0) return null;
-            const offset = Math.min(liveRowOffset(config), lines.length);
 
             return (
               // No padding here: the host already lays out and pads the sidebar,
               // so adding our own would push the rows out of alignment with it.
               //
-              // Every live row gets the same token, the annunciator included. It
-              // is the same panel; only the glyph changes.
+              // Each line resolves its own look from `config.style`: the fixed
+              // lines use `style.lines`, and every live row its own entry or the
+              // wildcard. `themeColor`/`attributeMask` are the only things that
+              // know how a role or an attribute name becomes renderer state, and
+              // they hand back plain props here — never escapes.
+              //
+              // `?? 0` keeps a line with no attributes on the renderer's own
+              // default instead of assigning `undefined` over it, so the shipped
+              // config draws exactly what it always drew.
               <box flexDirection="column">
-                {lines.map((line, index) => (
-                  <text fg={index < offset ? context.theme.text.default : context.theme.text.subdued}>{line}</text>
-                ))}
+                {lines.map((line) => {
+                  const style = railLineStyle(config.style, line);
+                  return (
+                    <text
+                      fg={themeColor(style.color, context.theme) as string | undefined}
+                      attributes={attributeMask(style.attributes) ?? 0}
+                    >
+                      {line.text}
+                    </text>
+                  );
+                })}
               </box>
             );
           },
