@@ -2,7 +2,7 @@
 //
 // The sidebar is roughly thirty-odd columns wide, so every figure is shortened
 // to something an agent can read in one glance: counts (`518k`), costs
-// (`$0.023`), durations (`2h 14m`), paths (clipped with an ellipsis), a
+// (`$0.023`), durations (`2h14m37s`), paths (clipped with an ellipsis), a
 // ten-cell fuel gauge, and a sparkline shaped from recent turn sizes. All pure
 // and dependency-free, so the formatting is trivial to test.
 
@@ -23,15 +23,15 @@ export function formatCost(value: number): string {
   return `$${value.toFixed(value < 1 ? 3 : 2)}`;
 }
 
-/** `45s`, `14m`, `2h 14m`. */
+/** `45s`, `14m07s`, `2h14m37s`. Seconds always show, so the row ticks every second. */
 export function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1_000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+  const total = Math.floor(ms / 1_000);
+  const seconds = total % 60;
+  const minutes = Math.floor(total / 60) % 60;
+  const hours = Math.floor(total / 3_600);
+  const ss = String(seconds).padStart(2, "0");
+  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m${ss}s`;
+  return minutes > 0 ? `${minutes}m${ss}s` : `${seconds}s`;
 }
 
 /** Fuel-gauge width in cells when the caller does not override it. */
