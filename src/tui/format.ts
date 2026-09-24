@@ -23,15 +23,33 @@ export function formatCost(value: number): string {
   return `$${value.toFixed(value < 1 ? 3 : 2)}`;
 }
 
-/** `45s`, `14m07s`, `2h14m37s`. Seconds always show, so the row ticks every second. */
-export function formatDuration(ms: number): string {
+/**
+ * How `formatDuration` joins its segments: `"compact"` hugs the units
+ * (`2h14m37s`), `"spaced"` puts one space between them (`2h 14m 37s`).
+ */
+export type DurationStyle = "compact" | "spaced";
+
+/**
+ * `45s`, `14m07s`, `2h14m37s`; with `spaced`, one space between the segments
+ * (`14m 07s`, `2h 14m 37s`). Seconds always show, so the row ticks every
+ * second. Zero-padding is identical in both styles: minutes pad when hours are
+ * present, seconds pad when minutes are present.
+ *
+ * The parameter default stays `"compact"`: this formatter's own contract is
+ * unchanged for direct callers, while the rail's shipped default comes from
+ * `format.duration` (spaced).
+ */
+export function formatDuration(ms: number, style: DurationStyle = "compact"): string {
   const total = Math.floor(ms / 1_000);
   const seconds = total % 60;
   const minutes = Math.floor(total / 60) % 60;
   const hours = Math.floor(total / 3_600);
   const ss = String(seconds).padStart(2, "0");
-  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m${ss}s`;
-  return minutes > 0 ? `${minutes}m${ss}s` : `${seconds}s`;
+  // Only the join between segments differs; with `compact` the join is empty,
+  // so that style stays byte-identical to what it has always rendered.
+  const join = style === "spaced" ? " " : "";
+  if (hours > 0) return `${hours}h${join}${String(minutes).padStart(2, "0")}m${join}${ss}s`;
+  return minutes > 0 ? `${minutes}m${join}${ss}s` : `${seconds}s`;
 }
 
 /** Fuel-gauge width in cells when the caller does not override it. */

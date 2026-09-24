@@ -19,7 +19,14 @@ import { statRows, type StatSource } from "./stats.js";
  */
 export function sidebarLines(config: FlightDeckConfig, source: StatSource = {}): readonly string[] {
   if (!config.sidebar.enabled) return [];
-  const layout = { ...config.layout, persist: config.sidebar.persist, placeholder: config.sidebar.placeholder };
+  const layout = {
+    ...config.layout,
+    persist: config.sidebar.persist,
+    placeholder: config.sidebar.placeholder,
+    // The display side of the config, which the row renderer reads alongside
+    // its geometry. `format` is a top-level section, so it is mapped here.
+    durationStyle: config.format.duration,
+  };
   return [...config.sidebar.lines, ...statRows(config.sidebar.rows, source, layout)].slice(0, MAX_LINES);
 }
 

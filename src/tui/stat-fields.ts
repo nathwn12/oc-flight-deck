@@ -5,6 +5,8 @@
 // ticker; `LayoutHint` carries per-call row geometry. Untrusted values are read
 // through ./coerce.js rather than re-checked here.
 
+import type { DurationStyle } from "./format.js";
+
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
 export interface StatSource {
   /**
@@ -95,6 +97,12 @@ export interface LayoutHint {
   readonly labelWidth?: number;
   readonly barWidth?: number;
   readonly sparkWidth?: number;
+  /**
+   * How the `elapsed` row joins its duration segments. The rail supplies this
+   * from `format.duration` (default `"spaced"`); when the hint is absent the
+   * formatter's own default, `"compact"`, applies.
+   */
+  readonly durationStyle?: DurationStyle;
   /**
    * True when the rail already draws a `total` row.
    *
