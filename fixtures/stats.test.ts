@@ -31,9 +31,12 @@ describe("flight deck live rows", () => {
 
   test("formats durations at the scale a session actually runs", () => {
     expect(formatDuration(45_000)).toBe("45s");
-    expect(formatDuration(14 * 60_000)).toBe("14m");
-    expect(formatDuration(2 * 3_600_000 + 14 * 60_000)).toBe("2h 14m");
-    expect(formatDuration(3 * 3_600_000)).toBe("3h");
+    expect(formatDuration(14 * 60_000)).toBe("14m00s");
+    expect(formatDuration(8 * 60_000 + 41_000)).toBe("8m41s");
+    expect(formatDuration(61_000)).toBe("1m01s");
+    expect(formatDuration(2 * 3_600_000 + 14 * 60_000)).toBe("2h14m00s");
+    expect(formatDuration(2 * 3_600_000 + 14 * 60_000 + 37_000)).toBe("2h14m37s");
+    expect(formatDuration(3 * 3_600_000)).toBe("3h00m00s");
   });
 
   test("renders the default panel from a real session snapshot", () => {
@@ -88,7 +91,7 @@ describe("flight deck live rows", () => {
   });
 
   test("shows elapsed and turns only when they are meaningful", () => {
-    expect(statLine("elapsed", { elapsedMs: 2 * 3_600_000 + 14 * 60_000 })).toBe("elapsed   2h 14m");
+    expect(statLine("elapsed", { elapsedMs: 2 * 3_600_000 + 14 * 60_000 })).toBe("elapsed   2h14m00s");
     expect(statLine("elapsed", { elapsedMs: 0 })).toBeUndefined();
     expect(statLine("turns", { turns: 42 })).toBe("turns     42");
     expect(statLine("turns", { turns: 0 })).toBeUndefined();

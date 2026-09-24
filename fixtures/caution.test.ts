@@ -300,7 +300,7 @@ describe("ordering, helpers and wording", () => {
 
   test("says what was seen, not what it means", () => {
     const found = run({ parts: [part("shell", "running", {}, { ran: NOW - 8 * MINUTE })] });
-    expect(cautionText(found[0]!)).toBe(`${CAUTION_GLYPH} shell running 8m`);
+    expect(cautionText(found[0]!)).toBe(`${CAUTION_GLYPH} shell running 8m00s`);
     expect(glyphFor(found[0])).toBe(CAUTION_GLYPH);
     expect(glyphFor(undefined)).toBe("○");
     expect(WATCH_GLYPH).toBe("▲");
@@ -315,8 +315,12 @@ describe("ordering, helpers and wording", () => {
 
   test("formatElapsed covers seconds, minutes and hours", () => {
     expect(formatElapsed(45_000)).toBe("45s");
-    expect(formatElapsed(14 * MINUTE)).toBe("14m");
-    expect(formatElapsed(2 * 60 * MINUTE + 14 * MINUTE)).toBe("2h 14m");
+    expect(formatElapsed(14 * MINUTE)).toBe("14m00s");
+    expect(formatElapsed(8 * MINUTE + 41_000)).toBe("8m41s");
+    expect(formatElapsed(61_000)).toBe("1m01s");
+    expect(formatElapsed(2 * 60 * MINUTE + 14 * MINUTE)).toBe("2h14m00s");
+    expect(formatElapsed(2 * 60 * MINUTE + 14 * MINUTE + 37_000)).toBe("2h14m37s");
+    expect(formatElapsed(3 * 60 * MINUTE)).toBe("3h00m00s");
     expect(formatElapsed(-5_000)).toBe("0s");
   });
 
