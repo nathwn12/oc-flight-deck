@@ -504,7 +504,7 @@ export default Plugin.define({
     // host's reactive graph rather than ours, or it re-renders nothing at all.
     const animated =
       config.sidebar.enabled &&
-      config.sidebar.rows.some((name) => (ANIMATED_FIELDS as readonly string[]).includes(name));
+      config.sidebar.rows.some((name) => ANIMATED_FIELDS.some((field) => field === name));
     let spinnerNeeded = false;
     const ticker = startTicker(context, animated ? config.refresh : 0, () => spinnerNeeded);
 

@@ -6,31 +6,6 @@
 //
 // Kept pure and dependency-free so the formatting is trivial to test.
 
-/** A subagent subtree total, relative to the session being displayed. */
-export interface StatTree {
-  /** Combined cost of the session plus every subagent session. */
-  readonly cost?: unknown;
-  /** Number of subagent sessions in the tree. */
-  readonly count?: unknown;
-}
-
-/** Context-window occupancy for the most recent request. */
-export interface StatContext {
-  /**
-   * Prompt tokens sent on the last request: input, cache reads, and cache
-   * writes. All three occupy the window, so all three count.
-   */
-  readonly used?: unknown;
-  /** The model's context window, when the catalog knows it. */
-  readonly limit?: unknown;
-}
-
-/** Whole-project spend, across every session in this project. */
-export interface StatProject {
-  readonly cost?: unknown;
-  readonly count?: unknown;
-}
-
 /** The subset of a session snapshot the rail reads. All fields are untrusted. */
 export interface StatSource {
   /**
@@ -92,7 +67,7 @@ export const STAT_FIELDS = [
   "guard",
 ] as const;
 
-export type StatField = (typeof STAT_FIELDS)[number];
+type StatField = (typeof STAT_FIELDS)[number];
 
 /**
  * Fields whose value only ever changes on a clock tick.
@@ -107,7 +82,7 @@ export type StatField = (typeof STAT_FIELDS)[number];
 export const ANIMATED_FIELDS = ["caution", "status", "elapsed"] as const;
 
 export function isStatField(value: string): value is StatField {
-  return (STAT_FIELDS as readonly string[]).includes(value);
+  return STAT_FIELDS.some((field) => field === value);
 }
 
 /**
@@ -117,7 +92,7 @@ export function isStatField(value: string): value is StatField {
  * imports this module, so reaching back into it would create a cycle. The
  * shapes are compatible, so the config passes straight through.
  */
-export interface LayoutHint {
+interface LayoutHint {
   readonly labelWidth?: number;
   readonly barWidth?: number;
   readonly sparkWidth?: number;
