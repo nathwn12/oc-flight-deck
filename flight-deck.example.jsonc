@@ -171,7 +171,7 @@
     // Calibrated against 54,218 real settled tool calls: at the default
     // threshold, 307 (0.57%) exceed it and 200 of those are these tools, so
     // with the list 0.20% of calls light the row. `subagent` alone crossed 152
-    // times, with a p99 of 14.2 minutes. Without this list the annunciator
+    // times, with a p99 of 14.7 minutes. Without this list the annunciator
     // lights on every delegated task - which is how an alert gets ignored.
     // Add your own long-running or orchestration tools here.
     "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
