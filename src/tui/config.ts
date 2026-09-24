@@ -11,6 +11,15 @@
 import { DEFAULT_PLACEHOLDER, isStatField, STAT_FIELDS } from "./stats.js";
 import type { CautionThresholds } from "./caution.js";
 import type { DurationStyle } from "./format.js";
+import {
+  DEFAULT_STYLE,
+  STYLE_ATTRIBUTES,
+  STYLE_COLORS,
+  type LineStyle,
+  type StyleAttribute,
+  type StyleColor,
+  type StyleConfig,
+} from "./style.js";
 
 interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
@@ -26,6 +35,12 @@ interface SidebarConfig {
   readonly persist: boolean;
   /** Value shown for a row with no data when `persist` is on. Default `"—"`. */
   readonly placeholder: string;
+  /**
+   * Cap on the whole rail: fixed lines plus live rows. Default `MAX_LINES`
+   * (24). The fixed lines and the live rows draw from one budget, so this is
+   * the one number that decides how tall the panel may grow.
+   */
+  readonly maxLines: number;
 }
 
 interface FooterConfig {
@@ -87,6 +102,11 @@ export interface FlightDeckConfig {
   readonly format: FormatConfig;
   /** Glyphs for the annunciator, for terminals that render the defaults badly. */
   readonly glyphs: GlyphConfig;
+  /**
+   * Per-line appearance: a colour role and text attributes for the fixed lines
+   * and the live rows. Absent config leaves the theme-native look untouched.
+   */
+  readonly style: StyleConfig;
   /**
    * Update cadence in milliseconds for time-derived rows.
    *
@@ -214,6 +234,15 @@ export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
 ];
 
 /**
+ * Default cap on the whole rail: fixed lines plus live rows.
+ *
+ * The rail shares the sidebar with the host's own content, so a config file
+ * naming two dozen rows must not silently push the host off screen.
+ * `sidebar.maxLines` exposes it; this is the shipped default.
+ */
+export const MAX_LINES = 24;
+
+/**
  * Ten ticks a second: the status spinner has ten frames, so one rotation takes a
  * second and reads as motion instead of as a stuck glyph. A tick costs one
  * host-store write plus a recompute measured in microseconds, and when nothing
@@ -241,17 +270,18 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
     rows: DEFAULT_SIDEBAR_ROWS,
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
+    maxLines: MAX_LINES,
   },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
   layout: DEFAULT_LAYOUT,
   format: DEFAULT_FORMAT,
   glyphs: DEFAULT_GLYPHS,
+  style: DEFAULT_STYLE,
   refresh: DEFAULT_REFRESH_MS,
 };
 
 /** Layout guards: keep a hand-edited config from producing an unusable rail. */
-export const MAX_LINES = 24;
 const MAX_LINE_LENGTH = 120;
 
 // Rails render on a single line, so control characters are replaced with
@@ -300,7 +330,7 @@ function readText(value: unknown, fallback: string, path: string, issues: string
   return text;
 }
 
-function readLines(value: unknown, issues: string[]): readonly string[] {
+function readLines(value: unknown, issues: string[], maxLines: number): readonly string[] {
   if (value === undefined) return DEFAULT_SIDEBAR_LINES;
   if (!Array.isArray(value) || value.length === 0) {
     issues.push("sidebar.lines must be a non-empty array of strings; using the default lines");
@@ -331,9 +361,9 @@ function readLines(value: unknown, issues: string[]): readonly string[] {
     issues.push("sidebar.lines had no usable entries; using the default lines");
     return DEFAULT_SIDEBAR_LINES;
   }
-  if (lines.length > MAX_LINES) {
-    issues.push(`sidebar.lines has ${lines.length} entries; keeping the first ${MAX_LINES}`);
-    return lines.slice(0, MAX_LINES);
+  if (lines.length > maxLines) {
+    issues.push(`sidebar.lines has ${lines.length} entries; keeping the first ${maxLines}`);
+    return lines.slice(0, maxLines);
   }
   return lines;
 }
@@ -344,7 +374,7 @@ function readLines(value: unknown, issues: string[]): readonly string[] {
  * An unknown name is reported rather than silently dropped: otherwise a typo in
  * `sidebar.rows` looks identical to the host simply not having the data yet.
  */
-function readRows(value: unknown, issues: string[]): readonly string[] {
+function readRows(value: unknown, issues: string[], maxLines: number): readonly string[] {
   if (value === undefined) return DEFAULT_SIDEBAR_ROWS;
   if (!Array.isArray(value) || value.length === 0) {
     issues.push("sidebar.rows must be a non-empty array of field names; using the default rows");
@@ -376,11 +406,21 @@ function readRows(value: unknown, issues: string[]): readonly string[] {
     issues.push("sidebar.rows had no usable entries; using the default rows");
     return DEFAULT_SIDEBAR_ROWS;
   }
-  return rows.slice(0, MAX_LINES);
+  return rows.slice(0, maxLines);
+}
+
+/**
+ * The cap on the whole rail, as a whole number of lines.
+ *
+ * `0` would not draw a small rail, it would draw nothing: anything below one
+ * is a bad value, so the default comes back and the key is named.
+ */
+function readMaxLines(value: unknown, issues: string[]): number {
+  return readNumber(value, MAX_LINES, "sidebar.maxLines", issues, 1, MAX_LINES);
 }
 
 /** Every config section that can be set from the file and overridden by the host. */
-type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "format" | "glyphs";
+type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "format" | "glyphs" | "style";
 
 function sectionOf(options: Record<string, unknown>, key: SectionKey): Record<string, unknown> {
   const value = options[key];
@@ -444,6 +484,7 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
     layout: mergeSection(file, host, "layout"),
     format: mergeSection(file, host, "format"),
     glyphs: mergeSection(file, host, "glyphs"),
+    style: mergeSection(file, host, "style"),
   };
 }
 
@@ -533,6 +574,107 @@ function readGlyphs(section: Record<string, unknown>, issues: string[]): GlyphCo
     caution: readGlyph(section["caution"], DEFAULT_GLYPHS.caution, "glyphs.caution", issues),
     clear: readGlyph(section["clear"], DEFAULT_GLYPHS.clear, "glyphs.clear", issues),
   };
+}
+
+/**
+ * One colour role, as named in the config.
+ *
+ * The vocabulary is fixed (`STYLE_COLORS`): a config names a role like
+ * `warning`, never a raw theme token, so the mapping onto the host's actual
+ * tokens stays in ./style.ts, where a host renaming its tokens can be absorbed.
+ */
+function readStyleColor(value: unknown, fallback: StyleColor, path: string, issues: string[]): StyleColor {
+  if (value === undefined) return fallback;
+  const text = typeof value === "string" ? value.trim() : "";
+  if ((STYLE_COLORS as readonly string[]).includes(text)) return text as StyleColor;
+  issues.push(`${path} must be one of ${STYLE_COLORS.join(", ")}; using ${fallback}`);
+  return fallback;
+}
+
+/** Attribute names, validated one by one: an unknown name is skipped, not fatal. */
+function readStyleAttributes(
+  value: unknown,
+  fallback: readonly StyleAttribute[],
+  path: string,
+  issues: string[],
+): readonly StyleAttribute[] {
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value)) {
+    issues.push(`${path} must be an array of attribute names; using the default`);
+    return fallback;
+  }
+  const attributes: StyleAttribute[] = [];
+  value.forEach((entry, index) => {
+    const at = `${path}[${index}]`;
+    if (typeof entry !== "string") {
+      issues.push(`${at} must be a string; skipping it`);
+      return;
+    }
+    const name = entry.trim();
+    if (!(STYLE_ATTRIBUTES as readonly string[]).includes(name)) {
+      issues.push(`${at} is not a known attribute (${STYLE_ATTRIBUTES.join(", ")}); skipping it`);
+      return;
+    }
+    attributes.push(name as StyleAttribute);
+  });
+  return attributes;
+}
+
+/**
+ * One line's look; every field falls back independently.
+ *
+ * An entry that names only a colour keeps the attributes it inherited (and the
+ * other way round), so a per-row override can change one thing about a row.
+ */
+function readLineStyle(value: unknown, fallback: LineStyle, path: string, issues: string[]): LineStyle {
+  if (value === undefined) return fallback;
+  if (!isRecord(value)) {
+    issues.push(`${path} must be an object with color and attributes; using the default`);
+    return fallback;
+  }
+  return {
+    color: readStyleColor(value["color"], fallback.color, `${path}.color`, issues),
+    attributes: readStyleAttributes(value["attributes"], fallback.attributes, `${path}.attributes`, issues),
+  };
+}
+
+/**
+ * The `style` section: the fixed lines, the wildcard every live row inherits,
+ * and per-row overrides.
+ *
+ * A per-row key must name a known field. That check is what keeps a typo
+ * (`style.rows.costly`) from silently styling nothing: unknown names are
+ * reported and skipped, exactly like `sidebar.rows`.
+ */
+function readStyle(section: Record<string, unknown>, issues: string[]): StyleConfig {
+  const rawRows = section["rows"];
+  if (rawRows !== undefined && !isRecord(rawRows)) {
+    issues.push("style.rows must be an object of row names; using the default");
+  }
+  const rows = isRecord(rawRows) ? rawRows : {};
+
+  const lines = readLineStyle(section["lines"], DEFAULT_STYLE.lines, "style.lines", issues);
+  const wildcard = readLineStyle(rows["*"], DEFAULT_STYLE.rows.wildcard, "style.rows.*", issues);
+
+  const overrides: Record<string, LineStyle> = {};
+  for (const [key, entry] of Object.entries(rows)) {
+    if (key === "*") continue;
+    const path = `style.rows.${key}`;
+    // Keyed like `sidebar.rows`: normalized for control characters and case,
+    // so `"Cost"` is the `cost` row.
+    const name = normalizeText(key, path, issues).toLowerCase();
+    if (name.length === 0) {
+      issues.push(`${path} is empty; skipping it`);
+      continue;
+    }
+    if (!isStatField(name)) {
+      issues.push(`${path} is not a known field (${STAT_FIELDS.join(", ")}); skipping it`);
+      continue;
+    }
+    overrides[name] = readLineStyle(entry, wildcard, path, issues);
+  }
+
+  return { lines, rows: { wildcard, overrides } };
 }
 
 /** Tool names, matched exactly. A malformed list falls back whole, not partly. */
@@ -635,6 +777,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const rawFooter = options.footer;
   const rawCaution = options.caution;
   const rawFormat = options.format;
+  const rawStyle = options.style;
   if (rawSidebar !== undefined && !isRecord(rawSidebar)) {
     issues.push("sidebar must be an object; using defaults");
   }
@@ -647,6 +790,9 @@ export function resolveConfig(options: unknown): ConfigResolution {
   if (rawFormat !== undefined && !isRecord(rawFormat)) {
     issues.push("format must be an object; using defaults");
   }
+  if (rawStyle !== undefined && !isRecord(rawStyle)) {
+    issues.push("style must be an object; using defaults");
+  }
 
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
@@ -654,21 +800,23 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const layout = isRecord(options.layout) ? options.layout : {};
   const format = isRecord(rawFormat) ? rawFormat : {};
   const glyphs = isRecord(options.glyphs) ? options.glyphs : {};
+  const style = isRecord(rawStyle) ? rawStyle : {};
 
   // Writing any footer setting counts as asking for the footer, so the rail
   // turns on as soon as you configure it. It is off only when you said nothing
   // about it, and an explicit `enabled` always wins either way.
   const footerConfigured = Object.keys(footer).length > 0;
 
-  const lines = readLines(sidebar.lines, issues);
-  const rows = readRows(sidebar.rows, issues);
-  // `sidebarLines` caps the whole rail at MAX_LINES, so the fixed lines and the
-  // live rows draw from one budget. `readLines` already reports its own cut;
-  // this is the other half, which used to be silent — a long `lines` list ate
-  // live rows off the bottom of the rail without saying so.
-  if (lines.length + rows.length > MAX_LINES) {
+  const maxLines = readMaxLines(sidebar.maxLines, issues);
+  const lines = readLines(sidebar.lines, issues, maxLines);
+  const rows = readRows(sidebar.rows, issues, maxLines);
+  // `railLines` caps the whole rail at `sidebar.maxLines`, so the fixed lines
+  // and the live rows draw from one budget. `readLines` already reports its own
+  // cut; this is the other half, which used to be silent — a long `lines` list
+  // ate live rows off the bottom of the rail without saying so.
+  if (lines.length + rows.length > maxLines) {
     issues.push(
-      `sidebar.lines and sidebar.rows total ${lines.length + rows.length} lines; the rail draws the first ${MAX_LINES}`,
+      `sidebar.lines and sidebar.rows total ${lines.length + rows.length} lines; the rail draws the first ${maxLines}`,
     );
   }
 
@@ -685,6 +833,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
           "sidebar.placeholder",
           issues,
         ),
+        maxLines,
       },
       footer: {
         enabled: readBoolean(footer.enabled, footerConfigured, "footer.enabled", issues),
@@ -694,6 +843,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
       layout: readLayout(layout, issues),
       format: readFormat(format, issues),
       glyphs: readGlyphs(glyphs, issues),
+      style: readStyle(style, issues),
       refresh: readRefresh(options.refresh, issues),
     },
     issues,

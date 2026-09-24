@@ -59,8 +59,8 @@
 
     // Fixed lines, rendered above the live rows. This is the only text Flight
     // Deck shows of its own — put your own words here, or a rule.
-    // The first line uses your theme's primary text colour; the rest use the
-    // subdued colour.
+    // Fixed lines use style.lines; live rows use their style.rows entry or the
+    // wildcard. With no custom style, the shipped theme-native look is kept.
     "lines": ["✈ FLIGHT DECK", "─────────────────"],
 
     // The live rows, top to bottom. Every value is read from the open session,
@@ -94,8 +94,8 @@
     //
     // Every named row renders persistently, so the rail keeps a stable shape:
     // a row with no data yet shows the placeholder below, in the same label
-    // column as a live row. The fixed lines and the live rows together are
-    // capped at 24, and anything past that is dropped.
+    // column as a live row. The fixed lines and live rows share the maxLines
+    // budget below, and anything past it is dropped.
     "rows": [
       "caution",
       "status",
@@ -118,7 +118,10 @@
     "persist": true,
 
     // Value shown for a persistent row with no data yet. Any non-empty string.
-    "placeholder": "—"
+    "placeholder": "—",
+
+    // Maximum total height, including fixed lines and live rows. Defaults to 24.
+    "maxLines": 24
   },
 
   // ── Footer ───────────────────────────────────────────────────────────────
@@ -216,5 +219,19 @@
     "watch": "▲",
     "caution": "⚠",
     "clear": "○"
+  },
+
+  // -- Style -----------------------------------------------------------------
+  // Optional appearance, resolved through your active theme (no ANSI escapes).
+  // Colors are theme roles: default, subdued, warning, error, success, info.
+  // Attributes: bold, dim, italic, underline, blink, inverse, hidden,
+  // strikethrough. The values below are the defaults.
+  "style": {
+    "lines": { "color": "default", "attributes": [] },
+    "rows": {
+      "*": { "color": "subdued", "attributes": [] }
+      // Uncomment an override to make one row stand out:
+      // ,"cost": { "color": "success", "attributes": ["bold"] }
+    }
   }
 }
