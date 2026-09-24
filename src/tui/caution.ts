@@ -406,13 +406,13 @@ export function cautionDetail(caution: Caution): string {
   }
 }
 
-/** `45s`, `14m`, `2h 14m`. */
+/** `45s`, `14m07s`, `2h14m37s`. Seconds always show, so the text ticks every second. */
 export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1_000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+  const total = Math.max(0, Math.floor(ms / 1_000));
+  const seconds = total % 60;
+  const minutes = Math.floor(total / 60) % 60;
+  const hours = Math.floor(total / 3_600);
+  const ss = String(seconds).padStart(2, "0");
+  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m${ss}s`;
+  return minutes > 0 ? `${minutes}m${ss}s` : `${seconds}s`;
 }

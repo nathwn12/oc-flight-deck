@@ -37,7 +37,7 @@ cost       $0.245 · 2 subagents
 tokens     533k in · 91k out
 cache      98% hit · 32M read
 context    ██░░░░░░░░ 18%
-elapsed    2h 14m
+elapsed    2h14m37s
 tps        18 tok/s
 ```
 
