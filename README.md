@@ -37,7 +37,7 @@ cost       $0.245 · 2 subagents
 tokens     533k in · 91k out
 cache      98% hit · 32M read
 context    ██░░░░░░░░ 18%
-elapsed    2h14m37s
+elapsed    2h 14m 37s
 tps        18 tok/s
 ```
 
@@ -106,7 +106,7 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 > **Upgrading from 0.4.0 — the config file moved.** The per-project search is gone. A `flight-deck.jsonc` in a project root or in `.opencode/` is no longer read; move it to `~/.config/opencode/flight-deck.jsonc` (or the `$XDG_CONFIG_HOME` path above) to keep your settings.
 
-`sidebar.rows` picks the rows and their order; `layout.labelWidth` fits your terminal. Everything else lives in the example file, documented inline — a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.
+`sidebar.rows` picks the rows and their order; `layout.labelWidth` fits your terminal; `format.duration` switches the `elapsed` row between `spaced` (`2h 14m 37s`, the default) and `compact` (`2h14m37s`). Everything else lives in the example file, documented inline — a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.
 
 ```jsonc
 // ~/.config/opencode/flight-deck.jsonc
@@ -118,6 +118,8 @@ The file is optional, and a missing file is normal and silent: with no file at a
       "tokens", "cache", "context", "perms", "elapsed", "tps"
     ]
   },
+  // spaced separates the units (2h 14m 37s, the default); "compact" hugs them (2h14m37s)
+  "format": { "duration": "spaced" },
   "caution": { "toast": false }
 }
 ```

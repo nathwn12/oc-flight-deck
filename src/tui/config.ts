@@ -10,6 +10,7 @@
 
 import { DEFAULT_PLACEHOLDER, isStatField, STAT_FIELDS } from "./stats.js";
 import type { CautionThresholds } from "./caution.js";
+import type { DurationStyle } from "./format.js";
 
 interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
@@ -82,6 +83,8 @@ export interface FlightDeckConfig {
   readonly caution: CautionConfig;
   /** Geometry of a row. Every value has a sane default. */
   readonly layout: LayoutConfig;
+  /** How values are written on the rail, e.g. the `elapsed` duration style. */
+  readonly format: FormatConfig;
   /** Glyphs for the annunciator, for terminals that render the defaults badly. */
   readonly glyphs: GlyphConfig;
   /**
@@ -130,11 +133,28 @@ interface GlyphConfig {
   readonly clear: string;
 }
 
+/**
+ * How values are written on the rail.
+ *
+ * Display only: nothing here changes what is measured, only how a number is
+ * drawn.
+ */
+interface FormatConfig {
+  /**
+   * How the `elapsed` row joins its segments: `"spaced"` separates the units
+   * with one space (`2h 14m 37s`, the default), `"compact"` hugs them
+   * (`2h14m37s`). Zero-padding is identical either way.
+   */
+  readonly duration: DurationStyle;
+}
+
 const DEFAULT_LAYOUT: LayoutConfig = {
   labelWidth: 10,
   barWidth: 10,
   sparkWidth: 12,
 };
+
+const DEFAULT_FORMAT: FormatConfig = { duration: "spaced" };
 
 const DEFAULT_GLYPHS: GlyphConfig = {
   watch: "▲",
@@ -225,6 +245,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
   layout: DEFAULT_LAYOUT,
+  format: DEFAULT_FORMAT,
   glyphs: DEFAULT_GLYPHS,
   refresh: DEFAULT_REFRESH_MS,
 };
@@ -359,7 +380,7 @@ function readRows(value: unknown, issues: string[]): readonly string[] {
 }
 
 /** Every config section that can be set from the file and overridden by the host. */
-type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "glyphs";
+type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "format" | "glyphs";
 
 function sectionOf(options: Record<string, unknown>, key: SectionKey): Record<string, unknown> {
   const value = options[key];
@@ -421,6 +442,7 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
     footer: mergeSection(file, host, "footer"),
     caution: mergeSection(file, host, "caution"),
     layout: mergeSection(file, host, "layout"),
+    format: mergeSection(file, host, "format"),
     glyphs: mergeSection(file, host, "glyphs"),
   };
 }
@@ -460,6 +482,24 @@ function readLayout(section: Record<string, unknown>, issues: string[]): LayoutC
     barWidth: readNumber(section["barWidth"], DEFAULT_LAYOUT.barWidth, "layout.barWidth", issues, 1, 40),
     sparkWidth: readNumber(section["sparkWidth"], DEFAULT_LAYOUT.sparkWidth, "layout.sparkWidth", issues, 2, 64),
   };
+}
+
+/**
+ * The duration style, as one of a fixed set of strings.
+ *
+ * Unlike a free-text value there is no sensible repair for a misspelled style:
+ * the default is restored and the key named, like every other invalid option.
+ */
+function readDurationStyle(value: unknown, issues: string[]): DurationStyle {
+  if (value === undefined) return DEFAULT_FORMAT.duration;
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text === "compact" || text === "spaced") return text;
+  issues.push('format.duration must be "compact" or "spaced"; using the default');
+  return DEFAULT_FORMAT.duration;
+}
+
+function readFormat(section: Record<string, unknown>, issues: string[]): FormatConfig {
+  return { duration: readDurationStyle(section["duration"], issues) };
 }
 
 /**
@@ -594,6 +634,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const rawSidebar = options.sidebar;
   const rawFooter = options.footer;
   const rawCaution = options.caution;
+  const rawFormat = options.format;
   if (rawSidebar !== undefined && !isRecord(rawSidebar)) {
     issues.push("sidebar must be an object; using defaults");
   }
@@ -603,11 +644,15 @@ export function resolveConfig(options: unknown): ConfigResolution {
   if (rawCaution !== undefined && !isRecord(rawCaution)) {
     issues.push("caution must be an object; using defaults");
   }
+  if (rawFormat !== undefined && !isRecord(rawFormat)) {
+    issues.push("format must be an object; using defaults");
+  }
 
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
   const caution = isRecord(rawCaution) ? rawCaution : {};
   const layout = isRecord(options.layout) ? options.layout : {};
+  const format = isRecord(rawFormat) ? rawFormat : {};
   const glyphs = isRecord(options.glyphs) ? options.glyphs : {};
 
   // Writing any footer setting counts as asking for the footer, so the rail
@@ -647,6 +692,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
       },
       caution: readCaution(caution, issues),
       layout: readLayout(layout, issues),
+      format: readFormat(format, issues),
       glyphs: readGlyphs(glyphs, issues),
       refresh: readRefresh(options.refresh, issues),
     },
