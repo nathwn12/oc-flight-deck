@@ -212,7 +212,7 @@ export function statLine(
     case "elapsed": {
       const ms = asCount(source.elapsedMs);
       if (ms === undefined || ms <= 0) return undefined;
-      return row("elapsed", formatDuration(ms));
+      return row("elapsed", formatDuration(ms, layout.durationStyle));
     }
     case "tps": {
       const tps = asCount(source.tps);

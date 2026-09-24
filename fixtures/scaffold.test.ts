@@ -166,6 +166,7 @@ describe("flight deck plugin", () => {
       "$schema",
       "caution",
       "footer",
+      "format",
       "glyphs",
       "layout",
       "refresh",
