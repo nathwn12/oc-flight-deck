@@ -11,7 +11,7 @@
 import { DEFAULT_PLACEHOLDER, isStatField, STAT_FIELDS } from "./stats.js";
 import type { CautionThresholds } from "./caution.js";
 
-export interface SidebarConfig {
+interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
   readonly enabled: boolean;
   /** Fixed lines rendered above the live rows. Default `DEFAULT_SIDEBAR_LINES`. */
@@ -27,7 +27,7 @@ export interface SidebarConfig {
   readonly placeholder: string;
 }
 
-export interface FooterConfig {
+interface FooterConfig {
   /**
    * Show the prompt-footer rail. Default `false`.
    *
@@ -40,7 +40,7 @@ export interface FooterConfig {
   readonly text: string;
 }
 
-export interface CautionConfig {
+interface CautionConfig {
   /** Show the caution annunciator. Default `true`. */
   readonly enabled: boolean;
   /** A tool running longer than this is worth noting. Default `180`. */
@@ -108,7 +108,7 @@ export function cautionThresholds(config: CautionConfig): CautionThresholds {
 }
 
 /** Pure cosmetics: the geometry of a row. */
-export interface LayoutConfig {
+interface LayoutConfig {
   /** Width of the row label column. Default `10`. */
   readonly labelWidth: number;
   /** Cells in the context gauge. Default `10`. */
@@ -124,25 +124,25 @@ export interface LayoutConfig {
  * some terminals render `⚠` as a box or the wrong width. Swapping it for `!` is
  * a worse-looking but working panel, which beats an unreadable one.
  */
-export interface GlyphConfig {
+interface GlyphConfig {
   readonly watch: string;
   readonly caution: string;
   readonly clear: string;
 }
 
-export const DEFAULT_LAYOUT: LayoutConfig = {
+const DEFAULT_LAYOUT: LayoutConfig = {
   labelWidth: 10,
   barWidth: 10,
   sparkWidth: 12,
 };
 
-export const DEFAULT_GLYPHS: GlyphConfig = {
+const DEFAULT_GLYPHS: GlyphConfig = {
   watch: "▲",
   caution: "⚠",
   clear: "○",
 };
 
-export const DEFAULT_CAUTION: CautionConfig = {
+const DEFAULT_CAUTION: CautionConfig = {
   enabled: true,
   toolWatchSeconds: 180,
   toolCautionSeconds: 420,
@@ -244,7 +244,7 @@ function normalizeText(value: string, path: string, issues: string[]): string {
   return value.replace(CONTROL_CHARS, " ").replace(/ {2,}/g, " ").trim();
 }
 
-export interface ConfigResolution {
+interface ConfigResolution {
   readonly config: FlightDeckConfig;
   /** Human-readable problems found in the supplied options; empty when clean. */
   readonly issues: readonly string[];

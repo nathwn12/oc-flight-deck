@@ -30,22 +30,22 @@
 // the persist layer renders the placeholder.
 
 /** Aggregates from guard's `status` output. Only what the row needs. */
-export interface GuardAirworthiness {
+interface GuardAirworthiness {
   readonly available: boolean;
   readonly findings: number;
 }
 
-export interface GuardWarden {
+interface GuardWarden {
   readonly available: boolean;
   readonly breaches: number;
   readonly orphans: number;
 }
 
-export interface GuardFlightPlan {
+interface GuardFlightPlan {
   readonly available: boolean;
 }
 
-export interface GuardStatus {
+interface GuardStatus {
   readonly airworthiness?: GuardAirworthiness;
   readonly warden?: GuardWarden;
   readonly flightPlan?: GuardFlightPlan;
@@ -83,7 +83,7 @@ export interface GuardDeps {
   readonly status: (input: { readonly sessionID: string }) => Promise<unknown>;
 }
 
-export interface GuardBridge {
+interface GuardBridge {
   /**
    * Current status, read from the host's store.
    *
