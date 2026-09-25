@@ -59,7 +59,10 @@ export default Plugin.define({
     const footer = footerLine(config);
     const releases: Array<() => void> = [];
 
-    const reads = createSessionReads(context);
+    // Bound a bankable window to a few ticks: `min(60s, max(5s, 4 * refreshMs))`,
+    // so a suspended process or a sparse-event gap cannot be billed as work.
+    const maxBankedMs = Math.min(60_000, Math.max(5_000, 4 * config.refresh));
+    const reads = createSessionReads(context, maxBankedMs);
     const {
       messagesOf,
       isFamilyRoot,
@@ -178,7 +181,7 @@ export default Plugin.define({
         perms: wants("perms") ? permsOf(sessionID) : undefined,
         tps: wants("tps") ? sessionTps(sessionID, session) : undefined,
         spark: wants("spark") ? sparkValues(sessionID) : undefined,
-        elapsedMs: wants("elapsed") ? sessionElapsed(session) : undefined,
+        elapsedMs: wants("elapsed") ? sessionElapsed(sessionID) : undefined,
         turns,
         guard: bridge?.status,
         // Read the tick inside the render so the host registers a dependency on
