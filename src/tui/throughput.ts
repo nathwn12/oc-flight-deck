@@ -83,6 +83,41 @@ export interface SpanTotals {
 }
 
 /**
+ * The merged length of already-accepted spans.
+ *
+ * The shared second half of both unions: it pre-sorts so the result cannot
+ * depend on the order the host returned the spans, then merges overlapping and
+ * touching spans (`next.start <= openEnd`, so a span that starts exactly when
+ * another ends is continuous work) into one. `0` when nothing was accepted.
+ */
+function mergedSpanMs(accepted: Array<{ start: number; end: number }>): number {
+  // Pre-sort so the merge cannot depend on the order the host returned them.
+  accepted.sort((a, b) => a.start - b.start || a.end - b.end);
+  const first = accepted[0];
+  if (first === undefined) return 0;
+
+  let unionMs = 0;
+  let openStart = first.start;
+  let openEnd = first.end;
+  for (let index = 1; index < accepted.length; index += 1) {
+    const next = accepted[index];
+    if (next === undefined) continue;
+    // Touching spans (`next.start === openEnd`) merge as well as overlapping
+    // ones: a turn that starts exactly when another ends is continuous work.
+    if (next.start <= openEnd) {
+      if (next.end > openEnd) openEnd = next.end;
+    } else {
+      unionMs += openEnd - openStart;
+      openStart = next.start;
+      openEnd = next.end;
+    }
+  }
+  unionMs += openEnd - openStart;
+
+  return unionMs;
+}
+
+/**
  * Sum the tokens of distinct turns and the union length of their spans.
  *
  * De-duplicates by `key` first, so a re-sent record adds its tokens once and
@@ -112,30 +147,36 @@ export function unionSpanTotals(spans: readonly ThroughputSpan[]): SpanTotals {
     tokens += output;
   }
 
-  // Pre-sort so the merge cannot depend on the order the host returned them.
-  accepted.sort((a, b) => a.start - b.start || a.end - b.end);
-  const first = accepted[0];
-  if (first === undefined) return { tokens, unionMs: 0 };
+  return { tokens, unionMs: mergedSpanMs(accepted) };
+}
 
-  let unionMs = 0;
-  let openStart = first.start;
-  let openEnd = first.end;
-  for (let index = 1; index < accepted.length; index += 1) {
-    const next = accepted[index];
-    if (next === undefined) continue;
-    // Touching spans (`next.start === openEnd`) merge as well as overlapping
-    // ones: a turn that starts exactly when another ends is continuous work.
-    if (next.start <= openEnd) {
-      if (next.end > openEnd) openEnd = next.end;
-    } else {
-      unionMs += openEnd - openStart;
-      openStart = next.start;
-      openEnd = next.end;
-    }
+/**
+ * The union length of distinct turn spans, with tokens ignored entirely.
+ *
+ * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`, but
+ * a turn's output count never enters the decision: a zero-output turn still
+ * took wall time and still contributes its span. This is what seeds `elapsed`,
+ * which must not undercount real work the way a token-gated union would.
+ * A missing key is skipped; the first-seen key wins; a span without a usable
+ * start and end is skipped; `0` when nothing is usable.
+ */
+export function unionSpanMs(spans: readonly ThroughputSpan[]): number {
+  const seen = new Set<string>();
+  const accepted: Array<{ start: number; end: number }> = [];
+
+  for (const span of spans) {
+    const key = asText(span.key);
+    if (key === undefined || seen.has(key)) continue;
+
+    const start = asCount(span.start);
+    const end = asCount(span.end);
+    if (start === undefined || end === undefined) continue;
+
+    seen.add(key);
+    accepted.push({ start, end: Math.max(start, end) });
   }
-  unionMs += openEnd - openStart;
 
-  return { tokens, unionMs };
+  return mergedSpanMs(accepted);
 }
 
 /**
