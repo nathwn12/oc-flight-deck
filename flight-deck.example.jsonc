@@ -46,7 +46,8 @@
   //    100  default — the spinner turns once a second, the clock stays live
   //     50  twice as lively, still negligible work per tick
   //   1000  a calm wall-clock tick, but the spinner visibly stutters
-  //      0  no timer; `elapsed` and the spinner only move when the session does
+  //      0  no timer; `elapsed` and the spinner only move when the session does,
+  //         so a busy stretch with few host events can undercount the clock
   //
   // Anything faster than 16 (one frame at 60Hz) is clamped: a tick wakes the
   // host's renderer, so a smaller value spends work without adding motion.
@@ -81,7 +82,10 @@
     //   cache      cache hit rate, then cache reads
     //   context    a gauge of how full the context window is
     //   perms      what is waiting for approval, not just how many
-    //   elapsed    wall-clock time since the session started
+    //   elapsed    active time: the clock runs only while this session — or a
+    //              subagent in its tree, or one of its shells — is working, and
+    //              freezes when everything settles. Process-local: it starts at
+    //              zero with the plugin and counts only activity this run saw
     //   tps        current speed: output tokens in the last 60 seconds,
     //              subagents included. Hides while idle longer than the
     //              window; falls back to the session's lifetime average on

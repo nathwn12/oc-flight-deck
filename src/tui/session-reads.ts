@@ -8,6 +8,7 @@
 // Coercion of untrusted values happens through ./coerce.js.
 
 import type { Plugin } from "@opencode/plugin/tui";
+import { createActiveElapsed } from "./active-elapsed.js";
 import { asCount, asRecord, asText, type SessionLike } from "./coerce.js";
 
 /**
@@ -23,7 +24,7 @@ export function locationOf(context: Plugin.Context) {
   }
 }
 
-export function createSessionReads(context: Plugin.Context) {
+export function createSessionReads(context: Plugin.Context, maxBankedMs?: number) {
   /** How many trailing messages are inspected for tool parts. */
   const RECENT_MESSAGES = 4;
 
@@ -114,15 +115,6 @@ export function createSessionReads(context: Plugin.Context) {
       return undefined;
     }
     return undefined;
-  };
-
-  // Measured against the clock rather than the session's last update, so the
-  // row keeps moving between events instead of freezing between turns.
-  const sessionElapsed = (session: SessionLike | undefined): number | undefined => {
-    const created = asCount(asRecord(session?.time)?.created);
-    if (created === undefined) return undefined;
-    const elapsed = Date.now() - created;
-    return elapsed <= 0 ? undefined : elapsed;
   };
 
   const statusOf = (sessionID: string): string | undefined => {
@@ -222,6 +214,13 @@ export function createSessionReads(context: Plugin.Context) {
 
     return status === undefined ? undefined : false;
   };
+
+  // Accumulated active wall time: the clock runs only while `busy()` says the
+  // session, its family, or its shells is working, and freezes otherwise. The
+  // `now` parameter keeps the transition observation deterministic for tests.
+  const activeElapsed = createActiveElapsed(busy, { maxBankedMs });
+  const sessionElapsed = (sessionID: string, now: number = Date.now()): number | undefined =>
+    activeElapsed(sessionID, now);
 
   return {
     messagesOf,

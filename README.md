@@ -41,7 +41,7 @@ elapsed    2h 14m 37s
 tps        18 tok/s
 ```
 
-Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none), and the opt-in `guard` row, which is polled from the local guard RPC.
+Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none); `elapsed`, which is a process-local tally of the busy windows this run observed rather than a value the session reports; and the opt-in `guard` row, which is polled from the local guard RPC.
 
 | Row | What it shows |
 |---|---|
@@ -57,7 +57,7 @@ Every row is read from the open session at render time — except `caution`, whi
 | `cache` | Hit rate first — the number that explains the bill — then cache reads |
 | `context` | A gauge of how full the window is |
 | `perms` | What is waiting for approval, not just how many |
-| `elapsed` | How long you've been at it |
+| `elapsed` | Active time — the clock runs only while this session, a subagent in its tree, or one of its shells is working, and freezes when everything settles. It is process-local and starts at zero when the plugin starts, so it measures activity observed this run, not wall-clock since the session began |
 | `tps` | Current speed: output tokens in the last 60 s, divided by that window, subagents included. Idle longer than the window and it hides — the `status` row already says `idle`. On a host that exposes no per-message timestamps it falls back to the lifetime average, which does not hide while idle and reads lower than a peak per-turn rate. Fixed at 60 s, not configurable |
 | `spark` | Recent turn sizes as a shape · **off by default** |
 | `reasoning` | Reasoning tokens, when the model emits them · **off by default** |
@@ -144,7 +144,7 @@ Flight Deck shows what OpenCode already knows.
 
 - **No network calls while the opt-in `guard` row stays off.** Nothing is fetched, nothing is sent. With `guard` enabled, the panel polls the local guard RPC — same machine, no telemetry — about every ten seconds, plus right away when the rendered session changes.
 - **No telemetry.** Nothing is collected or phoned home.
-- **Nothing on disk.** The one thing it normally writes is an animation counter in the host's in-memory plugin state, so the spinner and `elapsed` keep moving between turns. It is scoped to this plugin and dies with the TUI; it is never persisted, and `"refresh": 0` removes even that. With `guard` enabled there is a second in-memory write — that row's polled status — and `"refresh": 0` does not remove it; dropping `guard` from `sidebar.rows` does.
+- **Nothing on disk.** The one thing it normally writes is an animation counter in the host's in-memory plugin state, so the spinner and a running `elapsed` clock keep moving between host events. It is scoped to this plugin and dies with the TUI; it is never persisted, and `"refresh": 0` removes even that. With `"refresh": 0` the rail re-reads only on host events, so a busy stretch that produces few events can undercount `elapsed` — no unobserved gap bills beyond its bound, and a longer gap banks nothing. With `guard` enabled there is a second in-memory write — that row's polled status — and `"refresh": 0` does not remove it; dropping `guard` from `sidebar.rows` does.
 - **No polling of your session while `guard` stays off.** Cost, tokens, and permissions update from the host's own events. The timer only re-reads state the host already holds in memory, so the clock-derived rows keep moving.
 - **Theme-native.** Every line uses your active theme's text tokens, so it blends with whatever look you already run.
 
