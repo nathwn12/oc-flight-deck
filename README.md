@@ -41,7 +41,7 @@ elapsed    2h 14m 37s
 tps        18 tok/s
 ```
 
-Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none); `elapsed`, which is a process-local tally of the busy windows this run observed rather than a value the session reports; and the opt-in `guard` row, which is polled from the local guard RPC.
+Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none); `elapsed`, which is seeded once from the session's own recorded assistant turn spans and then accumulates the busy windows this run observes, rather than a value the session reports; and the opt-in `guard` row, which is polled from the local guard RPC.
 
 | Row | What it shows |
 |---|---|
@@ -57,7 +57,7 @@ Every row is read from the open session at render time — except `caution`, whi
 | `cache` | Hit rate first — the number that explains the bill — then cache reads |
 | `context` | A gauge of how full the window is |
 | `perms` | What is waiting for approval, not just how many |
-| `elapsed` | Active time — the clock runs only while this session, a subagent in its tree, or one of its shells is working, and freezes when everything settles. It is process-local and starts at zero when the plugin starts, so it measures activity observed this run, not wall-clock since the session began |
+| `elapsed` | Active time — the clock runs only while this session, a subagent in its tree, or one of its shells is working, and freezes when everything settles. It is seeded once from the assistant turn spans the host already recorded for that session, so it survives a restart instead of resetting to `—`; work observed live after that keeps counting in memory. It measures active time, not wall-clock since the session began |
 | `tps` | Average speed **while working**: output tokens divided by the time the assistant's turns actually ran, subagents included. Idle time between turns is never counted, so the figure freezes when everything settles instead of decaying or hiding; a turn still in flight counts up to now. On a host that exposes no per-message timestamps it falls back to the lifetime average, which includes idle and can therefore sag. Not configurable |
 | `spark` | Recent turn sizes as a shape · **off by default** |
 | `reasoning` | Reasoning tokens, when the model emits them · **off by default** |
