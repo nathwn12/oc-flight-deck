@@ -30,10 +30,12 @@ export interface StatSource {
   readonly busy?: unknown;
   readonly perms?: unknown;
   /**
-   * Current session throughput. On a host that stamps its messages this is a
-   * trailing-window rate over the last minute, subagents summed in; on a host
-   * without message timestamps it falls back to the lifetime average. Either
-   * way it is derived from state the host already holds.
+   * Session throughput. On a host that stamps its messages this is an
+   * active-work average: output tokens divided by the union of the assistant
+   * turns' own spans, subagents summed in, so idle between turns is not
+   * counted and the figure freezes when work stops. On a host without message
+   * timestamps it falls back to the lifetime average, which can still sag.
+   * Either way it is derived from state the host already holds.
    */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;

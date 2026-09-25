@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, TPS_WINDOW_MS, windowedThroughput } from "../src/tui/stats.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, turnKey, turnSpan, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -279,77 +279,176 @@ describe("host text is flattened before it is drawn", () => {
   });
 });
 
-// The windowed rate is the whole point of the tps row on a modern host: a single
-// trailing minute rather than a whole-conversation average. These pin the
-// arithmetic, the clamp that keeps a fresh session honest, and the guards that
-// make an idle window report nothing at all rather than a decaying number.
-describe("windowed throughput", () => {
+// A deterministic shuffle, so the order-independence claims are pinned against
+// a real reordering rather than the one input order the test happened to write.
+function shuffle<T>(items: readonly T[], seed: number): T[] {
+  const out = [...items];
+  let state = seed >>> 0;
+  for (let index = out.length - 1; index > 0; index -= 1) {
+    state = (state * 1_664_525 + 1_013_904_223) >>> 0;
+    const swap = state % (index + 1);
+    const current = out[index];
+    const target = out[swap];
+    if (current === undefined || target === undefined) continue;
+    out[index] = target;
+    out[swap] = current;
+  }
+  return out;
+}
+
+// The tps row measures work actually done: output tokens divided by the union
+// of the assistant turns' own spans. Idle between turns is never in the
+// denominator, so an idle session keeps the figure it settled on instead of
+// decaying or hiding. These pin the union arithmetic and the mandatory
+// defences: dedup, clamp, pre-sort, and the one-second floor.
+describe("active-work throughput", () => {
   const NOW = 1_800_000_000_000;
-  const LONG_AGO = NOW - 600_000;
 
-  test("returns undefined when nothing usable is inside the window", () => {
-    expect(windowedThroughput([], NOW, TPS_WINDOW_MS, LONG_AGO)).toBeUndefined();
-    // Older than the window is not a zero rate: it is no rate at all, which is
-    // what hides the row of an idle session.
+  test("resolves a turn span from the timestamp rungs, in flight ending at now", () => {
+    // `completed` wins; `streamed` next; otherwise the turn is in flight and
+    // ends at the caller's now.
+    expect(turnSpan(1_000, 5_000, 4_000, NOW)).toEqual({ start: 1_000, end: 5_000 });
+    expect(turnSpan(1_000, undefined, 4_000, NOW)).toEqual({ start: 1_000, end: 4_000 });
+    expect(turnSpan(1_000, undefined, undefined, NOW)).toEqual({ start: 1_000, end: NOW });
+    // No usable start: the turn is skipped, never guessed at.
+    expect(turnSpan(undefined, 5_000, 4_000, NOW)).toBeUndefined();
+    expect(turnSpan("nope", 5_000, 4_000, NOW)).toBeUndefined();
+    // A clock that cannot even say "now" leaves the in-flight end unresolvable.
+    expect(turnSpan(1_000, undefined, undefined, Number.NaN)).toBeUndefined();
+  });
+
+  test("clamps a backwards clock to a zero-length span, never negative", () => {
+    // `end < start` is skew: the span is zero-length rather than negative, so
+    // it can never subtract time from the union.
+    expect(turnSpan(5_000, 1_000, undefined, NOW)).toEqual({ start: 5_000, end: 5_000 });
+    expect(unionSpanTotals([{ key: "a", tokens: 10, start: 5_000, end: 1_000 }])).toEqual({
+      tokens: 10,
+      unionMs: 0,
+    });
+    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: 5_000, end: 1_000 }])).toBeUndefined();
+  });
+
+  test("returns undefined when there is nothing to divide", () => {
+    expect(unionSpanTotals([])).toEqual({ tokens: 0, unionMs: 0 });
+    expect(unionSpanThroughput([])).toBeUndefined();
+    // No positive output, or no usable span, is no rate at all.
+    expect(unionSpanThroughput([{ key: "a", tokens: 0, start: 0, end: 10_000 }])).toBeUndefined();
+    expect(unionSpanThroughput([{ key: "a", start: 0, end: 10_000 }])).toBeUndefined();
+    expect(unionSpanThroughput([{ key: "a", tokens: -5, start: 0, end: 10_000 }])).toBeUndefined();
+    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: "x", end: 10_000 }])).toBeUndefined();
+    // A zero-output turn contributes to neither side: both tokens and time drop.
+    expect(unionSpanTotals([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toEqual({
+      tokens: 0,
+      unionMs: 0,
+    });
+  });
+
+  test("divides tokens by the union of the spans, merging overlap and touch", () => {
+    // Overlapping turns: 100 tokens over a 2 s union, not 3 s.
     expect(
-      windowedThroughput([{ tokens: 500, at: NOW - TPS_WINDOW_MS - 1 }], NOW, TPS_WINDOW_MS, LONG_AGO),
-    ).toBeUndefined();
+      unionSpanThroughput([
+        { key: "a", tokens: 60, start: 0, end: 1_000 },
+        { key: "b", tokens: 40, start: 500, end: 2_000 },
+      ]),
+    ).toBe(50);
+    // Touching turns merge too: 200 tokens over 2 s.
+    expect(
+      unionSpanThroughput([
+        { key: "a", tokens: 100, start: 0, end: 1_000 },
+        { key: "b", tokens: 100, start: 1_000, end: 2_000 },
+      ]),
+    ).toBe(100);
+    // A gap between turns is idle and is not counted: 200 tokens over 2 s.
+    expect(
+      unionSpanThroughput([
+        { key: "a", tokens: 100, start: 0, end: 1_000 },
+        { key: "b", tokens: 100, start: 60_000, end: 61_000 },
+      ]),
+    ).toBe(100);
   });
 
-  test("sums only the output inside a settled window", () => {
-    const samples = [
-      { tokens: 120, at: NOW - 5_000 },
-      { tokens: 180, at: NOW - 55_000 },
-      // Outside the window: must not inflate the rate.
-      { tokens: 9_999, at: NOW - TPS_WINDOW_MS - 1 },
+  test("does not let a long idle gap lower the figure", () => {
+    const close = [
+      { key: "a", tokens: 300, start: 0, end: 1_000 },
+      { key: "b", tokens: 300, start: 2_000, end: 3_000 },
     ];
-    // 300 tokens over a full 60s window.
-    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(5);
-  });
-
-  test("clamps a fresh session's denominator to its real age", () => {
-    // Alive two seconds, so 100 tokens reads as 50 tok/s, not 1.67.
-    expect(windowedThroughput([{ tokens: 100, at: NOW - 500 }], NOW, TPS_WINDOW_MS, NOW - 2_000)).toBe(50);
-    // A sub-second session is floored at one second, the same floor the lifetime
-    // average uses, so a sliver of time cannot flash an absurd rate.
-    expect(windowedThroughput([{ tokens: 10, at: NOW - 100 }], NOW, TPS_WINDOW_MS, NOW - 200)).toBe(10);
-  });
-
-  test("uses the full window when the session age is unusable", () => {
-    expect(windowedThroughput([{ tokens: 60, at: NOW - 1_000 }], NOW, TPS_WINDOW_MS, Number.NaN)).toBe(1);
-  });
-
-  test("rejects a window or clock it cannot trust", () => {
-    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, 0, LONG_AGO)).toBeUndefined();
-    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, -1, LONG_AGO)).toBeUndefined();
-    expect(windowedThroughput([{ tokens: 10, at: NOW }], NOW, Number.NaN, LONG_AGO)).toBeUndefined();
-    expect(windowedThroughput([{ tokens: 10, at: NOW }], Number.NaN, TPS_WINDOW_MS, LONG_AGO)).toBeUndefined();
-  });
-
-  test("skips a sample with no usable timestamp or no positive output", () => {
-    const samples = [
-      { tokens: 120, at: NOW - 1_000 },
-      { tokens: 120 }, // no timestamp at all
-      { at: NOW - 1_000 }, // no token count
-      { tokens: 0, at: NOW - 1_000 },
-      { tokens: -5, at: NOW - 1_000 },
-      { tokens: 120, at: "not a number" },
-      { tokens: 120, at: Number.NaN },
-      { tokens: 120, at: Number.POSITIVE_INFINITY },
+    const farApart = [
+      { key: "a", tokens: 300, start: 0, end: 1_000 },
+      { key: "b", tokens: 300, start: 3_600_000, end: 3_601_000 },
     ];
-    // Only the first sample counts: 120 over a full window is 2 tok/s.
-    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(2);
+    // Same tokens, same active time: an idle hour between them changes nothing.
+    expect(unionSpanThroughput(farApart)).toBe(unionSpanThroughput(close));
+    expect(unionSpanThroughput(farApart)).toBe(300);
   });
 
-  test("counts both window boundaries as inside", () => {
-    const start = NOW - TPS_WINDOW_MS;
-    const samples = [
-      { tokens: 60, at: start },
-      { tokens: 60, at: NOW },
-      { tokens: 60, at: start - 1 }, // one millisecond too old
-      { tokens: 60, at: NOW + 1 }, // one millisecond into the future
+  test("counts an identical duplicate once on both sides", () => {
+    const turn = { key: "id:msg_1", tokens: 120, start: 0, end: 1_000 };
+    expect(unionSpanTotals([turn, turn, turn])).toEqual({ tokens: 120, unionMs: 1_000 });
+    expect(unionSpanThroughput([turn, turn, turn])).toBe(120);
+  });
+
+  test("dedups by identity, so a conflicting repeat cannot widen the span", () => {
+    // A replay carrying the same id keeps the first record: the denominator is
+    // the first span, not the wider second one.
+    expect(
+      unionSpanTotals([
+        { key: "id:msg_1", tokens: 60, start: 0, end: 1_000 },
+        { key: "id:msg_1", tokens: 60, start: 0, end: 9_000 },
+      ]),
+    ).toEqual({ tokens: 60, unionMs: 1_000 });
+  });
+
+  test("builds the dedup key from the id, else the record tuple", () => {
+    expect(turnKey("msg_1", 1, 2, 3)).toBe("id:msg_1");
+    // No id: the fields that define the record, so a re-sent copy matches.
+    expect(turnKey(undefined, 1, 2, 3)).toBe(turnKey(undefined, 1, 2, 3));
+    expect(turnKey(undefined, 1, 2, 3)).not.toBe(turnKey(undefined, 1, 2, 4));
+    expect(turnKey(undefined, 1, 2, 3)).not.toBe(turnKey(undefined, 9, 2, 3));
+  });
+
+  test("floors a sliver of time at one second", () => {
+    // Half a second of work would otherwise read as double the rate.
+    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: 0, end: 500 }])).toBe(10);
+    expect(unionSpanThroughput([{ key: "a", tokens: 600, start: 0, end: 2_000 }])).toBe(300);
+  });
+
+  test("gives the same answer whatever order the turns arrive in", () => {
+    const spans = [
+      { key: "a", tokens: 60, start: 5_000, end: 9_000 },
+      { key: "b", tokens: 40, start: 0, end: 3_000 },
+      { key: "c", tokens: 90, start: 7_000, end: 12_000 },
     ];
-    expect(windowedThroughput(samples, NOW, TPS_WINDOW_MS, LONG_AGO)).toBe(2);
+    // b is 3 s; a and c overlap into one 7 s stretch; 190 tokens over 10 s.
+    expect(unionSpanThroughput(spans)).toBe(19);
+    expect(unionSpanThroughput([...spans].reverse())).toBe(19);
+    expect(unionSpanThroughput(shuffle(spans, 7))).toBe(19);
+  });
+
+  test("property: the union stays inside the time actually available", () => {
+    for (let seed = 1; seed <= 250; seed += 1) {
+      const count = 1 + ((seed * 7) % 10);
+      const spans: Array<{ key: string; tokens: number; start: number; end: number }> = [];
+      for (let index = 0; index < count; index += 1) {
+        const start = NOW - 1 - ((seed * 131 + index * 977) % 60_000);
+        const width = 1 + ((seed * 17 + index * 53) % 5_000);
+        spans.push({
+          key: `s${seed}-${index}`,
+          tokens: 1 + ((seed * 13 + index * 29) % 500),
+          start,
+          end: Math.min(NOW, start + width),
+        });
+      }
+      const earliest = Math.min(...spans.map((span) => span.start));
+      const forward = unionSpanTotals(spans);
+      // Non-negative, and never more than the span from the earliest start to
+      // the latest end (which cannot exceed now).
+      expect(forward.unionMs).toBeGreaterThanOrEqual(0);
+      expect(forward.unionMs).toBeLessThanOrEqual(NOW - earliest);
+      // Reordering the input cannot change either side.
+      const shuffled = shuffle(spans, seed);
+      expect(unionSpanTotals(shuffled)).toEqual(forward);
+      expect(unionSpanThroughput(shuffled)).toBe(unionSpanThroughput(spans));
+    }
   });
 });
 

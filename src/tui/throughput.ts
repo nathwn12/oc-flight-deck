@@ -1,16 +1,22 @@
-// Session throughput: output tokens per second, as a lifetime average or as a
-// trailing-window rate.
+// Session throughput: output tokens per second, measured over the active work
+// the host actually recorded rather than over the wall clock.
 //
 // Pure: no clock, no I/O, no rendering. Untrusted sample fields are coerced
 // through ./coerce.js so a garbage value is skipped rather than guessed at.
+//
+// Two rates live here. `sessionThroughput` is the whole-lifetime average, kept
+// as the metric of last resort for a host that exposes no per-message
+// timestamps. `unionSpanThroughput` is the active-work average: output tokens
+// divided by the union of the assistant turns' own spans, so idle between turns
+// is never in the denominator and the figure freezes once everything settles.
 
-import { asCount } from "./coerce.js";
+import { asCount, asText } from "./coerce.js";
 
 /**
  * Overall session throughput: output tokens over the session's lifetime.
  *
- * Unlike a per-turn rate, this is the whole conversation's average, so it
- * includes every subagent and every pause. A just-started session is floored
+ * Unlike the active-work average, this is the whole conversation's average, so
+ * it includes every subagent and every pause. A just-started session is floored
  * at one second so it cannot divide by a sliver of time and flash an absurd
  * rate. Returns `undefined` when there is nothing to divide.
  */
@@ -22,64 +28,129 @@ export function sessionThroughput(outputTokens: unknown, elapsedMs: unknown): nu
   return output / (Math.max(elapsed, 1_000) / 1_000);
 }
 
-/** Length of the trailing window, in milliseconds, that `windowedThroughput` measures. */
-export const TPS_WINDOW_MS = 60_000;
-
 /**
- * One assistant turn's contribution to a throughput window.
+ * One assistant turn's contribution to the active-work average.
  *
- * Both fields are untrusted: `tokens` is the turn's output count and `at` is the
- * timestamp it finished at. Anything unusable is skipped rather than guessed at.
+ * `key` is the turn's identity (see `turnKey`); `tokens` is its output count;
+ * `start` and `end` are its span on the host's epoch clock. Every field is
+ * untrusted and coerced before use.
  */
-export interface ThroughputSample {
+export interface ThroughputSpan {
+  readonly key?: unknown;
   readonly tokens?: unknown;
-  readonly at?: unknown;
+  readonly start?: unknown;
+  readonly end?: unknown;
 }
 
 /**
- * A trailing-window throughput rate: output tokens per second over the last
- * `windowMs`, measured from `nowMs`.
+ * Resolve one assistant turn's span from its timestamp rungs.
  *
- * The denominator is how much of the window the session has actually lived, so
- * a just-started session ramps up against its real age instead of being divided
- * by a full minute it has not run — floored at one second, the same floor the
- * lifetime average uses, so a sliver of time cannot flash an absurd rate. Once
- * the session is older than the window, it settles into a clean rolling minute.
- *
- * Returns `undefined` — the caller hides the row — unless at least one sample
- * carries a usable timestamp inside the window and a positive output count. An
- * idle session therefore reports no rate rather than a decaying one. The window
- * is inclusive at both ends (`start <= at <= now`) so a boundary sample counts.
- *
- * Pure: no clock, no I/O, no rendering.
+ * `start` is `time.created`. `end` is `time.completed`, else `time.streamed`,
+ * else the caller's `nowMs` for a turn still in flight. A clock that steps
+ * backwards is clamped to a zero-length span rather than a negative one, so
+ * skew can never subtract time from the union. Returns `undefined` when there
+ * is no usable start — the turn is skipped, never guessed at.
  */
-export function windowedThroughput(
-  samples: readonly ThroughputSample[],
-  nowMs: number,
-  windowMs: number,
-  sessionCreatedMs: number,
-): number | undefined {
-  if (!Number.isFinite(nowMs)) return undefined;
-  if (!Number.isFinite(windowMs) || windowMs <= 0) return undefined;
+export function turnSpan(
+  created: unknown,
+  completed: unknown,
+  streamed: unknown,
+  nowMs: unknown,
+): { readonly start: number; readonly end: number } | undefined {
+  const start = asCount(created);
+  if (start === undefined) return undefined;
+  const ended = asCount(completed) ?? asCount(streamed) ?? asCount(nowMs);
+  if (ended === undefined) return undefined;
+  return { start, end: Math.max(start, ended) };
+}
 
-  // An unusable creation time cannot tell us how long the session has lived, so
-  // the whole window is assumed available rather than dropping the rate.
-  const created = Number.isFinite(sessionCreatedMs) ? sessionCreatedMs : undefined;
-  const alive = created === undefined ? windowMs : nowMs - created;
-  const denominatorMs = Math.max(1_000, Math.min(windowMs, alive));
+/**
+ * Identity of one assistant turn: the host's own message id when it carries
+ * one, otherwise the tuple `(created, completed, output)` that defines the
+ * record. Retries, replays and re-sent records share a key, so they contribute
+ * their tokens once and their time once.
+ */
+export function turnKey(id: unknown, created: unknown, completed: unknown, output: unknown): string {
+  const own = asText(id);
+  if (own !== undefined) return `id:${own}`;
+  return `t:${asCount(created) ?? "?"}:${asCount(completed) ?? "?"}:${asCount(output) ?? "?"}`;
+}
 
-  const start = nowMs - windowMs;
-  let output = 0;
-  let sawOne = false;
-  for (const sample of samples) {
-    const at = asCount(sample.at);
-    if (at === undefined || at < start || at > nowMs) continue;
-    const tokens = asCount(sample.tokens);
-    if (tokens === undefined || tokens <= 0) continue;
-    output += tokens;
-    sawOne = true;
+/** Output tokens and wall time the accepted turns actually cover. */
+export interface SpanTotals {
+  readonly tokens: number;
+  readonly unionMs: number;
+}
+
+/**
+ * Sum the tokens of distinct turns and the union length of their spans.
+ *
+ * De-duplicates by `key` first, so a re-sent record adds its tokens once and
+ * enters the union once — a dropped duplicate drops both sides together.
+ * Spans are clamped (`end >= start`), then sorted and merged so overlapping
+ * and touching turns count once and input order cannot change the result. A
+ * turn with no usable token count contributes to neither side: the numerator
+ * and the denominator always cover exactly the same turns.
+ */
+export function unionSpanTotals(spans: readonly ThroughputSpan[]): SpanTotals {
+  const seen = new Set<string>();
+  const accepted: Array<{ start: number; end: number }> = [];
+  let tokens = 0;
+
+  for (const span of spans) {
+    const key = asText(span.key);
+    if (key === undefined || seen.has(key)) continue;
+
+    const start = asCount(span.start);
+    const end = asCount(span.end);
+    const output = asCount(span.tokens);
+    if (start === undefined || end === undefined) continue;
+    if (output === undefined || output <= 0) continue;
+
+    seen.add(key);
+    accepted.push({ start, end: Math.max(start, end) });
+    tokens += output;
   }
 
-  if (!sawOne) return undefined;
-  return output / (denominatorMs / 1_000);
+  // Pre-sort so the merge cannot depend on the order the host returned them.
+  accepted.sort((a, b) => a.start - b.start || a.end - b.end);
+  const first = accepted[0];
+  if (first === undefined) return { tokens, unionMs: 0 };
+
+  let unionMs = 0;
+  let openStart = first.start;
+  let openEnd = first.end;
+  for (let index = 1; index < accepted.length; index += 1) {
+    const next = accepted[index];
+    if (next === undefined) continue;
+    // Touching spans (`next.start === openEnd`) merge as well as overlapping
+    // ones: a turn that starts exactly when another ends is continuous work.
+    if (next.start <= openEnd) {
+      if (next.end > openEnd) openEnd = next.end;
+    } else {
+      unionMs += openEnd - openStart;
+      openStart = next.start;
+      openEnd = next.end;
+    }
+  }
+  unionMs += openEnd - openStart;
+
+  return { tokens, unionMs };
+}
+
+/**
+ * Active-work throughput: output tokens of the scope divided by the union of
+ * its active turn spans. Idle time between turns is not in the denominator, so
+ * the figure stops moving once everything settles instead of decaying or
+ * hiding. A turn still in flight ends at the caller's `now`, so the value keeps
+ * climbing while work happens.
+ *
+ * Floored at one second, the same floor the lifetime average uses, so a sliver
+ * of time cannot flash an absurd rate. Returns `undefined` when there is
+ * nothing to divide — no positive output, or no span with positive length.
+ */
+export function unionSpanThroughput(spans: readonly ThroughputSpan[]): number | undefined {
+  const { tokens, unionMs } = unionSpanTotals(spans);
+  if (tokens <= 0 || unionMs <= 0) return undefined;
+  return tokens / (Math.max(unionMs, 1_000) / 1_000);
 }

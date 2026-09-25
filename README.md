@@ -58,7 +58,7 @@ Every row is read from the open session at render time — except `caution`, whi
 | `context` | A gauge of how full the window is |
 | `perms` | What is waiting for approval, not just how many |
 | `elapsed` | Active time — the clock runs only while this session, a subagent in its tree, or one of its shells is working, and freezes when everything settles. It is process-local and starts at zero when the plugin starts, so it measures activity observed this run, not wall-clock since the session began |
-| `tps` | Current speed: output tokens in the last 60 s, divided by that window, subagents included. Idle longer than the window and it hides — the `status` row already says `idle`. On a host that exposes no per-message timestamps it falls back to the lifetime average, which does not hide while idle and reads lower than a peak per-turn rate. Fixed at 60 s, not configurable |
+| `tps` | Average speed **while working**: output tokens divided by the time the assistant's turns actually ran, subagents included. Idle time between turns is never counted, so the figure freezes when everything settles instead of decaying or hiding; a turn still in flight counts up to now. On a host that exposes no per-message timestamps it falls back to the lifetime average, which includes idle and can therefore sag. Not configurable |
 | `spark` | Recent turn sizes as a shape · **off by default** |
 | `reasoning` | Reasoning tokens, when the model emits them · **off by default** |
 | `turns` | How many prompts you've sent this session · **off by default** |

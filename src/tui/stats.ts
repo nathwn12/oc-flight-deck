@@ -14,5 +14,5 @@ export { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline } fro
 export { statLine, statRows } from "./rows.js";
 export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, isStatField } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
-export { sessionThroughput, TPS_WINDOW_MS, windowedThroughput } from "./throughput.js";
-export type { ThroughputSample } from "./throughput.js";
+export { sessionThroughput, turnKey, turnSpan, unionSpanThroughput, unionSpanTotals } from "./throughput.js";
+export type { SpanTotals, ThroughputSpan } from "./throughput.js";
