@@ -84,8 +84,10 @@
     //   perms      what is waiting for approval, not just how many
     //   elapsed    active time: the clock runs only while this session — or a
     //              subagent in its tree, or one of its shells — is working, and
-    //              freezes when everything settles. Process-local: it starts at
-    //              zero with the plugin and counts only activity this run saw
+    //              freezes when everything settles. Seeded once from the
+    //              assistant turn spans the host already recorded, so it
+    //              survives a restart instead of resetting; work observed live
+    //              after that keeps counting in memory
     //   tps        average speed while working: output tokens divided by the
     //              time the assistant's turns actually ran, subagents included.
     //              Idle between turns is never counted, so the figure freezes

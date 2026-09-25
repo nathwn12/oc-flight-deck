@@ -15,13 +15,20 @@
 //
 // State is a per-session accumulator held in this process and keyed by the
 // displayed session, so an unrelated project's session can never contribute.
-// That also means the figure begins at zero when the TUI starts: it measures
-// activity observed this process, not activity the host recorded. A session
-// that is idle when first seen stays at zero, and an unknown busy state
-// (`undefined`) freezes rather than inventing motion.
+// The figure starts from a seed the caller may supply: the merged spans of the
+// assistant turns the host already recorded for that session's scope. That is
+// read once, from the host's own timestamps, so a restart comes back with the
+// work already on record instead of zero. Work observed live after that first
+// read keeps accumulating on top in memory, and a host that offers no seed
+// (or no timestamps) starts at zero and behaves exactly as it did before. The
+// seed is asked for once per session, when that session is first seen; an
+// unknown busy state (`undefined`) freezes rather than inventing motion.
 
 /** How the caller answers "is this session working right now?". */
 export type BusyRead = (sessionID: string) => boolean | undefined;
+
+/** How the caller answers "how much work is already on record for this session?". */
+export type SeedRead = (sessionID: string) => number | undefined;
 
 export interface ActiveElapsedOptions {
   /**
@@ -33,6 +40,13 @@ export interface ActiveElapsedOptions {
    * derived bound.
    */
   readonly maxBankedMs?: number;
+
+  /**
+   * Starting tally for a session, read once — on the first observation of that
+   * session — so restart-stable work already on record is not lost. Floored at
+   * zero; a non-finite or throwing read is treated as zero, never propagated.
+   */
+  readonly seedOf?: SeedRead;
 }
 
 /** One session's running tally and the last instant it was observed. */
@@ -81,7 +95,20 @@ export function createActiveElapsed(isBusy: BusyRead, options: ActiveElapsedOpti
 
     let state = states.get(sessionID);
     if (state === undefined) {
-      state = { accumulated: 0, lastAt: now, running: false };
+      // First sight of this session: take the seed once, here, so the record
+      // covers everything up to the moment observation begins and the
+      // accumulator below covers everything after — no overlap, no double
+      // count. Floored at zero; a non-finite or throwing read is zero.
+      let seed = 0;
+      if (options.seedOf !== undefined) {
+        try {
+          const value = options.seedOf(sessionID);
+          if (typeof value === "number" && Number.isFinite(value) && value > 0) seed = value;
+        } catch {
+          seed = 0;
+        }
+      }
+      state = { accumulated: seed, lastAt: now, running: false };
       states.set(sessionID, state);
     } else if (!boundary && state.running && busy) {
       // Only a window that was busy at BOTH ends and short enough to have been

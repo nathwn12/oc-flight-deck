@@ -10,6 +10,7 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { createActiveElapsed } from "./active-elapsed.js";
 import { asCount, asRecord, asText, type SessionLike } from "./coerce.js";
+import { turnKey, turnSpan, unionSpanMs, type ThroughputSpan } from "./stats.js";
 
 /**
  * The location the rail reads shell records and VCS from: the host's current
@@ -218,7 +219,57 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
   // Accumulated active wall time: the clock runs only while `busy()` says the
   // session, its family, or its shells is working, and freezes otherwise. The
   // `now` parameter keeps the transition observation deterministic for tests.
-  const activeElapsed = createActiveElapsed(busy, { maxBankedMs });
+  //
+  // The seed gives that same clock the session's already-recorded work so a
+  // restart does not reset the row to `—`. It scans exactly the scope `busy()`
+  // consults — the displayed session plus every id `family()` returns — and
+  // takes the merged union of those assistant turns' spans, tokens ignored: a
+  // zero-output turn still took wall time. The scan is memoised one result per
+  // session id, and every read degrades to zero rather than throwing, so an
+  // absent family or an unstamped host leaves today's behaviour untouched.
+  const seeds = new Map<string, number>();
+  const seedElapsed = (sessionID: string): number => {
+    const cached = seeds.get(sessionID);
+    if (cached !== undefined) return cached;
+
+    // One `now` for the whole scan, so every in-flight turn ends at the same
+    // instant and the union cannot be skewed by the reads drifting apart.
+    const now = Date.now();
+    const ids = new Set<string>([sessionID]);
+    try {
+      for (const id of context.data.session.family(sessionID) ?? []) ids.add(id);
+    } catch {
+      // No family on this host: the session's own turns still stand.
+    }
+
+    let seed = 0;
+    try {
+      const spans: ThroughputSpan[] = [];
+      for (const id of ids) {
+        for (const entry of messagesOf(id)) {
+          const message = asRecord(entry);
+          if (message?.["type"] !== "assistant") continue;
+          const stamp = asRecord(message["time"]);
+          const created = asCount(stamp?.["created"]);
+          const completed = asCount(stamp?.["completed"]);
+          const streamed = asCount(stamp?.["streamed"]);
+          const span = turnSpan(created, completed, streamed, now);
+          if (span === undefined) continue;
+          const output = asRecord(message["tokens"])?.["output"];
+          spans.push({ key: turnKey(message["id"], created, completed, output), ...span });
+        }
+      }
+      seed = unionSpanMs(spans);
+    } catch {
+      // A throwing read never reaches the rail: it degrades to today's zero.
+      seed = 0;
+    }
+
+    seeds.set(sessionID, seed);
+    return seed;
+  };
+
+  const activeElapsed = createActiveElapsed(busy, { maxBankedMs, seedOf: seedElapsed });
   const sessionElapsed = (sessionID: string, now: number = Date.now()): number | undefined =>
     activeElapsed(sessionID, now);
 

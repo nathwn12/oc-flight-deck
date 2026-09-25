@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, turnKey, turnSpan, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -449,6 +449,76 @@ describe("active-work throughput", () => {
       expect(unionSpanTotals(shuffled)).toEqual(forward);
       expect(unionSpanThroughput(shuffled)).toBe(unionSpanThroughput(spans));
     }
+  });
+});
+
+// `unionSpanMs` is the token-blind twin of `unionSpanTotals`, used to seed
+// `elapsed`. It shares the dedup, clamp, pre-sort and merge, but a zero-output
+// turn still took wall time and must still contribute its span.
+describe("elapsed span union (tokens ignored)", () => {
+  test("counts a zero-output turn's wall time", () => {
+    // `unionSpanTotals` drops this turn entirely (output <= 0), which is why it
+    // cannot seed elapsed; the token-blind union keeps it.
+    expect(unionSpanMs([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toBe(5_000);
+    expect(unionSpanMs([{ key: "a", start: 0, end: 5_000 }])).toBe(5_000);
+    expect(unionSpanTotals([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toEqual({
+      tokens: 0,
+      unionMs: 0,
+    });
+  });
+
+  test("merges overlapping and touching spans once", () => {
+    expect(
+      unionSpanMs([
+        { key: "a", start: 0, end: 3_000 },
+        { key: "b", start: 1_000, end: 5_000 },
+      ]),
+    ).toBe(5_000);
+    // Touching (b starts exactly when a ends) is continuous work, not a gap.
+    expect(
+      unionSpanMs([
+        { key: "a", start: 0, end: 3_000 },
+        { key: "b", start: 3_000, end: 7_000 },
+      ]),
+    ).toBe(7_000);
+    // A real gap on either side is counted once each.
+    expect(
+      unionSpanMs([
+        { key: "a", start: 0, end: 1_000 },
+        { key: "b", start: 5_000, end: 6_000 },
+      ]),
+    ).toBe(2_000);
+  });
+
+  test("counts a duplicate key once, first record winning", () => {
+    expect(
+      unionSpanMs([
+        { key: "id:msg_1", start: 0, end: 1_000 },
+        { key: "id:msg_1", start: 0, end: 9_000 },
+      ]),
+    ).toBe(1_000);
+    // A missing key is skipped, and one with no usable start or end likewise.
+    expect(unionSpanMs([{ start: 0, end: 9_000 }])).toBe(0);
+    expect(unionSpanMs([{ key: "a", start: 0 }])).toBe(0);
+    expect(unionSpanMs([{ key: "a", end: 9_000 }])).toBe(0);
+  });
+
+  test("clamps a backwards clock and cannot be reordered", () => {
+    expect(unionSpanMs([{ key: "a", start: 5_000, end: 1_000 }])).toBe(0);
+    const spans = [
+      { key: "a", start: 5_000, end: 9_000 },
+      { key: "b", start: 0, end: 3_000 },
+      { key: "c", start: 7_000, end: 12_000 },
+    ];
+    // b is 3 s; a and c overlap into one 7 s stretch; total 10 s.
+    expect(unionSpanMs(spans)).toBe(10_000);
+    expect(unionSpanMs([...spans].reverse())).toBe(10_000);
+    expect(unionSpanMs(shuffle(spans, 7))).toBe(10_000);
+  });
+
+  test("is zero when nothing is usable", () => {
+    expect(unionSpanMs([])).toBe(0);
+    expect(unionSpanMs([{ key: "a", start: "x", end: 5_000 }])).toBe(0);
   });
 });
 
