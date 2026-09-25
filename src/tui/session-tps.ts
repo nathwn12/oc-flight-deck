@@ -1,8 +1,9 @@
-// Session throughput, measured from two sources chosen by host capability and
-// never by the moment. A host that stamps its messages gets a trailing-window
-// rate — output tokens over the last minute, subagents summed in — so the
-// figure reflects current speed rather than a whole-conversation average. A
-// host proven to expose no message timestamps uses the lifetime average.
+// Session throughput, measured from the host's own message timestamps and never
+// from a clock this process keeps. A host that stamps its assistant turns gets
+// an active-work average: output tokens divided by the union of the turns' own
+// spans, so idle between turns is not in the denominator and the figure freezes
+// once everything settles. A host proven to expose no message timestamps uses
+// the lifetime average instead.
 //
 // The capability is learned once and remembered for the process. `undefined`
 // means "not yet known": a read that failed, or carried no assistant turns,
@@ -14,26 +15,31 @@
 //
 // The rail re-runs on the fast tick, and walking every family message for
 // every session would repeat the same work fifty times a second, so the
-// result is held briefly. `undefined` is cached too: an idle window must not
+// result is held briefly. `undefined` is cached too: an idle session must not
 // be re-derived on each tick either.
 //
 // One factory closes over the plugin `context`; `isFamilyRoot` comes from
 // ./session-reads.js so a child session keeps its own figure while a root
-// sums its tree. The math itself lives in ./throughput.js (pure) and
-// ./stats.js.
+// sums its tree. The math itself lives in ./throughput.js (pure).
+//
+// RESIDUAL RISK, disclosed: the lifetime fallback for an unstamped host still
+// includes idle time and can therefore sag below a peak per-turn rate. There is
+// no timestamp on such a host with which to exclude it.
 
 import type { Plugin } from "@opencode/plugin/tui";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
-import { sessionThroughput, TPS_WINDOW_MS, windowedThroughput, type ThroughputSample } from "./stats.js";
+import { sessionThroughput, turnKey, turnSpan, unionSpanThroughput, type ThroughputSpan } from "./stats.js";
 
-/** What one session's message list contributes to a throughput window. */
+/** What one session's message list contributes to its active-work average. */
 interface TpsScan {
   /** False only when the host refused to list the session's messages. */
   readonly ok: boolean;
   /** Assistant messages seen, whether or not they carried a timestamp. */
   readonly assistant: number;
-  /** Samples that carried a usable timestamp. */
-  readonly samples: readonly ThroughputSample[];
+  /** Assistant turns that carried any usable timestamp, which proves the host stamps. */
+  readonly stamped: number;
+  /** Spans for turns that carried a usable `created` start. */
+  readonly spans: readonly ThroughputSpan[];
 }
 
 export function createTpsReader(
@@ -46,29 +52,36 @@ export function createTpsReader(
     | { readonly sessionID: string; readonly at: number; readonly value: number | undefined }
     | undefined;
 
-  const scanMessages = (id: string): TpsScan => {
+  const scanMessages = (id: string, now: number): TpsScan => {
     let messages: readonly unknown[];
     try {
       messages = context.data.session.message.list(id) ?? [];
     } catch {
       // A refused read is not "this host has no messages".
-      return { ok: false, assistant: 0, samples: [] };
+      return { ok: false, assistant: 0, stamped: 0, spans: [] };
     }
-    const samples: ThroughputSample[] = [];
+    const spans: ThroughputSpan[] = [];
     let assistant = 0;
+    let stamped = 0;
     for (const entry of messages) {
       const message = asRecord(entry);
       if (message?.["type"] !== "assistant") continue;
       assistant += 1;
       const stamp = asRecord(message["time"]);
-      const at =
-        asCount(stamp?.["completed"]) ?? asCount(stamp?.["streamed"]) ?? asCount(stamp?.["created"]);
-      // "Stamped" depends only on the timestamp, never on the output count: a
+      const created = asCount(stamp?.["created"]);
+      const completed = asCount(stamp?.["completed"]);
+      const streamed = asCount(stamp?.["streamed"]);
+      // "Stamped" depends only on the timestamps, never on the output count: a
       // batch of zero-output assistant turns still proves the host stamps.
-      if (at === undefined) continue;
-      samples.push({ tokens: asRecord(message["tokens"])?.["output"], at });
+      if (created === undefined && completed === undefined && streamed === undefined) continue;
+      stamped += 1;
+      // Without `created` there is no start; the turn is skipped, not guessed.
+      const span = turnSpan(created, completed, streamed, now);
+      if (span === undefined) continue;
+      const output = asRecord(message["tokens"])?.["output"];
+      spans.push({ key: turnKey(message["id"], created, completed, output), tokens: output, ...span });
     }
-    return { ok: true, assistant, samples };
+    return { ok: true, assistant, stamped, spans };
   };
 
   // The lifetime average, the metric of last resort for a host that exposes no
@@ -121,26 +134,32 @@ export function createTpsReader(
     // lifetime average whether or not the read would have succeeded.
     if (hostStamps === false) return lifetimeTps(sessionID, session, created, time);
 
+    // One `now` for the whole scope, so every in-flight turn ends at the same
+    // instant and the union cannot be skewed by the scans drifting apart.
+    const now = Date.now();
+
     // Timestamped assistant output this session has produced, plus — only from
     // a family root — every subagent session's. A child asking `family()` gets
-    // its ancestors and siblings back, so it keeps its own samples.
-    const scans: TpsScan[] = [scanMessages(sessionID)];
+    // its ancestors and siblings back, so it keeps its own spans.
+    const scans: TpsScan[] = [scanMessages(sessionID, now)];
     if (isFamilyRoot(sessionID)) {
       try {
         for (const id of context.data.session.family(sessionID) ?? []) {
-          if (id !== sessionID) scans.push(scanMessages(id));
+          if (id !== sessionID) scans.push(scanMessages(id, now));
         }
       } catch {
-        // No family on this host: the session's own samples still stand.
+        // No family on this host: the session's own turns still stand.
       }
     }
 
-    const samples: ThroughputSample[] = [];
+    const spans: ThroughputSpan[] = [];
     let assistant = 0;
+    let stamped = 0;
     let readOk = false;
     for (const scan of scans) {
-      samples.push(...scan.samples);
+      spans.push(...scan.spans);
       assistant += scan.assistant;
+      stamped += scan.stamped;
       readOk = readOk || scan.ok;
     }
 
@@ -148,14 +167,12 @@ export function createTpsReader(
       // A stamped assistant turn proves the host stamps. Assistant turns with
       // no timestamp prove it does not. Neither, and the capability stays
       // unknown so the row hides rather than guessing a metric.
-      if (samples.length > 0) hostStamps = true;
+      if (stamped > 0) hostStamps = true;
       else if (readOk && assistant > 0) hostStamps = false;
       else return undefined;
     }
 
-    if (hostStamps === true) {
-      return windowedThroughput(samples, Date.now(), TPS_WINDOW_MS, created);
-    }
+    if (hostStamps === true) return unionSpanThroughput(spans);
     return lifetimeTps(sessionID, session, created, time);
   };
 
