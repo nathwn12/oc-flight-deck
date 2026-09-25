@@ -86,10 +86,13 @@
     //              subagent in its tree, or one of its shells — is working, and
     //              freezes when everything settles. Process-local: it starts at
     //              zero with the plugin and counts only activity this run saw
-    //   tps        current speed: output tokens in the last 60 seconds,
-    //              subagents included. Hides while idle longer than the
-    //              window; falls back to the session's lifetime average on
-    //              hosts with no per-message timestamps
+    //   tps        average speed while working: output tokens divided by the
+    //              time the assistant's turns actually ran, subagents included.
+    //              Idle between turns is never counted, so the figure freezes
+    //              when everything settles rather than decaying or hiding; a
+    //              turn still in flight counts up to now. On a host with no
+    //              per-message timestamps it falls back to the lifetime
+    //              average, which includes idle and can sag
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session
