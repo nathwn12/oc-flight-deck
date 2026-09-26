@@ -149,10 +149,21 @@ function goValueSegments(source: StatSource, layout: LayoutHint): StatSegment[] 
   const nowMs = layout.nowMs ?? Date.now();
   // Only the worst flagged window carries a reset hint. With every window red,
   // three hints overflow the rail (the 38-column budget) for information that is
-  // redundant three times over; the first in the fixed 5h → 1w → 1m order is the
-  // nearest relief, so it is the one worth naming. A single flagged window is
-  // unchanged: it is the worst, and it keeps its hint.
-  const flagged = windows.findIndex((window) => goTone(window) === "error");
+  // redundant three times over; the fullest window is the one actually in
+  // trouble, so it is the one worth naming — not merely the first. `windows` is
+  // already in the fixed 5h → 1w → 1m order and a strict `>` keeps the earlier
+  // window on a tie, so equal ratios resolve to the nearest relief. A single
+  // flagged window is unchanged: it is the worst, and it keeps its hint.
+  let flagged = -1;
+  let flaggedRatio = Number.NEGATIVE_INFINITY;
+  for (const [index, window] of windows.entries()) {
+    if (goTone(window) !== "error") continue;
+    const ratio = window.ratio ?? 0;
+    if (flagged < 0 || ratio > flaggedRatio) {
+      flagged = index;
+      flaggedRatio = ratio;
+    }
+  }
   const chunks: StatSegment[][] = [];
   for (const [index, window] of windows.entries()) {
     const percent = Math.round((window.ratio ?? 0) * 100);

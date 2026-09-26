@@ -316,8 +316,8 @@ describe("the go usage row", () => {
 
   test("draws a reset hint on the worst flagged window only", () => {
     // Three flagged windows would otherwise carry three hints and overflow the
-    // rail. The first in fixed 5h → 1w → 1m order is the nearest relief, so it
-    // keeps the hint and the other two are drawn bare.
+    // rail. The fullest one (5h at 100) carries it and the other two are drawn
+    // bare, even though they are also red.
     const source = {
       go: {
         windows: [
@@ -330,6 +330,39 @@ describe("the go usage row", () => {
     const line = statLine("go", source, { nowMs: NOW })!;
     expect(line.match(/ · /g)).toHaveLength(1);
     expect(line).toBe("go        ● 100 · 1h ● 95 ● 95");
+  });
+
+  test("puts the reset hint on the worst flagged window, not the earliest", () => {
+    // The earliest flagged window is NOT the worst here: 5h sits at 90 and 1m at
+    // 100. An implementation that took the first flagged index drew no hint at
+    // all, so this case is the one the old suite could not see.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0.9, resetAtMs: NOW + 3_600_000 },
+          { id: "1m", ratio: 1, resetAtMs: NOW + 3 * 3_600_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 90 ● 100 · 3h");
+  });
+
+  test("breaks a ratio tie toward the earlier fixed window", () => {
+    // Both flagged and equal, so the fixed 5h → 1w → 1m order decides: the 5h
+    // window is the nearest relief and keeps the hint.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0.95, resetAtMs: NOW + 3_600_000 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 86_400_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 95 · 1h ● 95");
   });
 
   test("draws a real zero and falls back to the placeholder with no data", () => {
