@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../src/tui/config.js";
+import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { sidebarLines } from "../src/tui/presentation.js";
 import { sparkline, statLine, STAT_FIELDS, type StatSource } from "../src/tui/stats.js";
 
@@ -108,6 +109,23 @@ describe("the rail fits", () => {
       expect(row).toBe(`spark     ${expected}`);
       expect(row!.length).toBeLessThanOrEqual(BUDGET);
     }
+  });
+
+  test("a populated go row fits, reset hint and all", () => {
+    // The per-field loop above only ever sees the placeholder, so the row's real
+    // width was never measured. The live sample is the real width: three dials.
+    const live = normalizeGoUsage({
+      usage: {
+        rolling: { status: "ok", percent: 0 },
+        weekly: { status: "ok", percent: 79 },
+        monthly: { status: "ok", percent: 39 },
+      },
+    });
+    expect(overBudget({ ...FULL, go: live }, ["go"])).toEqual([]);
+    // The widest shape the live cutoffs produce: one window flagged, so its dial,
+    // number and reset hint are all drawn.
+    const flagged = { windows: [{ id: "1w", ratio: 0.95, resetAtMs: Date.now() + 2 * 3_600_000 }] };
+    expect(overBudget({ ...FULL, go: flagged }, ["go"])).toEqual([]);
   });
 
   test("no row wraps when the caution row is at its longest", () => {

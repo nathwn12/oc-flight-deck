@@ -8,7 +8,9 @@
 
 import { DEFAULT_BAR_WIDTH, clip, formatCost, formatCount, formatDuration, fuelBar, sparkline } from "./format.js";
 import { asCount, asRecord, asText } from "./coerce.js";
+import { goResetSuffix, goTone, type GoWindow } from "./go-usage.js";
 import { guardToken } from "./guard-tokens.js";
+import type { StyleColor } from "./style.js";
 import {
   DEFAULT_LABEL_WIDTH,
   DEFAULT_PLACEHOLDER,
@@ -43,7 +45,126 @@ function plain(value: string): string {
  * keep the same column.
  */
 function formatRow(label: string, value: string, labelWidth: number): string {
-  return `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}${plain(value)}`;
+  return `${labelPrefix(label, labelWidth)}${plain(value)}`;
+}
+
+/**
+ * The label column plus its guaranteed separator, before a row's value.
+ *
+ * Extracted so the plain and segmented renderers pad a label identically: a
+ * label wider than its column (`reasoning` at width 8) must still get a space
+ * in both, or the two views of one row would differ by one character.
+ */
+function labelPrefix(label: string, labelWidth: number): string {
+  return `${label.padEnd(labelWidth)}${label.length >= labelWidth ? " " : ""}`;
+}
+
+/**
+ * One coloured run of a rail row.
+ *
+ * `tone` is a theme role from ./style.js, absent when the run keeps the row's
+ * own colour — a healthy row must read exactly as it did before the row could
+ * colour part of itself. A row's plain text is exactly the join of its
+ * segments, so the string view and the coloured view can never disagree.
+ */
+export interface StatSegment {
+  readonly text: string;
+  readonly tone?: StyleColor;
+}
+
+/** Canonical `go` window order, so the dials always read 5h then 1w then 1m. */
+const GO_ORDER: readonly GoWindow["id"][] = ["5h", "1w", "1m"];
+
+/**
+ * Quarter-fill dials, from the approved design.
+ *
+ * The glyph is the shape, the number beside it is the precision; the thresholds
+ * are the design's own percent cutoffs kept exact. The empty circle doubles as
+ * the sane-zero, so a fresh window reads `○ 0` rather than a dash — the dash is
+ * reserved for "no data yet", which the persist layer draws.
+ */
+const DIAL_STEPS: readonly (readonly [number, string])[] = [
+  [13, "○"],
+  [38, "◔"],
+  [63, "◑"],
+  [88, "◕"],
+  [101, "●"],
+];
+
+function dialGlyph(percent: number): string {
+  for (const [limit, glyph] of DIAL_STEPS) {
+    if (percent < limit) return glyph;
+  }
+  return "●";
+}
+
+/**
+ * The Go windows the row can draw, in canonical order.
+ *
+ * The source is `unknown` on principle, so the shape is re-validated here: an
+ * entry is kept only when its `id` is one of the three windows and its `ratio`
+ * is a finite, non-negative number. A window with no ratio cannot draw an
+ * honest dial — a count with no known limit would fill the gauge by guesswork —
+ * so it is dropped rather than shown half-read.
+ */
+function asGoWindows(value: unknown): readonly GoWindow[] {
+  const list = asRecord(value)?.windows;
+  if (!Array.isArray(list)) return [];
+  const windows: GoWindow[] = [];
+  for (const entry of list) {
+    const window = asRecord(entry);
+    if (window === undefined) continue;
+    const id = asText(window["id"]);
+    if (id !== "5h" && id !== "1w" && id !== "1m") continue;
+    const ratio = asCount(window["ratio"]);
+    if (ratio === undefined) continue;
+    const result: {
+      -readonly [K in keyof GoWindow]: GoWindow[K];
+    } = { id, ratio };
+    const resetAtMs = asCount(window["resetAtMs"]);
+    if (resetAtMs !== undefined) result.resetAtMs = resetAtMs;
+    const status = asText(window["status"]);
+    if (status !== undefined) result.status = status;
+    windows.push(result);
+  }
+  windows.sort((a, b) => GO_ORDER.indexOf(a.id) - GO_ORDER.indexOf(b.id));
+  return windows;
+}
+
+/**
+ * The `go` row's value as coloured segments, or `undefined` when there is
+ * nothing to draw (so the caller falls back to the placeholder).
+ *
+ * Only the offending window takes the error tone: the dial and its number turn
+ * red while its healthy neighbours keep the row's own colour, which is what
+ * makes the row read as one panel with a problem rather than as a different
+ * kind of line.
+ */
+function goValueSegments(source: StatSource, layout: LayoutHint): StatSegment[] | undefined {
+  const windows = asGoWindows(source.go);
+  if (windows.length === 0) return undefined;
+
+  const nowMs = layout.nowMs ?? Date.now();
+  const chunks: StatSegment[][] = [];
+  for (const window of windows) {
+    const percent = Math.round((window.ratio ?? 0) * 100);
+    const tone: StyleColor | undefined = goTone(window) === "error" ? "error" : undefined;
+    const chunk: StatSegment[] = [{ text: `${dialGlyph(percent)} ${percent}`, tone }];
+    // A reset hint beside a calm dial is noise and one in the past is a promise
+    // already broken, so it is drawn only on the flagged window that needs it.
+    const suffix = goResetSuffix(window, nowMs);
+    if (suffix !== undefined) chunk.push({ text: suffix, tone });
+    chunks.push(chunk);
+  }
+
+  const segments: StatSegment[] = [];
+  chunks.forEach((chunk, index) => {
+    // The separator inherits the row's colour: only the dial and number of a
+    // flagged window go red, never the space between windows.
+    if (index > 0) segments.push({ text: " " });
+    segments.push(...chunk);
+  });
+  return segments;
 }
 
 /**
@@ -241,9 +362,36 @@ export function statLine(
       const token = guardToken(source.guard);
       return token === undefined ? undefined : row("guard", token);
     }
+    case "go": {
+      // The plain string is the exact join of the coloured segments, so the
+      // string view (tests, `sidebarTextLines`) and the JSX view agree
+      // character-for-character.
+      const value = goValueSegments(source, layout);
+      return value === undefined ? undefined : row("go", value.map((segment) => segment.text).join(""));
+    }
     default:
       return undefined;
   }
+}
+
+/**
+ * One field's rail row as coloured segments, or `undefined` when the field is
+ * not segment-aware or has nothing to draw.
+ *
+ * Only `go` is segment-aware today — the one row whose severity lives on part
+ * of the line rather than the whole. Every other field returns `undefined` and
+ * the caller falls through to {@link statLine}, so there is still exactly one
+ * place that knows a row's text.
+ */
+export function statSegments(
+  field: string,
+  source: StatSource,
+  layout: LayoutHint = {},
+): readonly StatSegment[] | undefined {
+  if (field !== "go") return undefined;
+  const value = goValueSegments(source, layout);
+  if (value === undefined) return undefined;
+  return [{ text: labelPrefix("go", layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
 }
 
 /** Render every named field, in the given order.

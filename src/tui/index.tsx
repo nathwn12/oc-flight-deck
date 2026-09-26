@@ -7,6 +7,7 @@ import { footerLine, railLines, railLineStyle } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
 import { attributeMask, themeColor } from "./style.js";
 import { startGuardBridge } from "./guard.js";
+import { startGoBridge } from "./go.js";
 import { startTicker } from "./ticker.js";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
 import { createProjectTotals } from "./project-totals.js";
@@ -126,6 +127,12 @@ export default Plugin.define({
     const wantGuard = config.sidebar.enabled && config.sidebar.rows.includes("guard");
     const bridge = wantGuard ? startGuardBridge(context) : undefined;
 
+    // The go row is opt-in the same way: a row nobody drew should cost no timer
+    // and no request. The bridge is account-wide (one key, one quota), so it
+    // starts here and has no session to follow — unlike guard.
+    const wantGo = config.sidebar.enabled && config.sidebar.rows.includes("go");
+    const goBridge = wantGo ? startGoBridge(context) : undefined;
+
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
     // resolves. Nothing here writes, requests, or leaves the process.
@@ -184,6 +191,9 @@ export default Plugin.define({
         elapsedMs: wants("elapsed") ? sessionElapsed(sessionID) : undefined,
         turns,
         guard: bridge?.status,
+        // Read the go store inside the render too, so a poll re-runs the rail
+        // exactly as the guard read does.
+        go: goBridge?.usage,
         // Read the tick inside the render so the host registers a dependency on
         // it; that read is what makes the rail re-run on the ticker's schedule.
         frame: ticker?.frame ?? 0,
@@ -239,6 +249,7 @@ export default Plugin.define({
             bridge?.follow(sessionID);
             void ticker?.frame;
             void bridge?.status;
+            void goBridge?.usage;
 
             const source = snapshot(sessionID);
             const lines = railLines(config, source);
@@ -260,12 +271,26 @@ export default Plugin.define({
               <box flexDirection="column">
                 {lines.map((line) => {
                   const style = railLineStyle(config.style, line);
+                  const lineFg = themeColor(style.color, context.theme) as string | undefined;
                   return (
-                    <text
-                      fg={themeColor(style.color, context.theme) as string | undefined}
-                      attributes={attributeMask(style.attributes) ?? 0}
-                    >
-                      {line.text}
+                    <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
+                      {line.segments === undefined
+                        ? line.text
+                        : line.segments.map((segment) => (
+                            // A run with no tone keeps the row's own colour; only
+                            // a flagged window's dial and number take `error`.
+                            // The renderer takes `fg`, never ANSI or escapes.
+                            <span
+                              style={{
+                                fg:
+                                  segment.tone === undefined
+                                    ? lineFg
+                                    : (themeColor(segment.tone, context.theme) as string | undefined),
+                              }}
+                            >
+                              {segment.text}
+                            </span>
+                          ))}
                     </text>
                   );
                 })}
@@ -290,6 +315,7 @@ export default Plugin.define({
       watchTimer = undefined;
       ticker?.dispose();
       bridge?.dispose();
+      goBridge?.dispose();
       for (const release of releases) release();
     };
   },

@@ -15,11 +15,9 @@ const populatedSource = {
 const baselineRail = [
   "✈ FLIGHT DECK",
   "─────────────────",
-  "caution   —",
   "status    —",
   "agent     orchestrator",
   "model     gpt-5 · high",
-  "branch    main",
   "cost      $0.250",
   "project   —",
   "tokens    1k in · 340 out",

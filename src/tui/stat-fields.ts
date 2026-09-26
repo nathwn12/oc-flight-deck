@@ -46,6 +46,12 @@ export interface StatSource {
   readonly frame?: unknown;
   /** Harness status from oc-harness-guard's RPC, via the guard bridge. Untrusted. */
   readonly guard?: unknown;
+  /**
+   * Zen Go account usage, read from the go bridge's host store. Untrusted on
+   * principle: the row re-validates the window shape rather than trusting the
+   * type across the module boundary.
+   */
+  readonly go?: unknown;
 }
 
 /** Fields a user may name in `sidebar.rows`, in the order they are documented. */
@@ -68,6 +74,7 @@ export const STAT_FIELDS = [
   "reasoning",
   "turns",
   "guard",
+  "go",
 ] as const;
 
 type StatField = (typeof STAT_FIELDS)[number];
@@ -122,6 +129,14 @@ export interface LayoutHint {
   readonly persist?: boolean;
   /** Value shown for a row with no data when `persist` is on. Default `"—"`. */
   readonly placeholder?: string;
+  /**
+   * The clock the `go` row reads its relative reset hint against.
+   *
+   * An explicit instant rather than a hidden `Date.now()` inside the renderer,
+   * so a flagged window's "resets in 41m" is a pure function of its inputs and
+   * the row stays testable without freezing time. Absent means `Date.now()`.
+   */
+  readonly nowMs?: number;
 }
 
 /** Placeholder value for a persistent row with no data yet. */

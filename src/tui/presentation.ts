@@ -6,7 +6,7 @@
 // session state, and nothing leaves the process.
 
 import type { FlightDeckConfig } from "./config.js";
-import { statLine, statRows, type StatSource } from "./stats.js";
+import { statLine, statRows, statSegments, type StatSource, type StatSegment } from "./stats.js";
 import { rowStyle, type LineStyle, type StyleConfig } from "./style.js";
 
 /**
@@ -21,6 +21,12 @@ export interface RailLine {
   readonly text: string;
   /** The live row's field name; absent on a fixed line. */
   readonly field?: string;
+  /**
+   * The same line split into coloured runs, when a row's severity lives on part
+   * of it (only `go` today). `text` is always the exact join of these segments,
+   * so a caller that ignores them draws the row unchanged.
+   */
+  readonly segments?: readonly StatSegment[];
 }
 
 /**
@@ -49,6 +55,13 @@ export function railLines(config: FlightDeckConfig, source: StatSource = {}): re
 
   const lines: RailLine[] = config.sidebar.lines.map((text) => ({ text }));
   for (const field of config.sidebar.rows) {
+    // A segment-aware row carries its own coloured runs; its plain text is the
+    // exact join, so the string view is not a second source of truth.
+    const segments = statSegments(field, source, layout);
+    if (segments !== undefined) {
+      lines.push({ field, text: segments.map((segment) => segment.text).join(""), segments });
+      continue;
+    }
     // `statLine` is the half that knows the field's name; persistence stays in
     // `statRows`, which turns a data-less known field into the placeholder.
     // For a row that rendered, the fallback is never reached.
