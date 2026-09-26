@@ -6,12 +6,15 @@
 // Keeping it pure is what lets both documented response shapes be exercised
 // without a server, and keeps the row renderer a renderer.
 //
-// Two server shapes are accepted, because the endpoint is young enough that
-// neither is frozen:
+// The verified live shape, and the older shapes kept as defence in depth,
+// because the endpoint is young enough that none is frozen:
 //
-//   (a) flat     — rolling/weekly/monthly usage + limit columns, updated-at
+//   (a) live     — `{ usage: { rolling, weekly, monthly } }`, each window
+//                  `{ status, percent, resetsAt }` where `percent` is 0–100 of
+//                  the window USED and `resetsAt` is an ISO-8601 string;
+//   (b) flat     — rolling/weekly/monthly usage + limit columns, updated-at
 //                  timestamps, all siblings at the top level;
-//   (b) nested   — `{ usage: { rolling, weekly, monthly } }`, `{ windows: [...] }`,
+//   (c) nested   — `{ usage: { rolling, weekly, monthly } }`, `{ windows: [...] }`,
 //                  or a bare array of `{ window, usage, limit, resetAt }` rows.
 //
 // Values are opaque numbers (integer micro-cents or counts). We never unit-
@@ -27,6 +30,11 @@ export interface GoWindow {
   readonly limit?: number;
   readonly ratio?: number;
   readonly resetAtMs?: number;
+  /**
+   * Per-window health string. Additive: absent on the older shapes. Passed
+   * through only when it is a non-empty string.
+   */
+  readonly status?: string;
 }
 
 export interface GoUsage {
@@ -46,6 +54,45 @@ function firstFinite(...candidates: readonly unknown[]): number | undefined {
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/**
+ * Read an absolute instant in milliseconds from either an epoch number or an
+ * ISO-8601 string.
+ *
+ * The verified live payload carries `resetsAt` as an ISO-8601 string, while the
+ * older defensive shapes used an epoch number. A string that `Date.parse` cannot
+ * read (or that is not a string at all) yields `undefined` rather than a
+ * fabricated instant, so a malformed reset never becomes a confident hint.
+ */
+function asInstantMs(value: unknown): number | undefined {
+  const numeric = asFiniteNumber(value);
+  if (numeric !== undefined) return numeric;
+  const text = asText(value);
+  if (text === undefined) return undefined;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** The first candidate that reads as an absolute instant, or `undefined`. */
+function firstInstant(...candidates: readonly unknown[]): number | undefined {
+  for (const candidate of candidates) {
+    const value = asInstantMs(candidate);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
+ * The verified live shape reports usage as `percent`, a number 0–100 of the
+ * window already used, rather than a `used`/`limit` pair. `0` is a real fresh
+ * window (ratio 0), not a missing value; a non-number such as the string `"79"`
+ * is dropped rather than coerced, so a mistyped payload cannot read as usage.
+ */
+function ratioFromPercent(value: unknown): number | undefined {
+  const percent = asFiniteNumber(value);
+  if (percent === undefined || percent < 0) return undefined;
+  return percent / 100;
 }
 
 /**
@@ -81,17 +128,23 @@ function buildWindow(
   used: number | undefined,
   limit: number | undefined,
   resetAtMs: number | undefined,
+  explicitRatio?: number,
+  status?: string,
 ): GoWindow | undefined {
   if (id === undefined) return undefined;
-  if (used === undefined && limit === undefined) return undefined;
+  // An explicit ratio (from `percent`) wins over `used / limit`; `??` keeps a
+  // legitimate explicit zero. A window with no use, no limit and no ratio is
+  // not a window: a bare timestamp, name or status must not render as one.
+  const ratio = explicitRatio ?? ratioOf(used, limit);
+  if (used === undefined && limit === undefined && ratio === undefined) return undefined;
   const result: {
     -readonly [K in keyof GoWindow]: GoWindow[K];
   } = { id };
   if (used !== undefined) result.used = used;
   if (limit !== undefined) result.limit = limit;
-  const ratio = ratioOf(used, limit);
   if (ratio !== undefined) result.ratio = ratio;
   if (resetAtMs !== undefined) result.resetAtMs = resetAtMs;
+  if (status !== undefined) result.status = status;
   return result;
 }
 
@@ -113,8 +166,13 @@ function normalizeWindowValue(value: unknown, idHint?: GoWindow["id"]): GoWindow
   // Only an explicit absolute timestamp becomes `resetAtMs`. `resetInSec` and
   // `resetIn` are relative, and Stage 1 leaves them unhandled on purpose: a
   // relative field read against an unknown clock is worse than no reset hint.
-  const resetAtMs = firstFinite(record.resetAtMs, record.resetsAt, record.resetAt);
-  return buildWindow(id, used, limit, resetAtMs);
+  // An ISO-8601 `resetsAt` (the verified live shape) is accepted alongside the
+  // older epoch number.
+  const resetAtMs = firstInstant(record.resetAtMs, record.resetsAt, record.resetAt);
+  // The verified live shape's `percent` is a usage fraction with no limit pair.
+  const ratio = ratioFromPercent(record.percent);
+  const status = asText(record.status);
+  return buildWindow(id, used, limit, resetAtMs, ratio, status);
 }
 
 /**
@@ -133,7 +191,7 @@ function normalizeFlatWindow(
 ): GoWindow | undefined {
   const used = asFiniteNumber(top[usedKey]);
   const limit = asFiniteNumber(top[limitKey]);
-  const resetAtMs = firstFinite(top[`${prefix}ResetAtMs`], top[`${prefix}ResetsAt`], top[`${prefix}ResetAt`]);
+  const resetAtMs = firstInstant(top[`${prefix}ResetAtMs`], top[`${prefix}ResetsAt`], top[`${prefix}ResetAt`]);
   return buildWindow(id, used, limit, resetAtMs);
 }
 
@@ -203,9 +261,25 @@ export function normalizeGoUsage(raw: unknown): GoUsage | undefined {
  */
 export const GO_ERROR_RATIO = 0.9;
 
-/** The row tone: `error` at or above {@link GO_ERROR_RATIO}, else `normal`. */
+/**
+ * The per-window status values treated as benign.
+ *
+ * NOTE: the semantics of `status` are UNVERIFIED — only `"ok"` has been observed
+ * live on `GET /zen/go/v1/usage`. An unknown non-empty status is deliberately
+ * NOT in this set, so it renders as offending: a quota window that is not
+ * reporting `ok` is worth a red dial rather than a silent pass.
+ */
+export const GO_OK_STATUSES: readonly string[] = ["ok"];
+
+/**
+ * The row tone: `error` at or above {@link GO_ERROR_RATIO}, or when a window
+ * carries a non-benign status, else `normal`.
+ */
 export function goTone(window: GoWindow): "error" | "normal" {
-  return window.ratio !== undefined && window.ratio >= GO_ERROR_RATIO ? "error" : "normal";
+  if (window.ratio !== undefined && window.ratio >= GO_ERROR_RATIO) return "error";
+  const status = window.status;
+  if (status !== undefined && status !== "" && !GO_OK_STATUSES.includes(status)) return "error";
+  return "normal";
 }
 
 function formatRemaining(ms: number): string {

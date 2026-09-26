@@ -151,3 +151,97 @@ describe("go tone and reset suffix", () => {
     expect(goResetSuffix({ id: "5h", ratio: 0.95, resetAtMs: Number.NaN }, now)).toBeUndefined();
   });
 });
+
+// The response shape observed live from `GET /zen/go/v1/usage`: each window is
+// `{ status, percent, resetsAt }`, where `percent` is 0–100 of the window USED
+// and `resetsAt` is an ISO-8601 string.
+const LIVE = {
+  usage: {
+    rolling: { status: "ok", percent: 0, resetsAt: "2026-09-26T13:07:26.662Z" },
+    weekly: { status: "ok", percent: 79, resetsAt: "2026-09-28T00:00:00.000Z" },
+    monthly: { status: "ok", percent: 39, resetsAt: "2026-10-24T02:24:22.000Z" },
+  },
+};
+
+describe("verified live Go usage shape", () => {
+  test("reads the live nested percent/status/resetsAt shape end-to-end", () => {
+    const usage = normalizeGoUsage(LIVE);
+    expect(usage?.windows.map((w) => w.id)).toEqual(["5h", "1w", "1m"]);
+    expect(usage?.windows[0]).toEqual({
+      id: "5h",
+      ratio: 0,
+      resetAtMs: Date.parse("2026-09-26T13:07:26.662Z"),
+      status: "ok",
+    });
+    expect(usage?.windows[1]?.ratio).toBe(0.79);
+    expect(usage?.windows[1]?.status).toBe("ok");
+    expect(usage?.windows[2]?.ratio).toBe(0.39);
+  });
+
+  test("percent 79 is normal with no reset suffix; an error tone gets one", () => {
+    const now = Date.parse("2026-09-27T00:00:00.000Z");
+    const weekly = normalizeGoUsage(LIVE)?.windows[1];
+    expect(weekly?.ratio).toBe(0.79);
+    expect(goTone(weekly!)).toBe("normal");
+    // A reset hint beside a calm bar is noise, so none is shown.
+    expect(goResetSuffix(weekly!, now)).toBeUndefined();
+
+    const hot = { id: "5h" as const, ratio: 0.95, resetAtMs: now + 2 * 3_600_000, status: "ok" };
+    expect(goTone(hot)).toBe("error");
+    expect(goResetSuffix(hot, now)).toBe(" · 2h");
+  });
+
+  test("percent 0 is a real zero ratio, not undefined", () => {
+    const rolling = normalizeGoUsage(LIVE)?.windows[0];
+    expect(rolling?.ratio).toBe(0);
+    expect(rolling?.ratio).not.toBeUndefined();
+  });
+
+  test("percent as a string is dropped, never coerced", () => {
+    const usage = normalizeGoUsage({
+      usage: { weekly: { status: "ok", percent: "79", resetsAt: "2026-09-28T00:00:00.000Z" } },
+    });
+    // No usable ratio and no use/limit pair, so no window is built at all.
+    expect(usage).toBeUndefined();
+  });
+
+  test("malformed or absent resetsAt leaves resetAtMs undefined", () => {
+    const malformed = normalizeGoUsage({
+      usage: { weekly: { status: "ok", percent: 79, resetsAt: "not-a-date" } },
+    });
+    expect(malformed?.windows[0]?.ratio).toBe(0.79);
+    expect(malformed?.windows[0]?.resetAtMs).toBeUndefined();
+
+    const absent = normalizeGoUsage({ usage: { weekly: { status: "ok", percent: 79 } } });
+    expect(absent?.windows[0]?.resetAtMs).toBeUndefined();
+  });
+
+  test("an ISO resetsAt becomes the exact epoch ms", () => {
+    const usage = normalizeGoUsage({
+      usage: { monthly: { status: "ok", percent: 39, resetsAt: "2026-10-24T02:24:22.000Z" } },
+    });
+    expect(usage?.windows[0]?.resetAtMs).toBe(Date.parse("2026-10-24T02:24:22.000Z"));
+  });
+
+  test("a non-ok status flags the error tone on purpose", () => {
+    const usage = normalizeGoUsage({
+      usage: {
+        rolling: { status: "throttled", percent: 10, resetsAt: "2026-09-26T13:07:26.662Z" },
+        weekly: { status: "ok", percent: 10, resetsAt: "2026-09-28T00:00:00.000Z" },
+      },
+    });
+    expect(usage?.windows[0]?.status).toBe("throttled");
+    expect(goTone(usage!.windows[0]!)).toBe("error");
+    expect(goTone(usage!.windows[1]!)).toBe("normal");
+
+    // A blank status is not carried through and does not flag.
+    const blank = normalizeGoUsage({ usage: { monthly: { status: "   ", percent: 10 } } });
+    expect(blank?.windows[0]?.status).toBeUndefined();
+    expect(goTone(blank!.windows[0]!)).toBe("normal");
+  });
+
+  test("a missing usage key yields undefined", () => {
+    expect(normalizeGoUsage({})).toBeUndefined();
+    expect(normalizeGoUsage({ other: true })).toBeUndefined();
+  });
+});
