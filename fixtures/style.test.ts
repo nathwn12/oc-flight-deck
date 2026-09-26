@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, MAX_LINES, resolveConfig } from "../src/tui/config.js";
-import { railLineStyle, railLines, sidebarTextLines } from "../src/tui/presentation.js";
+import { railLineSpans, railLineStyle, railLines, sidebarTextLines } from "../src/tui/presentation.js";
 import { attributeMask, DEFAULT_STYLE, themeColor } from "../src/tui/style.js";
 
 const populatedSource = {
@@ -171,5 +171,35 @@ describe("style role descriptors", () => {
     expect(attributeMask(["bold", "italic", "strikethrough"])).toBe(
       TextAttributes.BOLD | TextAttributes.ITALIC | TextAttributes.STRIKETHROUGH,
     );
+  });
+});
+
+describe("rail line spans", () => {
+  test("maps only the flagged window to the error role, inheriting elsewhere", () => {
+    // The decision used to live inline in the JSX, where the render harness
+    // cannot see it: its theme carries no feedback tokens, so a colour assertion
+    // there would pass even if every window turned red. This asserts the role
+    // mapping itself.
+    const { config } = resolveConfig({ sidebar: { rows: ["go"] } });
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0 },
+          { id: "1w", ratio: 0.95 },
+          { id: "1m", ratio: 0.39 },
+        ],
+      },
+    };
+    const line = railLines(config, source).find((entry) => entry.field === "go")!;
+    expect(line.text).toBe("go        ○ 0 ● 95 ◑ 39");
+
+    const spans = railLineSpans(line, railLineStyle(config.style, line));
+    // Only the flagged window's dial and number take `error`; 5h and 1m inherit.
+    expect(spans.filter((span) => span.color === "error")).toEqual([{ text: "● 95", color: "error" }]);
+    expect(
+      spans.filter((span) => span.color !== "error").every((span) => span.color === config.style.rows.wildcard.color),
+    ).toBe(true);
+    // The plain view is still the exact join of the runs.
+    expect(spans.map((span) => span.text).join("")).toBe(line.text);
   });
 });

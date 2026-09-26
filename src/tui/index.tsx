@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin/tui";
 import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
-import { footerLine, railLines, railLineStyle } from "./presentation.js";
+import { footerLine, railLineSpans, railLines, railLineStyle } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
 import { attributeMask, themeColor } from "./style.js";
 import { startGuardBridge } from "./guard.js";
@@ -272,25 +272,18 @@ export default Plugin.define({
                 {lines.map((line) => {
                   const style = railLineStyle(config.style, line);
                   const lineFg = themeColor(style.color, context.theme) as string | undefined;
+                  // The span mapping — which run inherits the row's colour and
+                  // which takes its own tone — lives in a pure helper, so the
+                  // "only the flagged window is red" decision is tested directly.
+                  // All this renderer does is resolve each role to a theme colour
+                  // and pass `fg`, never ANSI or escapes.
                   return (
                     <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
-                      {line.segments === undefined
-                        ? line.text
-                        : line.segments.map((segment) => (
-                            // A run with no tone keeps the row's own colour; only
-                            // a flagged window's dial and number take `error`.
-                            // The renderer takes `fg`, never ANSI or escapes.
-                            <span
-                              style={{
-                                fg:
-                                  segment.tone === undefined
-                                    ? lineFg
-                                    : (themeColor(segment.tone, context.theme) as string | undefined),
-                              }}
-                            >
-                              {segment.text}
-                            </span>
-                          ))}
+                      {railLineSpans(line, style).map((span) => (
+                        <span style={{ fg: themeColor(span.color, context.theme) as string | undefined }}>
+                          {span.text}
+                        </span>
+                      ))}
                     </text>
                   );
                 })}

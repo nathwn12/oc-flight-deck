@@ -205,6 +205,20 @@ describe("verified live Go usage shape", () => {
     expect(usage).toBeUndefined();
   });
 
+  test("clamps a percent above 100 to fully spent rather than dropping it", () => {
+    // Over the limit is the state this row exists to reveal, so it must render
+    // (clamped to a full dial + error), not vanish as if the payload were junk.
+    for (const percent of [100, 150]) {
+      const usage = normalizeGoUsage({ usage: { weekly: { status: "ok", percent } } });
+      expect(usage?.windows[0]?.ratio).toBe(1);
+      expect(goTone(usage!.windows[0]!)).toBe("error");
+    }
+    // A negative or non-numeric percent is still garbage, not a clamped window.
+    expect(normalizeGoUsage({ usage: { weekly: { status: "ok", percent: -1 } } })).toBeUndefined();
+    expect(normalizeGoUsage({ usage: { weekly: { status: "ok", percent: "150" } } })).toBeUndefined();
+    expect(normalizeGoUsage({ usage: { weekly: { status: "ok", percent: Number.NaN } } })).toBeUndefined();
+  });
+
   test("malformed or absent resetsAt leaves resetAtMs undefined", () => {
     const malformed = normalizeGoUsage({
       usage: { weekly: { status: "ok", percent: 79, resetsAt: "not-a-date" } },

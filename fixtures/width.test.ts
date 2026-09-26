@@ -128,6 +128,25 @@ describe("the rail fits", () => {
     expect(overBudget({ ...FULL, go: flagged }, ["go"])).toEqual([]);
   });
 
+  test("the all-flagged worst case fits on a single reset hint", () => {
+    // Three flagged windows each carrying a reset hint overflowed the budget
+    // (~41 cols). Only the worst one may name its reset, which is what keeps the
+    // worst case inside the rail.
+    const allFlagged = {
+      windows: [
+        { id: "5h", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+        { id: "1w", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+        { id: "1m", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+      ],
+    };
+    expect(overBudget({ ...FULL, go: allFlagged }, ["go"])).toEqual([]);
+    const config = { ...DEFAULT_CONFIG, sidebar: { ...DEFAULT_CONFIG.sidebar, rows: ["go"] } };
+    const [row] = sidebarLines(config, { ...FULL, go: allFlagged }).slice(config.sidebar.lines.length);
+    expect(row!.length).toBeLessThanOrEqual(BUDGET);
+    // The single hint is on the first flagged window, the nearest relief.
+    expect(row!.match(/ · /g)).toHaveLength(1);
+  });
+
   test("no row wraps when the caution row is at its longest", () => {
     for (const text of [
       "⚠ shell running 8m41s",

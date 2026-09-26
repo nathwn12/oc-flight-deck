@@ -314,6 +314,24 @@ describe("the go usage row", () => {
     expect(line.match(/ · /g)).toHaveLength(1);
   });
 
+  test("draws a reset hint on the worst flagged window only", () => {
+    // Three flagged windows would otherwise carry three hints and overflow the
+    // rail. The first in fixed 5h → 1w → 1m order is the nearest relief, so it
+    // keeps the hint and the other two are drawn bare.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 1, resetAtMs: NOW + 3_600_000 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 86_400_000 },
+          { id: "1m", ratio: 0.95, resetAtMs: NOW + 30 * 86_400_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 100 · 1h ● 95 ● 95");
+  });
+
   test("draws a real zero and falls back to the placeholder with no data", () => {
     // The empty circle doubles as the sane-zero: a fresh window reads `○ 0`,
     // never the persist layer's dash.

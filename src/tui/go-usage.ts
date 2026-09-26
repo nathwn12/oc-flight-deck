@@ -88,11 +88,17 @@ function firstInstant(...candidates: readonly unknown[]): number | undefined {
  * window already used, rather than a `used`/`limit` pair. `0` is a real fresh
  * window (ratio 0), not a missing value; a non-number such as the string `"79"`
  * is dropped rather than coerced, so a mistyped payload cannot read as usage.
+ *
+ * A percent above 100 is CLAMPED to a ratio of 1, never rejected. Over-the-limit
+ * is precisely the state this row exists to reveal, so dropping the window would
+ * hide the worst case; a full dial plus the error tone is the honest read. The
+ * ratio is clamped into `[0, 1]` here so no caller has to wonder how full "150%"
+ * is, while a negative or non-finite percent is still dropped as garbage.
  */
 function ratioFromPercent(value: unknown): number | undefined {
   const percent = asFiniteNumber(value);
   if (percent === undefined || percent < 0) return undefined;
-  return percent / 100;
+  return Math.min(1, percent / 100);
 }
 
 /**

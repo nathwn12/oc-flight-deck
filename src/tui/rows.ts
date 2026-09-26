@@ -103,9 +103,11 @@ function dialGlyph(percent: number): string {
  *
  * The source is `unknown` on principle, so the shape is re-validated here: an
  * entry is kept only when its `id` is one of the three windows and its `ratio`
- * is a finite, non-negative number. A window with no ratio cannot draw an
- * honest dial — a count with no known limit would fill the gauge by guesswork —
- * so it is dropped rather than shown half-read.
+ * is a finite, non-negative number. The ratio is clamped to 1 at this boundary
+ * too, so a hand-built source cannot fill a dial past full or print `150`. A
+ * window with no ratio cannot draw an honest dial — a count with no known limit
+ * would fill the gauge by guesswork — so it is dropped rather than shown
+ * half-read.
  */
 function asGoWindows(value: unknown): readonly GoWindow[] {
   const list = asRecord(value)?.windows;
@@ -120,7 +122,7 @@ function asGoWindows(value: unknown): readonly GoWindow[] {
     if (ratio === undefined) continue;
     const result: {
       -readonly [K in keyof GoWindow]: GoWindow[K];
-    } = { id, ratio };
+    } = { id, ratio: Math.min(1, ratio) };
     const resetAtMs = asCount(window["resetAtMs"]);
     if (resetAtMs !== undefined) result.resetAtMs = resetAtMs;
     const status = asText(window["status"]);
@@ -145,14 +147,20 @@ function goValueSegments(source: StatSource, layout: LayoutHint): StatSegment[] 
   if (windows.length === 0) return undefined;
 
   const nowMs = layout.nowMs ?? Date.now();
+  // Only the worst flagged window carries a reset hint. With every window red,
+  // three hints overflow the rail (the 38-column budget) for information that is
+  // redundant three times over; the first in the fixed 5h → 1w → 1m order is the
+  // nearest relief, so it is the one worth naming. A single flagged window is
+  // unchanged: it is the worst, and it keeps its hint.
+  const flagged = windows.findIndex((window) => goTone(window) === "error");
   const chunks: StatSegment[][] = [];
-  for (const window of windows) {
+  for (const [index, window] of windows.entries()) {
     const percent = Math.round((window.ratio ?? 0) * 100);
     const tone: StyleColor | undefined = goTone(window) === "error" ? "error" : undefined;
     const chunk: StatSegment[] = [{ text: `${dialGlyph(percent)} ${percent}`, tone }];
     // A reset hint beside a calm dial is noise and one in the past is a promise
     // already broken, so it is drawn only on the flagged window that needs it.
-    const suffix = goResetSuffix(window, nowMs);
+    const suffix = index === flagged ? goResetSuffix(window, nowMs) : undefined;
     if (suffix !== undefined) chunk.push({ text: suffix, tone });
     chunks.push(chunk);
   }
