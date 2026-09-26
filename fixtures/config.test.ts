@@ -30,11 +30,9 @@ describe("flight deck config", () => {
     };
     expect(sidebarLines(omitted)).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
     expect(resolution.config.sidebar.rows).toEqual([
-      "caution",
       "status",
       "agent",
       "model",
-      "branch",
       "cost",
       "project",
       "tokens",
@@ -301,8 +299,8 @@ describe("option validation", () => {
     const { config, issues } = resolveConfig({
       sidebar: { lines: Array.from({ length: 20 }, (_, index) => `line ${index}`), rows: DEFAULT_CONFIG.sidebar.rows },
     });
-    // 20 fixed lines plus 13 live rows, against a 24-line rail.
-    expect(issues.join(" ")).toContain("total 33 lines");
+    // 20 fixed lines plus 11 live rows, against a 24-line rail.
+    expect(issues.join(" ")).toContain("total 31 lines");
     // With every default row carrying data, the rail stops at the cap.
     const source = {
       caution: "▲ x",
@@ -323,5 +321,48 @@ describe("option validation", () => {
 
   test("says nothing when the rail is comfortably inside its cap", () => {
     expect(resolveConfig({ sidebar: { lines: ["a", "b"], rows: ["cost"] } }).issues).toEqual([]);
+  });
+});
+
+// The default-rail flips: `caution`, `branch`, and `go` are all available but
+// not on the shipped rail, and each is one edit away. These pin the flips, so a
+// silent edit to a constant cannot put a clock, a VCS call, or an account-wide
+// poll back on a fresh install.
+describe("the shipped default rail", () => {
+  test("keeps caution, branch, and go off the default rail", () => {
+    expect(DEFAULT_CONFIG.caution.enabled).toBe(false);
+    expect(resolveConfig(undefined).config.caution.enabled).toBe(false);
+    expect(DEFAULT_CONFIG.sidebar.rows).not.toContain("caution");
+    expect(DEFAULT_CONFIG.sidebar.rows).not.toContain("branch");
+    expect(DEFAULT_CONFIG.sidebar.rows).not.toContain("go");
+  });
+
+  test("knows go by name, so naming it is not an unknown-field error", () => {
+    const go = resolveConfig({ sidebar: { rows: ["go"] } });
+    expect(go.issues).toEqual([]);
+    expect(go.config.sidebar.rows).toEqual(["go"]);
+  });
+
+  test("still enables the annunciator when asked, and keeps it off otherwise", () => {
+    const on = resolveConfig({ caution: { enabled: true } });
+    expect(on.issues).toEqual([]);
+    expect(on.config.caution.enabled).toBe(true);
+
+    // The default rail never draws a caution even when the source has one: the
+    // row is off the rail, and enabling it is a second, explicit edit.
+    expect(sidebarLines(DEFAULT_CONFIG, { caution: "⚠ shell running 8m41s" })).not.toContain(
+      "caution   ⚠ shell running 8m41s",
+    );
+
+    // Named but with the annunciator off and nothing to say, it is a placeholder.
+    const rows = resolveConfig({ sidebar: { rows: ["caution"] } }).config;
+    expect(sidebarLines(rows, {})).toContain("caution   —");
+
+    // Enabled AND on the rail: the annunciator actually draws its text, so the
+    // opt-in is a real path and not just a flag that changes nothing.
+    const onRail = resolveConfig({ caution: { enabled: true }, sidebar: { rows: ["caution"] } }).config;
+    expect(sidebarLines(onRail, { caution: "⚠ shell running 8m41s" })).toContain(
+      "caution   ⚠ shell running 8m41s",
+    );
   });
 });

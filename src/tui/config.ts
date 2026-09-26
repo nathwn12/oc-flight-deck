@@ -57,7 +57,7 @@ interface FooterConfig {
 }
 
 interface CautionConfig {
-  /** Show the caution annunciator. Default `true`. */
+  /** Show the caution annunciator. Default `false`. */
   readonly enabled: boolean;
   /** A tool running longer than this is worth noting. Default `180`. */
   readonly toolWatchSeconds: number;
@@ -93,7 +93,8 @@ export interface FlightDeckConfig {
    * The annunciator: the one thing on the rail that is not session state.
    *
    * It exists because a hang emits no events, so nothing else here can see it.
-   * Silent when healthy, which is why it costs nothing visually.
+   * Silent when healthy, which is why it costs nothing visually. Off by default:
+   * it is opt-in, so an install that never asks for it spends no timer on it.
    */
   readonly caution: CautionConfig;
   /** Geometry of a row. Every value has a sane default. */
@@ -183,7 +184,7 @@ const DEFAULT_GLYPHS: GlyphConfig = {
 };
 
 const DEFAULT_CAUTION: CautionConfig = {
-  enabled: true,
+  enabled: false,
   toolWatchSeconds: 180,
   toolCautionSeconds: 420,
   turnWatchSeconds: 600,
@@ -215,14 +216,14 @@ export const DEFAULT_SIDEBAR_LINES: readonly string[] = [
  * Live fields shown by default, in reading order.
  *
  * Every one of these is read from the open session at render time, so a fresh
- * install shows real numbers with no configuration file at all.
+ * install shows real numbers with no configuration file at all. The rows that
+ * need extra machinery or a second source — `caution` (a clock), `branch` (a
+ * VCS call), and `go` (an account-wide poll) — are opt-in via `sidebar.rows`.
  */
 export const DEFAULT_SIDEBAR_ROWS: readonly string[] = [
-  "caution",
   "status",
   "agent",
   "model",
-  "branch",
   "cost",
   "project",
   "tokens",

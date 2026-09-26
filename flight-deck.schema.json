@@ -38,8 +38,8 @@
         },
         "rows": {
           "type": "array",
-          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard"] },
-          "default": ["caution", "status", "agent", "model", "branch", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
+          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go"] },
+          "default": ["status", "agent", "model", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
           "description": "Which live fields to draw, top to bottom. Any subset, any order — this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail."
         },
@@ -88,8 +88,8 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": true,
-          "description": "Run the annunciator. false means the `caution` row never appears and no timer is spent on it."
+          "default": false,
+          "description": "Run the annunciator. Off by default. false means the `caution` row never appears and no timer is spent on it."
         },
         "toolWatchSeconds": {
           "type": "integer",
@@ -254,7 +254,7 @@
             }
           },
           "propertyNames": {
-            "enum": ["*", "caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard"]
+            "enum": ["*", "caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go"]
           },
           "default": { "*": { "color": "subdued", "attributes": [] } },
           "description": "Style all live rows under `*`, then optionally override any known row name such as `cost`. A row can change one field and inherit the other from `*`; unknown row names are reported and ignored."
