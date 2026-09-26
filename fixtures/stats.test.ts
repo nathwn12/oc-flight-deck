@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
+import { normalizeGoUsage } from "../src/tui/go-usage.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -232,6 +233,148 @@ describe("flight deck live rows", () => {
   });
 });
 
+// The `go` row is the rail's only row whose severity lives on part of the line:
+// one window over its limit turns red while its healthy neighbours keep the row
+// colour. `statSegments` is the coloured view, `statLine` the plain one, and the
+// plain text is the exact join of the segments — that invariant is what keeps
+// the string tests and the JSX from drifting apart.
+describe("the go usage row", () => {
+  const NOW = Date.parse("2026-09-27T00:00:00.000Z");
+
+  // The verified live shape: `{ usage: { rolling, weekly, monthly } }` with
+  // `percent` 0–100 used. Normalized here exactly as the bridge normalizes it,
+  // so the row is exercised against real data rather than a hand-built window.
+  const live = () =>
+    normalizeGoUsage({
+      usage: {
+        rolling: { status: "ok", percent: 0, resetsAt: "2026-09-26T13:07:26.662Z" },
+        weekly: { status: "ok", percent: 79, resetsAt: "2026-09-28T00:00:00.000Z" },
+        monthly: { status: "ok", percent: 39, resetsAt: "2026-10-24T02:24:22.000Z" },
+      },
+    });
+
+  test("draws the three live windows in fixed 5h → 1w → 1m order", () => {
+    // 0, 79 and 39 from the live sample: a real zero, then two healthy dials.
+    expect(statLine("go", { go: live() })).toBe("go        ○ 0 ◕ 79 ◑ 39");
+  });
+
+  test("renders the windows in order however the payload lists them", () => {
+    const scrambled = {
+      windows: [
+        { id: "1m", ratio: 0.39 },
+        { id: "5h", ratio: 0 },
+        { id: "1w", ratio: 0.79 },
+      ],
+    };
+    expect(statLine("go", { go: scrambled })).toBe("go        ○ 0 ◕ 79 ◑ 39");
+  });
+
+  test("the plain string is the exact join of the coloured segments", () => {
+    const source = { go: live() };
+    const line = statLine("go", source);
+    const segments = statSegments("go", source);
+    expect(segments).toBeDefined();
+    expect(line).toBe("go        ○ 0 ◕ 79 ◑ 39");
+    expect(segments!.map((segment) => segment.text).join("")).toBe(line!);
+  });
+
+  test("flags only the window at or above the error ratio", () => {
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 3_600_000 },
+          { id: "1m", ratio: 0.39 },
+        ],
+      },
+    };
+    const segments = statSegments("go", source, { nowMs: NOW })!;
+    // The label and the two healthy dials keep the row's own colour; only the
+    // flagged window's dial, number and reset hint take `error`.
+    expect(segments.filter((segment) => segment.tone !== undefined)).toEqual([
+      { text: "● 95", tone: "error" },
+      { text: " · 2h", tone: "error" },
+    ]);
+    expect(segments.map((segment) => segment.text).join("")).toBe("go        ○ 0 ● 95 · 2h ◑ 39");
+  });
+
+  test("shows the reset suffix on the flagged window and nowhere else", () => {
+    // A calm window with a known reset gets no hint: beside a healthy dial it is
+    // noise. The flagged one carries it, and it is the only ` · ` on the row.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0.79, resetAtMs: NOW + 2 * 3_600_000 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 3_600_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line).toBe("go        ◕ 79 ● 95 · 2h");
+    expect(line.match(/ · /g)).toHaveLength(1);
+  });
+
+  test("draws a reset hint on the worst flagged window only", () => {
+    // Three flagged windows would otherwise carry three hints and overflow the
+    // rail. The fullest one (5h at 100) carries it and the other two are drawn
+    // bare, even though they are also red.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 1, resetAtMs: NOW + 3_600_000 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 86_400_000 },
+          { id: "1m", ratio: 0.95, resetAtMs: NOW + 30 * 86_400_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 100 · 1h ● 95 ● 95");
+  });
+
+  test("puts the reset hint on the worst flagged window, not the earliest", () => {
+    // The earliest flagged window is NOT the worst here: 5h sits at 90 and 1m at
+    // 100. An implementation that took the first flagged index drew no hint at
+    // all, so this case is the one the old suite could not see.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0.9, resetAtMs: NOW + 3_600_000 },
+          { id: "1m", ratio: 1, resetAtMs: NOW + 3 * 3_600_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 90 ● 100 · 3h");
+  });
+
+  test("breaks a ratio tie toward the earlier fixed window", () => {
+    // Both flagged and equal, so the fixed 5h → 1w → 1m order decides: the 5h
+    // window is the nearest relief and keeps the hint.
+    const source = {
+      go: {
+        windows: [
+          { id: "5h", ratio: 0.95, resetAtMs: NOW + 3_600_000 },
+          { id: "1w", ratio: 0.95, resetAtMs: NOW + 2 * 86_400_000 },
+        ],
+      },
+    };
+    const line = statLine("go", source, { nowMs: NOW })!;
+    expect(line.match(/ · /g)).toHaveLength(1);
+    expect(line).toBe("go        ● 95 · 1h ● 95");
+  });
+
+  test("draws a real zero and falls back to the placeholder with no data", () => {
+    // The empty circle doubles as the sane-zero: a fresh window reads `○ 0`,
+    // never the persist layer's dash.
+    expect(statLine("go", { go: { windows: [{ id: "5h", ratio: 0 }] } })).toBe("go        ○ 0");
+    // No go data at all is no row from `statLine`, and the placeholder when the
+    // rail is persistent — the same shape every other row uses.
+    expect(statLine("go", {})).toBeUndefined();
+    expect(statRows(["go"], {}, { persist: true })).toEqual(["go        —"]);
+  });
+});
 // Boundaries are where a short formatter goes wrong: the unit has to change
 // exactly once, and a rounded value must never carry the wrong unit into the
 // string. `999,600` printing as `1000k` was a real number, with two magnitudes

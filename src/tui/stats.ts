@@ -11,7 +11,8 @@
 // public surface it has always had.
 
 export { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline } from "./format.js";
-export { statLine, statRows } from "./rows.js";
+export { statLine, statRows, statSegments } from "./rows.js";
+export type { StatSegment } from "./rows.js";
 export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, isStatField } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
 export {

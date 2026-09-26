@@ -69,11 +69,12 @@
     // them freely — an unknown name is ignored with a one-time warning, so a
     // typo can never break the panel.
     //
-    //   caution    the annunciator: silent unless something stopped moving
+    //   caution    the annunciator: silent unless something stopped moving.
+    //              Off by default — enables its own clock
     //   status     running or idle — the glyph turns while anything is working
     //   agent      which agent is running (orchestrator, build, plan, ...)
     //   model      model id, plus the variant when there is one
-    //   branch     current git branch
+    //   branch     current git branch. Off by default — costs a VCS call
     //   cost       this conversation, plus its subagents when any ran; with
     //              `total` on the rail, the session figure alone
     //   total      the family total and subagent count on a row of its own
@@ -100,17 +101,18 @@
     //   turns      how many prompts you have sent this session
     //   guard      harness status from oc-harness-guard: breaches, orphans,
     //              findings, or ok. Available, off by default.
+    //   go         Zen Go account usage for the 5h / 1w / 1m windows: a dial and
+    //              a percent each, turning red as a window approaches its limit.
+    //              Reads OPENCODE_GO_API_KEY. Available, off by default.
     //
     // Every named row renders persistently, so the rail keeps a stable shape:
     // a row with no data yet shows the placeholder below, in the same label
     // column as a live row. The fixed lines and live rows share the maxLines
     // budget below, and anything past it is dropped.
     "rows": [
-      "caution",
       "status",
       "agent",
       "model",
-      "branch",
       "cost",
       "project",
       "tokens",
@@ -119,6 +121,9 @@
       "perms",
       "elapsed",
       "tps"
+      // ,"go"        — Zen Go account usage (needs OPENCODE_GO_API_KEY)
+      // ,"caution"   — the annunciator
+      // ,"branch"    — current git branch
     ],
 
     // Every named row renders persistently: with no data yet it shows the
@@ -158,7 +163,9 @@
   //
   // It never aborts, kills, retries or blocks anything. Read-only.
   "caution": {
-    "enabled": true,
+    // Off by default. Turn it on to run the annunciator; while off, the
+    // `caution` row never appears and no timer is spent on it.
+    "enabled": false,
 
     // A tool running longer than this draws a subdued triangle...
     "toolWatchSeconds": 180,

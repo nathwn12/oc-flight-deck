@@ -180,7 +180,7 @@ function railClaims(claims: Claim[]) {
 }
 
 test("renders the live rail with no configuration at all", async () => {
-  const { context, claims, toasts } = harness(undefined, workspace(), LIVE_SESSION, { branch: "main" });
+  const { context, claims, toasts } = harness(undefined, workspace(), LIVE_SESSION);
   flightDeck.setup(context);
   // The whole point: zero configuration, real numbers.
   expect(toasts).toEqual([]);
@@ -194,7 +194,9 @@ test("renders the live rail with no configuration at all", async () => {
   expect(frame).toContain("FLIGHT DECK");
   expect(frame).toContain("orchestrator");
   expect(frame).toContain("deepseek-v4.1-flash · high");
-  expect(frame).toContain("main");
+  // A real default row, not the branch: `branch` is off the shipped rail now,
+  // so the VCS call is only made when a config file asks for it.
+  expect(frame).toContain("○ idle");
   expect(frame).toContain("$0.191");
   expect(frame).toContain("518k in · 76k out");
   expect(frame).toContain("29.2M read");
@@ -256,7 +258,8 @@ test("renders branding alone until the host supplies session data", async () => 
   // With `persist: false` there are no placeholders: a row appears only once
   // it has a value.
   expect(frame).not.toContain("agent");
-  expect(frame).not.toContain("branch");
+  // A default row with no data must stay absent, not render its placeholder.
+  expect(frame).not.toContain("cost");
 });
 
 test("renders the text a user configured, alongside the live rows", async () => {

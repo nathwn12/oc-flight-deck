@@ -45,11 +45,11 @@ Every row is read from the open session at render time — except `caution`, whi
 
 | Row | What it shows |
 |---|---|
-| `caution` | **The annunciator** — silent unless something stopped moving |
+| `caution` | **The annunciator** — silent unless something stopped moving · **off by default** |
 | `status` | A spinner while anything is working, a circle while it's idle |
 | `agent` | Which agent you're actually talking to |
 | `model` | The model **and its variant** — `high` behaves differently |
-| `branch` | The branch you're about to commit to |
+| `branch` | The branch you're about to commit to · **off by default** |
 | `cost` | This conversation **plus its subagents**, and the count that explains it; with `total` on the rail, the session figure alone |
 | `total` | The family total and subagent count on a row of its own · **off by default** |
 | `project` | Every session in this project, not just the one on screen |
@@ -63,10 +63,11 @@ Every row is read from the open session at render time — except `caution`, whi
 | `reasoning` | Reasoning tokens, when the model emits them · **off by default** |
 | `turns` | How many prompts you've sent this session · **off by default** |
 | `guard` | Harness status from oc-harness-guard · **off by default** |
+| `go` | Zen Go account usage — a dial and a whole-number percent for the **5h**, **1w**, and **1m** windows, in that fixed order; a window at 90% or more turns its dial and number red, and the reset hint appears only then · **off by default** |
 
 `project` matches on the host's **project id**, not on a directory, so a worktree counts as part of the same project. A host that reports no project id leaves nothing to match on, and the row then totals every session that host knows about.
 
-The rows marked **off by default** are available but not in the default rail: add any of them to `sidebar.rows`.
+The rows marked **off by default** — `caution`, `branch`, `total`, `spark`, `reasoning`, `turns`, `guard`, and `go` — are available but not in the default rail: add any of them to `sidebar.rows`. `caution` also needs `caution.enabled: true`; `go` needs `OPENCODE_GO_API_KEY` in the environment.
 
 Every field named in `sidebar.rows` renders exactly one row, in order. With `sidebar.persist` (the default), a row with no data yet shows the `sidebar.placeholder` value (default `—`) in the same label column as a live row — so the rail keeps a stable shape instead of growing rows as the session produces data. Set `"persist": false` to restore omission: rows with no data are left out entirely.
 
@@ -77,6 +78,8 @@ The `guard` row only appears when oc-harness-guard is installed and answering; w
 ## 🚨 `caution` — calibrated, not guessed
 
 A hang emits no events — its only signature is *absence*. So `caution` watches a clock, stays silent on healthy sessions, and when it speaks it reports what it saw, never what it means: `shell running 8m41s`, not "stuck".
+
+The annunciator ships **off by default** — it is the one row that runs a clock of its own, so an install that never asks for it spends nothing on it. To use it, add `caution` to `sidebar.rows` **and** set `caution.enabled: true`.
 
 > Measured over **54,218 real settled tool calls**: 0.57% ran past three minutes — with the exempt list, **0.20%** light the row. A ten-minute build is not a hang.
 
@@ -119,7 +122,7 @@ Everything else lives in the example file, documented inline - a typo is never f
   "sidebar": {
     "maxLines": 24,
     "rows": [
-      "caution", "status", "agent", "model", "branch", "cost", "project",
+      "status", "agent", "model", "cost", "project",
       "tokens", "cache", "context", "perms", "elapsed", "tps"
     ]
   },

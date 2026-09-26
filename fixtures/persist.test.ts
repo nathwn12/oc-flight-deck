@@ -52,6 +52,14 @@ describe("persistent sidebar rows", () => {
     }
   });
 
+  test("the default rows carry neither the annunciator nor the branch", () => {
+    // The loop above is dynamic, so removing a row from the constant would leave
+    // it green. Pin the flips: a clock-driven warning and a VCS call are opt-in.
+    expect(DEFAULT_SIDEBAR_ROWS).not.toContain("caution");
+    expect(DEFAULT_SIDEBAR_ROWS).not.toContain("branch");
+    expect(DEFAULT_SIDEBAR_ROWS).not.toContain("go");
+  });
+
   test("a configured placeholder string is used", () => {
     const { config, issues } = resolveConfig({ sidebar: { placeholder: "n/a" } });
     expect(issues).toEqual([]);

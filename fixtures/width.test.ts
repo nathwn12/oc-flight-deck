@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../src/tui/config.js";
+import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { sidebarLines } from "../src/tui/presentation.js";
 import { sparkline, statLine, STAT_FIELDS, type StatSource } from "../src/tui/stats.js";
 
@@ -108,6 +109,42 @@ describe("the rail fits", () => {
       expect(row).toBe(`spark     ${expected}`);
       expect(row!.length).toBeLessThanOrEqual(BUDGET);
     }
+  });
+
+  test("a populated go row fits, reset hint and all", () => {
+    // The per-field loop above only ever sees the placeholder, so the row's real
+    // width was never measured. The live sample is the real width: three dials.
+    const live = normalizeGoUsage({
+      usage: {
+        rolling: { status: "ok", percent: 0 },
+        weekly: { status: "ok", percent: 79 },
+        monthly: { status: "ok", percent: 39 },
+      },
+    });
+    expect(overBudget({ ...FULL, go: live }, ["go"])).toEqual([]);
+    // The widest shape the live cutoffs produce: one window flagged, so its dial,
+    // number and reset hint are all drawn.
+    const flagged = { windows: [{ id: "1w", ratio: 0.95, resetAtMs: Date.now() + 2 * 3_600_000 }] };
+    expect(overBudget({ ...FULL, go: flagged }, ["go"])).toEqual([]);
+  });
+
+  test("the all-flagged worst case fits on a single reset hint", () => {
+    // Three flagged windows each carrying a reset hint overflowed the budget
+    // (~41 cols). Only the worst one may name its reset, which is what keeps the
+    // worst case inside the rail.
+    const allFlagged = {
+      windows: [
+        { id: "5h", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+        { id: "1w", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+        { id: "1m", ratio: 1, resetAtMs: Date.now() + 30 * 86_400_000 },
+      ],
+    };
+    expect(overBudget({ ...FULL, go: allFlagged }, ["go"])).toEqual([]);
+    const config = { ...DEFAULT_CONFIG, sidebar: { ...DEFAULT_CONFIG.sidebar, rows: ["go"] } };
+    const [row] = sidebarLines(config, { ...FULL, go: allFlagged }).slice(config.sidebar.lines.length);
+    expect(row!.length).toBeLessThanOrEqual(BUDGET);
+    // The single hint is on the first flagged window, the nearest relief.
+    expect(row!.match(/ · /g)).toHaveLength(1);
   });
 
   test("no row wraps when the caution row is at its longest", () => {
