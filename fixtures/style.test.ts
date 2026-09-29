@@ -13,8 +13,6 @@ const populatedSource = {
 };
 
 const baselineRail = [
-  "✈ FLIGHT DECK",
-  "─────────────────",
   "status    —",
   "agent     orchestrator",
   "model     gpt-5 · high",
@@ -37,13 +35,12 @@ describe("configurable rail styling", () => {
     expect(sidebarTextLines(config, populatedSource)).toEqual(baselineRail);
 
     const lines = railLines(config, populatedSource);
-    expect(lines.slice(0, 2).map((line) => line.field)).toEqual([undefined, undefined]);
-    expect(lines.slice(2).map((line) => line.field)).toEqual([...config.sidebar.rows]);
-    expect(lines.map((line) => railLineStyle(config.style, line))).toEqual([
-      config.style.lines,
-      config.style.lines,
-      ...config.sidebar.rows.map(() => config.style.rows.wildcard),
-    ]);
+    // Every rail line is a live row: the fixed branding lines moved to the
+    // sidebar footer slot in 0.8.0.
+    expect(lines.map((line) => line.field)).toEqual([...config.sidebar.rows]);
+    expect(lines.map((line) => railLineStyle(config.style, line))).toEqual(
+      config.sidebar.rows.map(() => config.style.rows.wildcard),
+    );
   });
 
   test("applies the wildcard to live rows and leaves fixed lines alone", () => {
@@ -53,10 +50,14 @@ describe("configurable rail styling", () => {
     expect(issues).toEqual([]);
 
     const lines = railLines(config, populatedSource);
-    expect(railLineStyle(config.style, lines[0]!)).toEqual(DEFAULT_STYLE.lines);
-    for (const line of lines.slice(2)) {
+    // Every rail line is live: the fixed branding lines moved to the sidebar
+    // footer slot in 0.8.0, and the wildcard must not touch them.
+    for (const line of lines) {
       expect(railLineStyle(config.style, line)).toEqual({ color: "warning", attributes: ["bold", "underline"] });
     }
+    // The footer's fixed branding lines still take `style.lines`, not the wildcard.
+    const branding = { text: config.sidebar.footer.lines[0]! };
+    expect(railLineStyle(config.style, branding)).toEqual(DEFAULT_STYLE.lines);
   });
 
   test("applies per-row overrides while inheriting unspecified wildcard fields", () => {

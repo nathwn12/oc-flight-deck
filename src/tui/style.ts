@@ -45,7 +45,7 @@ export interface LineStyle {
 
 /** The `style` config section, resolved. */
 export interface StyleConfig {
-  /** The fixed branding/separator lines above the live rows. */
+  /** Fixed separator/branding lines rendered at the top of the rail. */
   readonly lines: LineStyle;
   readonly rows: {
     /** Every live row inherits this unless it has its own entry. */

@@ -22,7 +22,7 @@
     "sidebar": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The rail itself: the branding lines and the live rows.",
+      "description": "The rail itself: the fixed lines, the live rows, and the sidebar footer slot's lines.",
       "properties": {
         "enabled": {
           "type": "boolean",
@@ -32,9 +32,23 @@
         "lines": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["✈ FLIGHT DECK", "─────────────────"],
+          "default": [],
           "maxItems": 24,
-          "description": "Fixed lines rendered above the live rows, in order. Branding or a separator. These render at full brightness; the live rows below them are dimmed. The fixed lines and the live rows together are capped at 24 — anything past that is dropped from the rail."
+          "description": "Fixed lines rendered above the live rows, in order. Empty by default since 0.8.0 — the branding pair moved to `sidebar.footer.lines`, so the top of the rail starts with the live rows. Any lines you list here render at full brightness while the live rows below them are dimmed, and they draw from the same 24-line cap as the rows. An explicit list does not suppress the footer default."
+        },
+        "footer": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Fixed lines rendered in the sidebar footer slot, a separate host region below the rows that draws outside the 24-line rail cap. The branding pair ships here by default; an explicitly empty `lines` array removes the slot entirely.",
+          "properties": {
+            "lines": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["▸ FLIGHT DECK", "─────────────────"],
+              "maxItems": 24,
+              "description": "The footer's fixed lines, in order. Defaults to the branding pair; independent of `sidebar.lines`, so setting your own top lines keeps the default footer. An explicit empty array opts the footer slot out entirely."
+            }
+          }
         },
         "rows": {
           "type": "array",

@@ -37,7 +37,9 @@ describe("persistent sidebar rows", () => {
     // Omitting is also the default when calling `statRows` directly.
     expect(statRows(["agent", "cost"], {})).toEqual([]);
     const config = resolveConfig({ sidebar: { persist: false } }).config;
-    expect(sidebarLines(config, {})).toEqual(["✈ FLIGHT DECK", "─────────────────"]);
+    // The top rail has no fixed lines by default since 0.8.0: with no data and
+    // no persistence, nothing renders.
+    expect(sidebarLines(config, {})).toEqual([]);
   });
 
   test("every default row renders exactly once when persist is on", () => {

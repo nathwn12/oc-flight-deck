@@ -95,7 +95,7 @@ describe("flight deck plugin", () => {
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
     expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.16" });
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.19" });
     // Deliberate exact pin: a supply-chain guard on the beta we build against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({
@@ -206,7 +206,9 @@ describe("flight deck plugin", () => {
       cost: 0.25,
       tokens: { input: 1200, output: 340 },
     });
-    expect(framed[0]).toContain("FLIGHT DECK");
+    expect(framed[0]).toContain("status");
+    // The branding pair moved to the sidebar footer slot in 0.8.0.
+    expect(DEFAULT_CONFIG.sidebar.footer.lines[0]).toBe("▸ FLIGHT DECK");
     expect(framed).toContain("agent     orchestrator");
     expect(framed).toContain("model     gpt-5");
     // `branch` is off the default rail now: a VCS call is opt-in.
@@ -227,8 +229,8 @@ describe("flight deck plugin", () => {
     expect(flightDeck.id).toBe("flight-deck-tui");
     const cleanup = await flightDeck.setup(context);
     expect(cleanup).toBeTypeOf("function");
-    // The footer is opt-in, so a default setup claims only the sidebar.
-    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content"]);
+    // The sidebar footer ships by default; the prompt footer is opt-in.
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
     await cleanup?.();
     expect(slots).toEqual([]);
     // Cleanup must stay harmless if the host calls it twice.
@@ -236,10 +238,20 @@ describe("flight deck plugin", () => {
     expect(slots).toEqual([]);
   });
 
-  test("claims both slots once the footer is configured", async () => {
+  test("registers only the sidebar slot when the footer list is empty", async () => {
+    // An explicitly empty `sidebar.footer.lines` opts the footer slot out
+    // entirely, so the claim list must not grow one. Pins the registration
+    // gate itself: a regression to always-registering fails here.
+    const { context, slots } = stubContext({ sidebar: { footer: { lines: [] } } });
+    const cleanup = await flightDeck.setup(context);
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content"]);
+    await cleanup?.();
+  });
+
+  test("claims the prompt footer as well, once configured", async () => {
     const { context, slots } = stubContext({ footer: { text: "Flight Deck" } });
     const cleanup = await flightDeck.setup(context);
-    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "prompt.footer.status"]);
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer", "prompt.footer.status"]);
     // Always clean up: setup starts a real interval otherwise, which would outlive
     // the test and surface as an unrelated async failure later in the run.
     await cleanup?.();

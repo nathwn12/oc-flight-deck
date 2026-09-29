@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin/tui";
 import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
-import { footerLine, railLineSpans, railLines, railLineStyle } from "./presentation.js";
+import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
 import { attributeMask, themeColor } from "./style.js";
 import { startGuardBridge } from "./guard.js";
@@ -59,6 +59,34 @@ export default Plugin.define({
 
     const footer = footerLine(config);
     const releases: Array<() => void> = [];
+
+    // One themed line, in the exact form the sidebar draws: the line resolves
+    // its own look from `config.style` (fixed lines use `style.lines`, every
+    // live row its own entry or the wildcard), and `themeColor`/`attributeMask`
+    // are the only things that know how a role or an attribute name becomes
+    // renderer state — they hand back plain props here, never escapes.
+    //
+    // `?? 0` keeps a line with no attributes on the renderer's own default
+    // instead of assigning `undefined` over it, so the shipped config draws
+    // exactly what it always drew. Shared with the sidebar footer slot so both
+    // rails stay one styling path.
+    const themedLine = (line: RailLine) => {
+      const style = railLineStyle(config.style, line);
+      const lineFg = themeColor(style.color, context.theme) as string | undefined;
+      // The span mapping — which run inherits the line's colour and which
+      // takes its own tone — lives in a pure helper, so the "only the flagged
+      // window is red" decision is tested directly. All this renderer does is
+      // resolve each role to a theme colour and pass `fg`, never ANSI.
+      return (
+        <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
+          {railLineSpans(line, style).map((span) => (
+            <span style={{ fg: themeColor(span.color, context.theme) as string | undefined }}>
+              {span.text}
+            </span>
+          ))}
+        </text>
+      );
+    };
 
     // Bound a bankable window to a few ticks: `min(60s, max(5s, 4 * refreshMs))`,
     // so a suspended process or a sparse-event gap cannot be billed as work.
@@ -258,38 +286,30 @@ export default Plugin.define({
             return (
               // No padding here: the host already lays out and pads the sidebar,
               // so adding our own would push the rows out of alignment with it.
-              //
-              // Each line resolves its own look from `config.style`: the fixed
-              // lines use `style.lines`, and every live row its own entry or the
-              // wildcard. `themeColor`/`attributeMask` are the only things that
-              // know how a role or an attribute name becomes renderer state, and
-              // they hand back plain props here — never escapes.
-              //
-              // `?? 0` keeps a line with no attributes on the renderer's own
-              // default instead of assigning `undefined` over it, so the shipped
-              // config draws exactly what it always drew.
               <box flexDirection="column">
-                {lines.map((line) => {
-                  const style = railLineStyle(config.style, line);
-                  const lineFg = themeColor(style.color, context.theme) as string | undefined;
-                  // The span mapping — which run inherits the row's colour and
-                  // which takes its own tone — lives in a pure helper, so the
-                  // "only the flagged window is red" decision is tested directly.
-                  // All this renderer does is resolve each role to a theme colour
-                  // and pass `fg`, never ANSI or escapes.
-                  return (
-                    <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
-                      {railLineSpans(line, style).map((span) => (
-                        <span style={{ fg: themeColor(span.color, context.theme) as string | undefined }}>
-                          {span.text}
-                        </span>
-                      ))}
-                    </text>
-                  );
-                })}
+                {lines.map(themedLine)}
               </box>
             );
           },
+        }),
+      );
+    }
+
+    if (config.sidebar.enabled && config.sidebar.footer.lines.length > 0) {
+      releases.push(
+        context.ui.slot({
+          // The sidebar footer: a separate host slot below the rows. The
+          // branding pair ships here by default since 0.8.0; an explicitly
+          // empty `sidebar.footer.lines` from a config file skips this
+          // registration entirely. It draws outside the `maxLines` budget and
+          // stays when `sidebar.lines` is customized. The lines are fixed, so
+          // nothing here subscribes to the ticker or the session.
+          append: "sidebar.footer",
+          render: () => (
+            <box flexDirection="column">
+              {config.sidebar.footer.lines.map((text) => themedLine({ text }))}
+            </box>
+          ),
         }),
       );
     }
@@ -298,7 +318,7 @@ export default Plugin.define({
       releases.push(
         context.ui.slot({
           append: "prompt.footer.status",
-          render: () => <text fg={context.theme.text.subdued}>{footer}</text>,
+          render: () => <text fg={themeColor("subdued", context.theme) as string | undefined}>{footer}</text>,
         }),
       );
     }
