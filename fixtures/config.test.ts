@@ -50,10 +50,11 @@ describe("flight deck config", () => {
     // motion, not as a stuck character. `refresh: 0` opts out.
     expect(resolution.config.refresh).toBe(DEFAULT_REFRESH_MS);
     expect(DEFAULT_REFRESH_MS).toBe(100);
-    // The top rail's fixed lines are empty by default: the branding pair is
-    // the sidebar footer's default, so a fresh install starts with live rows.
+    // The top rail's fixed lines are empty by default, and so is the sidebar
+    // footer's: a fresh install draws the live rows and nothing else. The
+    // branding pair is a documented opt-in via `sidebar.footer.lines`.
     expect(DEFAULT_SIDEBAR_LINES).toEqual([]);
-    expect(DEFAULT_SIDEBAR_FOOTER_LINES).toEqual(["▸ FLIGHT DECK", "─────────────────"]);
+    expect(DEFAULT_SIDEBAR_FOOTER_LINES).toEqual([]);
     // The prompt footer is off unless configured: the sidebar already has it.
     expect(footerLine(resolution.config)).toBeUndefined();
     expect(DEFAULT_CONFIG.footer.enabled).toBe(false);
@@ -190,28 +191,30 @@ describe("flight deck config", () => {
   });
 });
 
-// The sidebar footer: branding moved here in 0.8.0. It is a separate host slot
-// with its own list — independent of `sidebar.lines`, outside the rail's
-// `maxLines` budget, and suppressible only by an explicitly empty list.
+// The sidebar footer slot: a separate host region with its own list —
+// independent of `sidebar.lines` and outside the rail's `maxLines` budget.
+// Empty by default since 0.8.1; the branding pair is a documented opt-in
+// set via `sidebar.footer.lines`, and an explicitly empty list removes the
+// slot.
 describe("the sidebar footer", () => {
-  test("ships the branding pair by default", () => {
+  test("ships no footer lines by default since 0.8.1", () => {
     const resolution = resolveConfig(undefined);
     expect(resolution.issues).toEqual([]);
-    expect(resolution.config.sidebar.footer.lines).toEqual(["▸ FLIGHT DECK", "─────────────────"]);
+    expect(resolution.config.sidebar.footer.lines).toEqual([]);
     expect(DEFAULT_CONFIG.sidebar.footer.lines).toEqual(DEFAULT_SIDEBAR_FOOTER_LINES);
   });
 
-  test("replaces the default branding with an explicit list", () => {
+  test("replaces the empty default with an explicit list", () => {
     const resolution = resolveConfig({ sidebar: { footer: { lines: ["MADE BY", "flight deck"] } } });
     expect(resolution.issues).toEqual([]);
     expect(resolution.config.sidebar.footer.lines).toEqual(["MADE BY", "flight deck"]);
   });
 
-  test("keeps the default footer branding when sidebar.lines is customized", () => {
+  test("keeps the empty footer default when sidebar.lines is customized", () => {
     const resolution = resolveConfig({ sidebar: { lines: ["CUSTOM RAIL"] } });
     expect(resolution.issues).toEqual([]);
     expect(resolution.config.sidebar.lines).toEqual(["CUSTOM RAIL"]);
-    expect(resolution.config.sidebar.footer.lines).toEqual(["▸ FLIGHT DECK", "─────────────────"]);
+    expect(resolution.config.sidebar.footer.lines).toEqual([]);
   });
 
   test("an explicitly empty footer list opts the slot out entirely", () => {
@@ -222,7 +225,9 @@ describe("the sidebar footer", () => {
 
   test("falls back loudly when the footer list has no usable entries", () => {
     const resolution = resolveConfig({ sidebar: { footer: { lines: [42, "   "] } } });
-    expect(resolution.config.sidebar.footer.lines).toEqual(["▸ FLIGHT DECK", "─────────────────"]);
+    // The fallback target is the empty default: unusable input lands on no
+    // footer lines at all, with the same loud report as any bad value.
+    expect(resolution.config.sidebar.footer.lines).toEqual([]);
     expect(resolution.issues.join(" ")).toContain("sidebar.footer.lines[0]");
     expect(resolution.issues.join(" ")).toContain("no usable entries");
   });
@@ -250,10 +255,10 @@ describe("flight deck option precedence", () => {
     expect(resolveConfig(mergeOptions({ sidebar: "nope" }, undefined)).issues.join(" ")).toContain("sidebar");
     expect(resolveConfig(mergeOptions(undefined, { footer: 12 })).issues.join(" ")).toContain("footer");
     // A non-object `sidebar.footer` is reported like any other malformed
-    // section, and the default branding comes back rather than guessing.
+    // section, and the empty default comes back rather than guessing.
     const malformedFooter = resolveConfig({ sidebar: { footer: 42 } });
     expect(malformedFooter.issues.join(" ")).toContain("sidebar.footer must be an object; using defaults");
-    expect(malformedFooter.config.sidebar.footer.lines).toEqual(["▸ FLIGHT DECK", "─────────────────"]);
+    expect(malformedFooter.config.sidebar.footer.lines).toEqual([]);
   });
 
   // Pins the intended direction: a malformed section replaces the other source

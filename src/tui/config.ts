@@ -50,12 +50,12 @@ interface SidebarConfig {
 
 interface SidebarFooterConfig {
   /**
-   * The footer's fixed lines — the branding pair by default.
+   * The footer's fixed lines. Empty by default since 0.8.1.
    *
-   * An explicitly empty list opts the footer slot out entirely. Absent, the
-   * default branding comes back regardless of what `sidebar.lines` says: the
-   * two lists are independent, and the footer draws outside the rail's
-   * `maxLines` budget.
+   * An explicitly empty list opts the footer slot out entirely. Only a
+   * non-empty list registers the slot: set the documented `▸ FLIGHT DECK` /
+   * `─────────────────` branding pair here to re-enable it. The two lists are
+   * independent, and the footer draws outside the rail's `maxLines` budget.
    */
   readonly lines: readonly string[];
 }
@@ -229,16 +229,16 @@ const DEFAULT_CAUTION: CautionConfig = {
 export const DEFAULT_SIDEBAR_LINES: readonly string[] = [];
 
 /**
- * The sidebar footer's default fixed lines — branding only.
+ * The sidebar footer's default fixed lines.
  *
- * They render in the host's separate `sidebar.footer` slot, below the rows
- * and outside the rail's `maxLines` budget. An explicitly empty
- * `sidebar.footer.lines` from a config file removes the slot entirely.
+ * Empty since 0.8.1: a fresh install renders no footer text at all, so the
+ * rail is the live rows and nothing else. The `▸ FLIGHT DECK` /
+ * `─────────────────` branding pair is a documented opt-in — set
+ * `sidebar.footer.lines` to the pair to re-enable it (see the README's
+ * ⚙️ Configure section). An explicitly empty `sidebar.footer.lines` from a
+ * config file removes the slot entirely.
  */
-export const DEFAULT_SIDEBAR_FOOTER_LINES: readonly string[] = [
-  "▸ FLIGHT DECK",
-  "─────────────────",
-];
+export const DEFAULT_SIDEBAR_FOOTER_LINES: readonly string[] = [];
 
 /**
  * Live fields shown by default, in reading order.
@@ -418,11 +418,11 @@ function readLines(value: unknown, issues: string[], maxLines: number): readonly
 }
 
 /**
- * The sidebar footer's fixed lines — the branding pair by default.
+ * The sidebar footer's fixed lines — empty by default since 0.8.1.
  *
  * Unlike the top rail, an explicitly empty list is meaningful: it removes the
- * footer slot entirely. Only a non-empty list with no usable entries falls
- * back to the default, reported like every other bad value, and a runaway
+ * footer slot entirely. A non-empty list with no usable entries falls back to
+ * the (empty) default, reported like every other bad value, and a runaway
  * footer is capped at `MAX_LINES` the way the top rail is.
  */
 function readSidebarFooterLines(value: unknown, issues: string[]): readonly string[] {

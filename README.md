@@ -37,14 +37,11 @@ cache      98% hit · 32M read
 context    ██░░░░░░░░ 18%
 elapsed    2h 14m 37s
 tps        18 tok/s
-
-▸ FLIGHT DECK
-─────────────────
 ```
 
 Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none); `elapsed`, which is seeded once from the session's own recorded assistant turn spans and then accumulates the busy windows this run observes, rather than a value the session reports; and the opt-in `guard` row, which is polled from the local guard RPC.
 
-The panel's only fixed text — `▸ FLIGHT DECK` over a separator — renders in the sidebar footer slot, a separate host region **below** the rows: the top of the rail starts directly with the live rows. The footer is independent of `sidebar.rows` and `sidebar.maxLines`; it ships the branding pair by default, and `sidebar.footer.lines` replaces or removes it (see ⚙️ Configure).
+The panel's only fixed text — `▸ FLIGHT DECK` over a separator — is **opt-in**. It renders in the sidebar footer slot, a separate host region **below** the rows: the top of the rail starts directly with the live rows. Since 0.8.1 the footer is empty by default, so a fresh install draws the live rows and nothing else; set `sidebar.footer.lines` to the pair to re-enable it (see ⚙️ Configure). The footer is independent of `sidebar.rows` and `sidebar.maxLines`.
 
 | Row | What it shows |
 |---|---|
@@ -114,11 +111,20 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 > **Upgrading from 0.7.0 — the branding moved.** The `▸ FLIGHT DECK` pair now renders in the sidebar footer slot, and `sidebar.lines` defaults to empty, so the top of the rail starts with the live rows. An explicit `sidebar.lines` is kept — it does not suppress the footer default; `sidebar.footer.lines: []` is the way to drop the footer entirely.
 
+> **Upgrading from 0.8.0 — the branding is opt-in since 0.8.1.** The footer slot no longer ships the `▸ FLIGHT DECK` pair by default: with `sidebar.footer.lines` empty (the new default) nothing renders below the rows and no footer slot is claimed. Set `sidebar.footer.lines` back to the pair to get the footer exactly as it was.
+
 `sidebar.rows` picks the rows and their order; `sidebar.maxLines` caps the whole rail (fixed lines plus rows, default 24, configurable from 1 to 24); `layout.labelWidth` fits your terminal; `format.duration` switches the `elapsed` row between `spaced` (`2h 14m 37s`, the default) and `compact` (`2h14m37s`).
 
-`sidebar.footer.lines` sets the fixed lines in the sidebar footer slot — the branding pair by default, in a region the host draws below the rows. It is independent of `sidebar.lines`: setting your own top lines keeps the default footer, and an explicitly empty `"lines": []` inside `sidebar.footer` removes the slot entirely. The footer never counts against `sidebar.maxLines`.
+`sidebar.footer.lines` sets the fixed lines in the sidebar footer slot — empty by default since 0.8.1, in a region the host draws below the rows. Set it to the documented pair to re-enable the branding:
 
-Optional styling lives under `style`: `style.lines` controls the fixed branding/separator lines (the sidebar footer's default pair, or whatever `sidebar.lines` you set), `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
+```jsonc
+// inside "sidebar":
+"footer": { "lines": ["▸ FLIGHT DECK", "─────────────────"] }
+```
+
+It is independent of `sidebar.lines`: setting your own top lines does not turn the footer on, and an explicitly empty `"lines": []` inside `sidebar.footer` keeps the slot off entirely. The footer never counts against `sidebar.maxLines`.
+
+Optional styling lives under `style`: `style.lines` controls the fixed branding/separator lines (the opt-in footer pair when you set `sidebar.footer.lines`, or whatever `sidebar.lines` you set), `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
 
 Everything else lives in the example file, documented inline - a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.
 

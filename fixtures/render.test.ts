@@ -188,13 +188,14 @@ test("renders the live rail with no configuration at all", async () => {
 
   const { sidebar, sidebarFooter, footer } = railClaims(claims);
   expect(sidebar).toBeDefined();
-  // The sidebar footer slot ships the branding pair by default; the prompt
-  // footer is opt-in, so a default setup claims no prompt-footer slot.
-  expect(sidebarFooter).toBeDefined();
+  // The sidebar footer slot is opt-in since 0.8.1: the empty default
+  // registers nothing. The prompt footer is opt-in too, so a default setup
+  // claims neither footer slot.
+  expect(sidebarFooter).toBeUndefined();
   expect(footer).toBeUndefined();
 
   const frame = await frameOf(sidebar!.render, 40, 20);
-  // Branding left the top rail in 0.8.0: it renders in the footer slot below.
+  // Branding is opt-in since 0.8.1: nothing renders below the live rows.
   expect(frame).not.toContain("FLIGHT DECK");
   expect(frame).toContain("orchestrator");
   expect(frame).toContain("deepseek-v4.1-flash · high");
@@ -207,7 +208,20 @@ test("renders the live rail with no configuration at all", async () => {
   // The old placeholder text must be gone for good.
   expect(frame).not.toContain("visual rail");
   expect(frame).not.toContain("cosmetic build");
+});
 
+test("renders the opt-in branding pair when sidebar.footer.lines is set", async () => {
+  const { context, claims } = harness(
+    { sidebar: { footer: { lines: ["▸ FLIGHT DECK", "─────────────────"] } } },
+    workspace(),
+    LIVE_SESSION,
+  );
+  flightDeck.setup(context);
+
+  // The documented opt-in: the pair in `sidebar.footer.lines` claims the
+  // sidebar footer slot and renders both lines — proving the re-enable path.
+  const { sidebarFooter } = railClaims(claims);
+  expect(sidebarFooter).toBeDefined();
   const footerFrame = await frameOf(sidebarFooter!.render, 40, 3);
   expect(footerFrame).toContain("▸ FLIGHT DECK");
   expect(footerFrame).toContain("─────────────────");
@@ -262,15 +276,16 @@ test("keeps the sidebar empty until the host supplies session data", async () =>
 
   const { sidebar, sidebarFooter } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 4);
-  // Branding lives in the footer slot now, so an empty rail is fully empty.
+  // Branding is opt-in and the default is empty, so an empty rail is fully empty.
   expect(frame).not.toContain("FLIGHT DECK");
   // With `persist: false` there are no placeholders: a row appears only once
   // it has a value.
   expect(frame).not.toContain("agent");
   // A default row with no data must stay absent, not render its placeholder.
   expect(frame).not.toContain("cost");
-  // The branding pair renders in the footer slot, independent of the rail.
-  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
+  // No footer slot by default: the empty `sidebar.footer.lines` registers
+  // nothing, independent of the rail.
+  expect(sidebarFooter).toBeUndefined();
 });
 
 test("renders the text a user configured, alongside the live rows", async () => {
@@ -286,9 +301,9 @@ test("renders the text a user configured, alongside the live rows", async () => 
   expect(sidebarFrame).toContain("CUSTOM RAIL");
   expect(sidebarFrame).toContain("orchestrator");
   expect(sidebarFrame).not.toContain("FLIGHT DECK");
-  // An explicit `sidebar.lines` does not suppress the footer default: the two
-  // lists are independent.
-  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
+  // An explicit `sidebar.lines` does not turn the footer on: the two lists
+  // are independent, and the footer default is empty.
+  expect(sidebarFooter).toBeUndefined();
 
   const footerFrame = await frameOf(footer!.render, 60, 3);
   expect(footerFrame).toContain("hello deck");
@@ -348,8 +363,9 @@ test("registers the sidebar slots when just the prompt footer is disabled", asyn
   flightDeck.setup(context);
 
   expect(toasts).toEqual([]);
-  // The sidebar footer ships by default; only the prompt footer is opt-in.
-  expect(claims.map((claim) => claim.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+  // With the empty footer default, only the sidebar itself is claimed — no
+  // footer slot at all; the prompt footer is opt-in and disabled here.
+  expect(claims.map((claim) => claim.path)).toEqual(["sidebar.content"]);
 });
 
 test("summarises additional config problems", async () => {
@@ -386,8 +402,8 @@ test("warns and keeps rendering when the config file is broken", async () => {
   // Still renders the defaults.
   const { sidebar, sidebarFooter, footer } = railClaims(claims);
   expect(await frameOf(sidebar!.render, 40, 20)).toContain("orchestrator");
-  // The fallback also restores the default footer branding.
-  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
+  // The fallback also lands on the empty footer default: no slot is claimed.
+  expect(sidebarFooter).toBeUndefined();
   // A broken file falls back to the off-by-default prompt footer, not a guessed one.
   expect(footer).toBeUndefined();
 });
