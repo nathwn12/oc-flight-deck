@@ -56,7 +56,7 @@ describe("configurable rail styling", () => {
       expect(railLineStyle(config.style, line)).toEqual({ color: "warning", attributes: ["bold", "underline"] });
     }
     // The footer's fixed branding lines still take `style.lines`, not the wildcard.
-    const branding = { text: config.sidebar.footer.lines[0]! };
+    const branding = { text: "▸ FLIGHT DECK" };
     expect(railLineStyle(config.style, branding)).toEqual(DEFAULT_STYLE.lines);
   });
 

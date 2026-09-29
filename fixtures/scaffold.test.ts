@@ -207,8 +207,8 @@ describe("flight deck plugin", () => {
       tokens: { input: 1200, output: 340 },
     });
     expect(framed[0]).toContain("status");
-    // The branding pair moved to the sidebar footer slot in 0.8.0.
-    expect(DEFAULT_CONFIG.sidebar.footer.lines[0]).toBe("▸ FLIGHT DECK");
+    // The branding pair is a documented opt-in; the default footer is empty.
+    expect(DEFAULT_CONFIG.sidebar.footer.lines).toEqual([]);
     expect(framed).toContain("agent     orchestrator");
     expect(framed).toContain("model     gpt-5");
     // `branch` is off the default rail now: a VCS call is opt-in.
@@ -229,8 +229,9 @@ describe("flight deck plugin", () => {
     expect(flightDeck.id).toBe("flight-deck-tui");
     const cleanup = await flightDeck.setup(context);
     expect(cleanup).toBeTypeOf("function");
-    // The sidebar footer ships by default; the prompt footer is opt-in.
-    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+    // The empty footer default registers no footer slot, and the prompt footer
+    // is opt-in: a default setup claims only the sidebar itself.
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content"]);
     await cleanup?.();
     expect(slots).toEqual([]);
     // Cleanup must stay harmless if the host calls it twice.
@@ -248,10 +249,21 @@ describe("flight deck plugin", () => {
     await cleanup?.();
   });
 
+  test("registers both sidebar slots when the branding pair is opted in", async () => {
+    // The documented opt-in: setting `sidebar.footer.lines` to the branding
+    // pair claims the footer slot alongside the sidebar itself.
+    const { context, slots } = stubContext({
+      sidebar: { footer: { lines: ["▸ FLIGHT DECK", "─────────────────"] } },
+    });
+    const cleanup = await flightDeck.setup(context);
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+    await cleanup?.();
+  });
+
   test("claims the prompt footer as well, once configured", async () => {
     const { context, slots } = stubContext({ footer: { text: "Flight Deck" } });
     const cleanup = await flightDeck.setup(context);
-    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer", "prompt.footer.status"]);
+    expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "prompt.footer.status"]);
     // Always clean up: setup starts a real interval otherwise, which would outlive
     // the test and surface as an unrelated async failure later in the run.
     await cleanup?.();
