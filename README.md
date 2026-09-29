@@ -5,7 +5,7 @@
 **Live session telemetry for your OpenCode terminal.**
 *The numbers where you're already looking — because your agent is spending money right now.*
 
-![npm](https://img.shields.io/npm/v/oc-flight-deck) ![license](https://img.shields.io/badge/license-MIT-blue) ![opencode](https://img.shields.io/badge/opencode-V2-compatible-8A2BE2) ![node](https://img.shields.io/badge/node-%E2%89%A522-green) ![downloads](https://img.shields.io/npm/dm/oc-flight-deck) ![check](https://img.shields.io/github/actions/workflow/status/nathwn12/oc-flight-deck/check.yml)
+![npm](https://img.shields.io/npm/v/oc-flight-deck) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A522-green) ![downloads](https://img.shields.io/npm/dm/oc-flight-deck) ![check](https://img.shields.io/github/actions/workflow/status/nathwn12/oc-flight-deck/check.yml)
 
 </div>
 
