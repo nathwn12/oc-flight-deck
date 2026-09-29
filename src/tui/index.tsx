@@ -299,11 +299,12 @@ export default Plugin.define({
       releases.push(
         context.ui.slot({
           // The sidebar footer: a separate host slot below the rows. The
-          // branding pair ships here by default since 0.8.0; an explicitly
-          // empty `sidebar.footer.lines` from a config file skips this
-          // registration entirely. It draws outside the `maxLines` budget and
-          // stays when `sidebar.lines` is customized. The lines are fixed, so
-          // nothing here subscribes to the ticker or the session.
+          // lines are empty by default since 0.8.1, so this registration is
+          // purely opt-in — set `sidebar.footer.lines` (the documented
+          // `▸ FLIGHT DECK` pair, or your own) to claim the slot. It draws
+          // outside the `maxLines` budget and stays when `sidebar.lines` is
+          // customized. The lines are fixed, so nothing here subscribes to
+          // the ticker or the session.
           append: "sidebar.footer",
           render: () => (
             <box flexDirection="column">
