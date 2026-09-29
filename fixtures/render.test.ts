@@ -175,8 +175,9 @@ async function frameOf(render: Render, width: number, height: number, sessionID 
 
 function railClaims(claims: Claim[]) {
   const sidebar = claims.find((claim) => claim.path === "sidebar.content");
+  const sidebarFooter = claims.find((claim) => claim.path === "sidebar.footer");
   const footer = claims.find((claim) => claim.path === "prompt.footer.status");
-  return { sidebar, footer };
+  return { sidebar, sidebarFooter, footer };
 }
 
 test("renders the live rail with no configuration at all", async () => {
@@ -185,13 +186,16 @@ test("renders the live rail with no configuration at all", async () => {
   // The whole point: zero configuration, real numbers.
   expect(toasts).toEqual([]);
 
-  const { sidebar, footer } = railClaims(claims);
+  const { sidebar, sidebarFooter, footer } = railClaims(claims);
   expect(sidebar).toBeDefined();
-  // The prompt footer is opt-in, so a default setup claims only the sidebar.
+  // The sidebar footer slot ships the branding pair by default; the prompt
+  // footer is opt-in, so a default setup claims no prompt-footer slot.
+  expect(sidebarFooter).toBeDefined();
   expect(footer).toBeUndefined();
 
   const frame = await frameOf(sidebar!.render, 40, 20);
-  expect(frame).toContain("FLIGHT DECK");
+  // Branding left the top rail in 0.8.0: it renders in the footer slot below.
+  expect(frame).not.toContain("FLIGHT DECK");
   expect(frame).toContain("orchestrator");
   expect(frame).toContain("deepseek-v4.1-flash · high");
   // A real default row, not the branch: `branch` is off the shipped rail now,
@@ -203,6 +207,10 @@ test("renders the live rail with no configuration at all", async () => {
   // The old placeholder text must be gone for good.
   expect(frame).not.toContain("visual rail");
   expect(frame).not.toContain("cosmetic build");
+
+  const footerFrame = await frameOf(sidebarFooter!.render, 40, 3);
+  expect(footerFrame).toContain("▸ FLIGHT DECK");
+  expect(footerFrame).toContain("─────────────────");
 });
 
 test("totals subagent sessions and reads context from the last request", async () => {
@@ -248,18 +256,21 @@ test("draws the context gauge, matching provider as well as model id", async () 
   expect(frame).not.toContain("17%");
 });
 
-test("renders branding alone until the host supplies session data", async () => {
+test("keeps the sidebar empty until the host supplies session data", async () => {
   const { context, claims } = harness({ sidebar: { persist: false } }, workspace());
   flightDeck.setup(context);
 
-  const { sidebar } = railClaims(claims);
+  const { sidebar, sidebarFooter } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 4);
-  expect(frame).toContain("FLIGHT DECK");
+  // Branding lives in the footer slot now, so an empty rail is fully empty.
+  expect(frame).not.toContain("FLIGHT DECK");
   // With `persist: false` there are no placeholders: a row appears only once
   // it has a value.
   expect(frame).not.toContain("agent");
   // A default row with no data must stay absent, not render its placeholder.
   expect(frame).not.toContain("cost");
+  // The branding pair renders in the footer slot, independent of the rail.
+  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
 });
 
 test("renders the text a user configured, alongside the live rows", async () => {
@@ -270,11 +281,14 @@ test("renders the text a user configured, alongside the live rows", async () => 
   );
   flightDeck.setup(context);
 
-  const { sidebar, footer } = railClaims(claims);
+  const { sidebar, sidebarFooter, footer } = railClaims(claims);
   const sidebarFrame = await frameOf(sidebar!.render, 40, 4);
   expect(sidebarFrame).toContain("CUSTOM RAIL");
   expect(sidebarFrame).toContain("orchestrator");
   expect(sidebarFrame).not.toContain("FLIGHT DECK");
+  // An explicit `sidebar.lines` does not suppress the footer default: the two
+  // lists are independent.
+  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
 
   const footerFrame = await frameOf(footer!.render, 60, 3);
   expect(footerFrame).toContain("hello deck");
@@ -329,12 +343,13 @@ test("warns about an unknown row name", async () => {
   expect(toasts[0]).toContain("not a known field");
 });
 
-test("registers only the sidebar when just the footer is disabled", async () => {
+test("registers the sidebar slots when just the prompt footer is disabled", async () => {
   const { context, claims, toasts } = harness({ footer: { enabled: false } }, workspace());
   flightDeck.setup(context);
 
   expect(toasts).toEqual([]);
-  expect(claims.map((claim) => claim.path)).toEqual(["sidebar.content"]);
+  // The sidebar footer ships by default; only the prompt footer is opt-in.
+  expect(claims.map((claim) => claim.path)).toEqual(["sidebar.content", "sidebar.footer"]);
 });
 
 test("summarises additional config problems", async () => {
@@ -369,9 +384,11 @@ test("warns and keeps rendering when the config file is broken", async () => {
   expect(toasts[0]).toContain("could not be parsed");
 
   // Still renders the defaults.
-  const { sidebar, footer } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 20)).toContain("FLIGHT DECK");
-  // A broken file falls back to the off-by-default footer, not a guessed one.
+  const { sidebar, sidebarFooter, footer } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 20)).toContain("orchestrator");
+  // The fallback also restores the default footer branding.
+  expect(await frameOf(sidebarFooter!.render, 40, 3)).toContain("FLIGHT DECK");
+  // A broken file falls back to the off-by-default prompt footer, not a guessed one.
   expect(footer).toBeUndefined();
 });
 
@@ -439,7 +456,8 @@ test("omits the status row rather than guess when the host will not say", async 
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 16);
-  expect(frame).toContain("FLIGHT DECK");
+  // A live default row proves the rail rendered; the branding lives elsewhere.
+  expect(frame).toContain("orchestrator");
   expect(frame).not.toContain("idle");
   expect(frame).not.toContain("running");
 });

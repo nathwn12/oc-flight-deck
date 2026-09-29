@@ -24,8 +24,13 @@ import {
 interface SidebarConfig {
   /** Show the sidebar rail. Default `true`. */
   readonly enabled: boolean;
-  /** Fixed lines rendered above the live rows. Default `DEFAULT_SIDEBAR_LINES`. */
+  /**
+   * Fixed lines rendered above the live rows. Default `DEFAULT_SIDEBAR_LINES`
+   * (empty since 0.8.0 — the branding pair moved to the sidebar footer).
+   */
   readonly lines: readonly string[];
+  /** Fixed lines rendered in the sidebar footer slot. Default `DEFAULT_SIDEBAR_FOOTER_LINES`. */
+  readonly footer: SidebarFooterConfig;
   /** Live session fields to render, top to bottom. Default `DEFAULT_SIDEBAR_ROWS`. */
   readonly rows: readonly string[];
   /**
@@ -41,6 +46,18 @@ interface SidebarConfig {
    * the one number that decides how tall the panel may grow.
    */
   readonly maxLines: number;
+}
+
+interface SidebarFooterConfig {
+  /**
+   * The footer's fixed lines — the branding pair by default.
+   *
+   * An explicitly empty list opts the footer slot out entirely. Absent, the
+   * default branding comes back regardless of what `sidebar.lines` says: the
+   * two lists are independent, and the footer draws outside the rail's
+   * `maxLines` budget.
+   */
+  readonly lines: readonly string[];
 }
 
 interface FooterConfig {
@@ -202,13 +219,24 @@ const DEFAULT_CAUTION: CautionConfig = {
 };
 
 /**
- * Fixed lines shown above the live rows — branding only.
+ * Fixed lines shown above the live rows.
  *
- * The rail exists to show session state, so nothing here is filler: there is no
- * placeholder text to delete before it looks finished.
+ * Empty since 0.8.0: the branding pair moved to the sidebar footer slot
+ * (`DEFAULT_SIDEBAR_FOOTER_LINES`), so the top of the rail starts with the
+ * live rows. The rail exists to show session state, so nothing here is
+ * filler: there is no placeholder text to delete before it looks finished.
  */
-export const DEFAULT_SIDEBAR_LINES: readonly string[] = [
-  "✈ FLIGHT DECK",
+export const DEFAULT_SIDEBAR_LINES: readonly string[] = [];
+
+/**
+ * The sidebar footer's default fixed lines — branding only.
+ *
+ * They render in the host's separate `sidebar.footer` slot, below the rows
+ * and outside the rail's `maxLines` budget. An explicitly empty
+ * `sidebar.footer.lines` from a config file removes the slot entirely.
+ */
+export const DEFAULT_SIDEBAR_FOOTER_LINES: readonly string[] = [
+  "▸ FLIGHT DECK",
   "─────────────────",
 ];
 
@@ -268,6 +296,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
   sidebar: {
     enabled: true,
     lines: DEFAULT_SIDEBAR_LINES,
+    footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES },
     rows: DEFAULT_SIDEBAR_ROWS,
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
@@ -331,27 +360,42 @@ function readText(value: unknown, fallback: string, path: string, issues: string
   return text;
 }
 
-function readLines(value: unknown, issues: string[], maxLines: number): readonly string[] {
-  if (value === undefined) return DEFAULT_SIDEBAR_LINES;
-  if (!Array.isArray(value) || value.length === 0) {
-    issues.push("sidebar.lines must be a non-empty array of strings; using the default lines");
-    return DEFAULT_SIDEBAR_LINES;
+/**
+ * One fixed-line list, shared by the top rail and the sidebar footer.
+ *
+ * An explicitly empty list is a real choice for both rails - the top rail's
+ * lines default to empty since 0.8.0, and an empty footer list removes the
+ * footer slot entirely. A list with no usable entries still falls back to
+ * `fallback`, loudly, like every other bad option.
+ */
+function readLineList(
+  value: unknown,
+  issues: string[],
+  maxLines: number,
+  fallback: readonly string[],
+  path: string,
+): readonly string[] {
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value)) {
+    issues.push(`${path} must be an array of strings; using the default lines`);
+    return fallback;
   }
+  if (value.length === 0) return [];
 
   const lines: string[] = [];
   value.forEach((entry, index) => {
-    const path = `sidebar.lines[${index}]`;
+    const entryPath = `${path}[${index}]`;
     if (typeof entry !== "string") {
-      issues.push(`${path} must be a string; skipping it`);
+      issues.push(`${entryPath} must be a string; skipping it`);
       return;
     }
-    const text = normalizeText(entry, path, issues);
+    const text = normalizeText(entry, entryPath, issues);
     if (text.length === 0) {
-      issues.push(`${path} is empty; skipping it`);
+      issues.push(`${entryPath} is empty; skipping it`);
       return;
     }
     if (text.length > MAX_LINE_LENGTH) {
-      issues.push(`${path} was longer than ${MAX_LINE_LENGTH} characters; it was shortened`);
+      issues.push(`${entryPath} was longer than ${MAX_LINE_LENGTH} characters; it was shortened`);
       lines.push(text.slice(0, MAX_LINE_LENGTH));
       return;
     }
@@ -359,14 +403,30 @@ function readLines(value: unknown, issues: string[], maxLines: number): readonly
   });
 
   if (lines.length === 0) {
-    issues.push("sidebar.lines had no usable entries; using the default lines");
-    return DEFAULT_SIDEBAR_LINES;
+    issues.push(`${path} had no usable entries; using the default lines`);
+    return fallback;
   }
   if (lines.length > maxLines) {
-    issues.push(`sidebar.lines has ${lines.length} entries; keeping the first ${maxLines}`);
+    issues.push(`${path} has ${lines.length} entries; keeping the first ${maxLines}`);
     return lines.slice(0, maxLines);
   }
   return lines;
+}
+
+function readLines(value: unknown, issues: string[], maxLines: number): readonly string[] {
+  return readLineList(value, issues, maxLines, DEFAULT_SIDEBAR_LINES, "sidebar.lines");
+}
+
+/**
+ * The sidebar footer's fixed lines — the branding pair by default.
+ *
+ * Unlike the top rail, an explicitly empty list is meaningful: it removes the
+ * footer slot entirely. Only a non-empty list with no usable entries falls
+ * back to the default, reported like every other bad value, and a runaway
+ * footer is capped at `MAX_LINES` the way the top rail is.
+ */
+function readSidebarFooterLines(value: unknown, issues: string[]): readonly string[] {
+  return readLineList(value, issues, MAX_LINES, DEFAULT_SIDEBAR_FOOTER_LINES, "sidebar.footer.lines");
 }
 
 /**
@@ -809,7 +869,15 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const footerConfigured = Object.keys(footer).length > 0;
 
   const maxLines = readMaxLines(sidebar.maxLines, issues);
+  // The sidebar footer is its own host slot with its own list; a malformed
+  // section is reported and the default branding comes back.
+  const rawSidebarFooter = sidebar.footer;
+  if (rawSidebarFooter !== undefined && !isRecord(rawSidebarFooter)) {
+    issues.push("sidebar.footer must be an object; using defaults");
+  }
+  const sidebarFooter = isRecord(rawSidebarFooter) ? rawSidebarFooter : {};
   const lines = readLines(sidebar.lines, issues, maxLines);
+  const footerLines = readSidebarFooterLines(sidebarFooter.lines, issues);
   const rows = readRows(sidebar.rows, issues, maxLines);
   // `railLines` caps the whole rail at `sidebar.maxLines`, so the fixed lines
   // and the live rows draw from one budget. `readLines` already reports its own
@@ -826,6 +894,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
       sidebar: {
         enabled: readBoolean(sidebar.enabled, DEFAULT_CONFIG.sidebar.enabled, "sidebar.enabled", issues),
         lines,
+        footer: { lines: footerLines },
         rows,
         persist: readBoolean(sidebar.persist, DEFAULT_CONFIG.sidebar.persist, "sidebar.persist", issues),
         placeholder: readText(

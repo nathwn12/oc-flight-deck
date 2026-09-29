@@ -39,6 +39,9 @@ describe("the schema describes the real config", () => {
     expect(props["refresh"]!.default).toBe(DEFAULT_CONFIG.refresh);
     expect(props["sidebar"]!.properties.enabled.default).toBe(DEFAULT_CONFIG.sidebar.enabled);
     expect(props["sidebar"]!.properties.lines.default).toEqual([...DEFAULT_CONFIG.sidebar.lines]);
+    expect(props["sidebar"]!.properties.footer.properties.lines.default).toEqual([
+      ...DEFAULT_CONFIG.sidebar.footer.lines,
+    ]);
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
