@@ -583,6 +583,19 @@ describe("active-work throughput", () => {
     ).toEqual({ tokens: 60, unionMs: 1_000 });
   });
 
+  test("keeps the first record for the numerator too, so an empty-first duplicate yields no rate", () => {
+    // The span rule already makes the first record win; the numerator follows
+    // the same polarity. A replay that lists the empty twin first therefore
+    // keeps zero tokens and the row hides, rather than reading the later twin's
+    // 120 tokens.
+    expect(
+      unionSpanThroughput([
+        { key: "id:msg_1", tokens: 0, start: 0, end: 1_000 },
+        { key: "id:msg_1", tokens: 120, start: 0, end: 1_000 },
+      ]),
+    ).toBeUndefined();
+  });
+
   test("builds the dedup key from the id, else the record tuple", () => {
     expect(turnKey("msg_1", 1, 2, 3)).toBe("id:msg_1");
     // No id: the fields that define the record, so a re-sent copy matches.

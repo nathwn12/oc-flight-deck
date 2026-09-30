@@ -889,12 +889,14 @@ test("hides tps until the host has proven it stamps or not", async () => {
   expect(frame).not.toContain("tok/s");
 });
 
-test("a zero-output assistant turn proves the host stamps but adds no time", async () => {
+test("a zero-output stamped turn proves the host stamps and is counted, but yields no rate", async () => {
   const now = Date.now();
-  // The turn carries a stamp, so the host is known to stamp. It produced no
-  // output, so it contributes to neither side and the row hides — it must NOT
-  // be mistaken for a host with no timestamps and fall back to this session's
-  // lifetime average (30,000 / 60s = 500 tok/s).
+  // The turn carries a stamp, so the host is known to stamp. Its span still
+  // counts in the denominator — that is the current rule, and the official
+  // TUI's — but the numerator stays at zero, so there is nothing to divide and
+  // the row hides rather than printing `0 tok/s`. It must NOT be mistaken for a
+  // host with no timestamps and fall back to this session's lifetime average
+  // (30,000 / 60s = 500 tok/s).
   const messages = [
     { type: "assistant", time: { created: now - 2_000, completed: now - 1_000 }, tokens: { output: 0 } },
   ];
