@@ -294,6 +294,25 @@ describe("session elapsed integration", () => {
     expect(reads.sessionElapsed("root", 500_000)).toBe(7_000);
   });
 
+  test("seeds a settled turn at completed, not streamed, when both are stamped", () => {
+    // `tps` ends this record at `streamed` (2 s of decoding); the elapsed clock
+    // must not. It stays busy until the turn's tools settle at `completed`
+    // (5 s), so the seed is 5 s - the tool-settlement time stays in the tally.
+    const reads = createSessionReads(
+      stubContext({ root: "idle" }, { root: ["root"] }, [], {
+        root: [
+          {
+            id: "m1",
+            type: "assistant",
+            time: { created: 0, streamed: 2_000, completed: 5_000 },
+            tokens: { output: 10 },
+          },
+        ],
+      }),
+    );
+    expect(reads.sessionElapsed("root", 0)).toBe(5_000);
+  });
+
   test("a fresh clock over the same host data reproduces the seeded figure", () => {
     const families = { root: ["root"] };
     const messages = { root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)] };

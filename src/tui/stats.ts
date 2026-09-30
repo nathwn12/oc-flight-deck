@@ -23,4 +23,4 @@ export {
   unionSpanThroughput,
   unionSpanTotals,
 } from "./throughput.js";
-export type { SpanTotals, ThroughputSpan } from "./throughput.js";
+export type { SpanEndPreference, SpanTotals, ThroughputSpan } from "./throughput.js";
