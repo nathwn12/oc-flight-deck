@@ -1,0 +1,30 @@
+# Publish unattended via npm OIDC trusted publishing: no NPM_TOKEN, provenance is automatic.
+# One-time binding on npmjs.com (run once as the package owner):
+#   npm trust github oc-flight-deck --file release.yml --repo nathwn12/oc-flight-deck --allow-publish
+# npm's ~5-15 min publish-time malware scan still applies, so the version is installable
+# minutes after a green run.
+name: release
+
+on:
+  push:
+    tags: [v*]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - run: npm publish --access public
