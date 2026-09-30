@@ -178,7 +178,9 @@ describe("flight deck live rows", () => {
   });
 
   test("reports measured throughput, not an estimate", () => {
-    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106 tok/s");
+    // One decimal, matching the official TUI's own rendering.
+    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106.3 tok/s");
+    expect(statLine("tps", { tps: 106 })).toBe("tps       106.0 tok/s");
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
   });
 
@@ -439,31 +441,39 @@ function shuffle<T>(items: readonly T[], seed: number): T[] {
   return out;
 }
 
-// The tps row measures work actually done: output tokens divided by the union
-// of the assistant turns' own spans. Idle between turns is never in the
-// denominator, so an idle session keeps the figure it settled on instead of
-// decaying or hiding. These pin the union arithmetic and the mandatory
-// defences: dedup, clamp, pre-sort, and the one-second floor.
+// The tps row measures work actually done: output plus reasoning tokens divided
+// by the union of the assistant turns' own streaming spans. Idle between turns
+// and the tool settlement after one are never in the denominator, so an idle
+// session keeps the figure it settled on instead of decaying or hiding. These
+// pin the union arithmetic and the mandatory defences: dedup, clamp, pre-sort,
+// and the one-second floor.
 describe("active-work throughput", () => {
   const NOW = 1_800_000_000_000;
 
-  test("resolves a turn span from the timestamp rungs, in flight ending at now", () => {
-    // `completed` wins; `streamed` next; otherwise the turn is in flight and
-    // ends at the caller's now.
-    expect(turnSpan(1_000, 5_000, 4_000, NOW)).toEqual({ start: 1_000, end: 5_000 });
-    expect(turnSpan(1_000, undefined, 4_000, NOW)).toEqual({ start: 1_000, end: 4_000 });
-    expect(turnSpan(1_000, undefined, undefined, NOW)).toEqual({ start: 1_000, end: NOW });
+  test("resolves a turn span from the timestamp rungs, in the caller's end order", () => {
+    // The end rung is the caller's choice. `tps` reads `streamed` first - the
+    // moment decoding stopped is the numerator clock, and `completed` settles
+    // the turn after its tools ran. The `elapsed` seed reads `completed` first -
+    // the clock stays busy until that settlement.
+    expect(turnSpan(1_000, 5_000, 4_000, NOW, "streamed")).toEqual({ start: 1_000, end: 4_000 });
+    expect(turnSpan(1_000, 5_000, 4_000, NOW, "completed")).toEqual({ start: 1_000, end: 5_000 });
+    // Whichever rung is missing, the other is the fallback.
+    expect(turnSpan(1_000, 5_000, undefined, NOW, "streamed")).toEqual({ start: 1_000, end: 5_000 });
+    expect(turnSpan(1_000, undefined, 4_000, NOW, "completed")).toEqual({ start: 1_000, end: 4_000 });
+    // Neither rung: the turn is in flight and ends at the caller's now.
+    expect(turnSpan(1_000, undefined, undefined, NOW, "streamed")).toEqual({ start: 1_000, end: NOW });
+    expect(turnSpan(1_000, undefined, undefined, NOW, "completed")).toEqual({ start: 1_000, end: NOW });
     // No usable start: the turn is skipped, never guessed at.
-    expect(turnSpan(undefined, 5_000, 4_000, NOW)).toBeUndefined();
-    expect(turnSpan("nope", 5_000, 4_000, NOW)).toBeUndefined();
+    expect(turnSpan(undefined, 5_000, 4_000, NOW, "streamed")).toBeUndefined();
+    expect(turnSpan("nope", 5_000, 4_000, NOW, "completed")).toBeUndefined();
     // A clock that cannot even say "now" leaves the in-flight end unresolvable.
-    expect(turnSpan(1_000, undefined, undefined, Number.NaN)).toBeUndefined();
+    expect(turnSpan(1_000, undefined, undefined, Number.NaN, "streamed")).toBeUndefined();
   });
 
   test("clamps a backwards clock to a zero-length span, never negative", () => {
     // `end < start` is skew: the span is zero-length rather than negative, so
     // it can never subtract time from the union.
-    expect(turnSpan(5_000, 1_000, undefined, NOW)).toEqual({ start: 5_000, end: 5_000 });
+    expect(turnSpan(5_000, 1_000, undefined, NOW, "streamed")).toEqual({ start: 5_000, end: 5_000 });
     expect(unionSpanTotals([{ key: "a", tokens: 10, start: 5_000, end: 1_000 }])).toEqual({
       tokens: 10,
       unionMs: 0,
@@ -479,10 +489,11 @@ describe("active-work throughput", () => {
     expect(unionSpanThroughput([{ key: "a", start: 0, end: 10_000 }])).toBeUndefined();
     expect(unionSpanThroughput([{ key: "a", tokens: -5, start: 0, end: 10_000 }])).toBeUndefined();
     expect(unionSpanThroughput([{ key: "a", tokens: 10, start: "x", end: 10_000 }])).toBeUndefined();
-    // A zero-output turn contributes to neither side: both tokens and time drop.
+    // A zero-token turn adds nothing to the numerator, but its span still
+    // counts: dropping it would inflate the rate the official TUI never does.
     expect(unionSpanTotals([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toEqual({
       tokens: 0,
-      unionMs: 0,
+      unionMs: 5_000,
     });
   });
 
@@ -510,6 +521,24 @@ describe("active-work throughput", () => {
     ).toBe(100);
   });
 
+  test("adds reasoning to the numerator alongside output", () => {
+    // The same pair the official TUI sums, so a thinking-heavy model is not
+    // under-reported: 60 output + 40 reasoning over 1 s.
+    expect(unionSpanTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
+      tokens: 100,
+      unionMs: 1_000,
+    });
+    expect(unionSpanThroughput([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toBe(100);
+    // Reasoning alone still divides: a turn that only thought has a rate.
+    expect(unionSpanThroughput([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toBe(60);
+    // Neither count is no rate at all, though the span itself still stands.
+    expect(unionSpanThroughput([{ key: "a", tokens: 0, reasoning: 0, start: 0, end: 2_000 }])).toBeUndefined();
+    expect(unionSpanTotals([{ key: "a", reasoning: 0, start: 0, end: 2_000 }])).toEqual({
+      tokens: 0,
+      unionMs: 2_000,
+    });
+  });
+
   test("does not let a long idle gap lower the figure", () => {
     const close = [
       { key: "a", tokens: 300, start: 0, end: 1_000 },
@@ -522,6 +551,19 @@ describe("active-work throughput", () => {
     // Same tokens, same active time: an idle hour between them changes nothing.
     expect(unionSpanThroughput(farApart)).toBe(unionSpanThroughput(close));
     expect(unionSpanThroughput(farApart)).toBe(300);
+  });
+
+  test("counts a stamped turn that produced no tokens in the denominator", () => {
+    // The official TUI's rule: a step with a streamed rung counts in the
+    // denominator even when it produced nothing. 100 tokens over the two 2 s
+    // turns reads 25.0; dropping the empty turn's span would have read 50.0.
+    const spans = [
+      { key: "producing", tokens: 100, start: 0, end: 2_000 },
+      { key: "empty", tokens: 0, start: 2_000, end: 4_000 },
+    ];
+    expect(unionSpanTotals(spans)).toEqual({ tokens: 100, unionMs: 4_000 });
+    expect(unionSpanThroughput(spans)).toBe(25);
+    expect(unionSpanThroughput(spans)).not.toBe(50);
   });
 
   test("counts an identical duplicate once on both sides", () => {
@@ -596,17 +638,17 @@ describe("active-work throughput", () => {
 });
 
 // `unionSpanMs` is the token-blind twin of `unionSpanTotals`, used to seed
-// `elapsed`. It shares the dedup, clamp, pre-sort and merge, but a zero-output
-// turn still took wall time and must still contribute its span.
+// `elapsed`. It shares the dedup, clamp, pre-sort and merge, and simply returns
+// the wall time without the numerator `elapsed` has no use for.
 describe("elapsed span union (tokens ignored)", () => {
   test("counts a zero-output turn's wall time", () => {
-    // `unionSpanTotals` drops this turn entirely (output <= 0), which is why it
-    // cannot seed elapsed; the token-blind union keeps it.
+    // `unionSpanMs` returns the same wall time as `unionSpanTotals` for this
+    // turn, without the token sum `elapsed` has no use for.
     expect(unionSpanMs([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toBe(5_000);
     expect(unionSpanMs([{ key: "a", start: 0, end: 5_000 }])).toBe(5_000);
     expect(unionSpanTotals([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toEqual({
       tokens: 0,
-      unionMs: 0,
+      unionMs: 5_000,
     });
   });
 

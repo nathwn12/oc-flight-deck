@@ -31,11 +31,12 @@ export interface StatSource {
   readonly perms?: unknown;
   /**
    * Session throughput. On a host that stamps its messages this is an
-   * active-work average: output tokens divided by the union of the assistant
-   * turns' own spans, subagents summed in, so idle between turns is not
-   * counted and the figure freezes when work stops. On a host without message
-   * timestamps it falls back to the lifetime average, which can still sag.
-   * Either way it is derived from state the host already holds.
+   * active-work average: output plus reasoning tokens divided by the union of
+   * the assistant turns' provider-active spans (`streamed - created`), with
+   * idle between turns and the tool settlement after one excluded, subagents
+   * summed in, so the figure freezes when work stops. On a host without
+   * message timestamps it falls back to the lifetime average, which can still
+   * sag. Either way it is derived from state the host already holds.
    */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;

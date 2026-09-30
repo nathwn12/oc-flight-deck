@@ -104,13 +104,14 @@
     //              assistant turn spans the host already recorded, so it
     //              survives a restart instead of resetting; work observed live
     //              after that keeps counting in memory
-    //   tps        average speed while working: output tokens divided by the
-    //              time the assistant's turns actually ran, subagents included.
-    //              Idle between turns is never counted, so the figure freezes
-    //              when everything settles rather than decaying or hiding; a
-    //              turn still in flight counts up to now. On a host with no
-    //              per-message timestamps it falls back to the lifetime
-    //              average, which includes idle and can sag
+    //   tps        average speed while streaming: output plus reasoning tokens
+    //              divided by the time the provider was actively streaming
+    //              (streamed minus created), subagents included. Idle between
+    //              turns and the tool settlement after one are never counted,
+    //              so the figure freezes when everything settles rather than
+    //              decaying or hiding; a turn still in flight counts up to now.
+    //              On a host with no per-message timestamps it falls back to
+    //              the lifetime average, which includes idle and can sag
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them
     //   turns      how many prompts you have sent this session

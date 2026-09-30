@@ -357,7 +357,9 @@ export function statLine(
     case "tps": {
       const tps = asCount(source.tps);
       if (tps === undefined || tps === 0) return undefined;
-      return row("tps", `${Math.round(tps)} tok/s`);
+      // One decimal, exactly as the official TUI renders it: rounding to a
+      // whole number would overstate a slow turn by up to half a token/second.
+      return row("tps", `${tps.toFixed(1)} tok/s`);
     }
     case "spark": {
       const values = Array.isArray(source.spark) ? source.spark.map((value) => asCount(value) ?? 0) : [];

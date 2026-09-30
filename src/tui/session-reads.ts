@@ -253,7 +253,9 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
           const created = asCount(stamp?.["created"]);
           const completed = asCount(stamp?.["completed"]);
           const streamed = asCount(stamp?.["streamed"]);
-          const span = turnSpan(created, completed, streamed, now);
+          // `elapsed` ends a settled turn at `completed`: the clock stays busy
+          // through the turn's tool settlement, which `streamed` would drop.
+          const span = turnSpan(created, completed, streamed, now, "completed");
           if (span === undefined) continue;
           const output = asRecord(message["tokens"])?.["output"];
           spans.push({ key: turnKey(message["id"], created, completed, output), ...span });

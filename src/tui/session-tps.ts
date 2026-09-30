@@ -1,9 +1,10 @@
 // Session throughput, measured from the host's own message timestamps and never
 // from a clock this process keeps. A host that stamps its assistant turns gets
-// an active-work average: output tokens divided by the union of the turns' own
-// spans, so idle between turns is not in the denominator and the figure freezes
-// once everything settles. A host proven to expose no message timestamps uses
-// the lifetime average instead.
+// an active-work average: output plus reasoning tokens divided by the union of
+// the turns' own streaming spans (`streamed - created`, fallbacks in
+// ./throughput.js), so idle between turns and the tool settlement after one are
+// not in the denominator and the figure freezes once everything settles. A host
+// proven to expose no message timestamps uses the lifetime average instead.
 //
 // The capability is learned once and remembered for the process. `undefined`
 // means "not yet known": a read that failed, or carried no assistant turns,
@@ -76,10 +77,18 @@ export function createTpsReader(
       if (created === undefined && completed === undefined && streamed === undefined) continue;
       stamped += 1;
       // Without `created` there is no start; the turn is skipped, not guessed.
-      const span = turnSpan(created, completed, streamed, now);
+      // `tps` ends a turn at `streamed`: decoding stopped is the numerator clock.
+      const span = turnSpan(created, completed, streamed, now, "streamed");
       if (span === undefined) continue;
-      const output = asRecord(message["tokens"])?.["output"];
-      spans.push({ key: turnKey(message["id"], created, completed, output), tokens: output, ...span });
+      const tokens = asRecord(message["tokens"]);
+      // The numerator the TUI divides: output plus reasoning. Both are carried
+      // so the union can add them without losing either rung.
+      spans.push({
+        key: turnKey(message["id"], created, completed, tokens?.["output"]),
+        tokens: tokens?.["output"],
+        reasoning: tokens?.["reasoning"],
+        ...span,
+      });
     }
     return { ok: true, assistant, stamped, spans };
   };
@@ -87,7 +96,10 @@ export function createTpsReader(
   // The lifetime average, the metric of last resort for a host that exposes no
   // per-message timestamps. Measured from the session's own clock
   // (`time.updated`, falling back to now) so a finished session settles on a
-  // stable figure instead of decaying as it sits on screen.
+  // stable figure instead of decaying as it sits on screen. The numerator is
+  // the session record's `output` plus its `reasoning`, the same pair the
+  // stamped path divides: `tokens` is a `TokenUsage.Info`, so the reasoning
+  // rung is present and counting output alone would under-report.
   const lifetimeTps = (
     sessionID: string,
     session: SessionLike | undefined,
@@ -99,8 +111,13 @@ export function createTpsReader(
     const elapsed = end - created;
     if (elapsed <= 0) return undefined;
 
-    const own = asCount(asRecord(session?.tokens)?.["output"]);
-    let output = own;
+    const tokensOf = (source: SessionLike | undefined): number | undefined => {
+      const tokens = asRecord(source?.tokens);
+      if (tokens === undefined) return undefined;
+      return (asCount(tokens["output"]) ?? 0) + (asCount(tokens["reasoning"]) ?? 0);
+    };
+
+    let output = tokensOf(session);
     // Only a family root owns the tree beneath it; a child asking `family()`
     // gets its ancestors and siblings too, so it keeps its own figure.
     if (isFamilyRoot(sessionID)) {
@@ -111,9 +128,9 @@ export function createTpsReader(
           let sawOne = false;
           for (const id of ids) {
             const member = context.data.session.get(id) as SessionLike | undefined;
-            const out = asCount(asRecord(member?.tokens)?.["output"]);
-            if (out === undefined) continue;
-            total += out;
+            const memberTokens = tokensOf(member);
+            if (memberTokens === undefined) continue;
+            total += memberTokens;
             sawOne = true;
           }
           if (sawOne) output = total;
@@ -138,9 +155,10 @@ export function createTpsReader(
     // instant and the union cannot be skewed by the scans drifting apart.
     const now = Date.now();
 
-    // Timestamped assistant output this session has produced, plus — only from
-    // a family root — every subagent session's. A child asking `family()` gets
-    // its ancestors and siblings back, so it keeps its own spans.
+    // Timestamped assistant tokens (output + reasoning) this session has
+    // produced, plus — only from a family root — every subagent session's. A
+    // child asking `family()` gets its ancestors and siblings back, so it keeps
+    // its own spans.
     const scans: TpsScan[] = [scanMessages(sessionID, now)];
     if (isFamilyRoot(sessionID)) {
       try {
