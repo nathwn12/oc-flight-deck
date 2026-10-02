@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
-import { clip, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
+import { clip, DEFAULT_PLACEHOLDER, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -717,6 +717,39 @@ describe("elapsed span union (tokens ignored)", () => {
   test("is zero when nothing is usable", () => {
     expect(unionSpanMs([])).toBe(0);
     expect(unionSpanMs([{ key: "a", start: "x", end: 5_000 }])).toBe(0);
+  });
+});
+
+// The `ses` row shows only the first eight characters of the session id: the
+// full id is longer than the rail and would wrap. The full value is what the
+// row's click gesture copies, so shortening the display loses nothing.
+describe("the session-id row", () => {
+  test("draws only the first eight characters of the id", () => {
+    expect(statLine("ses", { sessionId: "ses_abcdef1234567890" })).toBe("ses       ses_abcd");
+  });
+
+  test("never puts the full id in the display string", () => {
+    const id = "ses_abcdef1234567890";
+    const line = statLine("ses", { sessionId: id })!;
+    expect(line).not.toContain(id);
+    expect(line).toContain(id.slice(0, 8));
+  });
+
+  test("omits the row when the id is absent or not a string", () => {
+    expect(statLine("ses", {})).toBeUndefined();
+    expect(statLine("ses", { sessionId: 42 })).toBeUndefined();
+    // Persistence still supplies the placeholder for a known field, and an
+    // unknown name is still skipped when persistent.
+    expect(statRows(["ses"], {}, { persist: true })).toEqual([`ses       ${DEFAULT_PLACEHOLDER}`]);
+    expect(statRows(["ses", "nope"], { sessionId: "ses_abcd" }, { persist: true })).toEqual([
+      "ses       ses_abcd",
+    ]);
+  });
+
+  test("flattens a control character in the id before it is drawn", () => {
+    // The eighth character is a newline: `plain` replaces it, so the row can
+    // never become two lines.
+    expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("ses       ses_ab c");
   });
 });
 

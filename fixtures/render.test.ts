@@ -96,6 +96,12 @@ interface HarnessExtras {
   readonly omitShell?: boolean;
   /** Override the message read entirely, e.g. to fail a specific session. */
   readonly messageList?: (id: string) => readonly unknown[];
+  /**
+   * The host renderer. Only the opt-in `ses` row reads it - its click gesture
+   * copies through the renderer's OSC52 boundary - so tests that exercise that
+   * path inject a recording fake here.
+   */
+  readonly renderer?: unknown;
 }
 
 function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
@@ -105,6 +111,7 @@ function harness(options: unknown, directory: string, session: unknown = undefin
   const context = {
     options,
     location: { directory },
+    renderer: extras.renderer,
     theme: { text: { default: "#ffffff", subdued: "#888888" } },
     data: {
       location: {
@@ -977,6 +984,78 @@ test("a subagent session keeps its own spans, not its family's", async () => {
   // family in would read (120 + 6,000 + 6,000) / 1 s = 12,120.0 tok/s.
   expect(frame).toContain("tps       120.0 tok/s");
   expect(frame).not.toContain("12120.0 tok/s");
+});
+
+// The `ses` row is opt-in and shortened on the rail, but its click gesture must
+// carry the FULL id. These pin the display truncation, the gesture-only copy,
+// and the graceful no-op when the host cannot take the write.
+
+test("draws no ses row unless it is opted in", async () => {
+  const { context, claims } = harness(undefined, workspace(), LIVE_SESSION);
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 20);
+  // The default rail never names a session, so no `ses_` text appears.
+  expect(frame).not.toContain("ses_");
+});
+
+test("renders the opt-in ses row as the first eight characters of the id", async () => {
+  const { context, claims } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION);
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 4, "ses_abcdef1234567890");
+  expect(frame).toContain("ses       ses_abcd");
+  // The full id is never part of what is drawn.
+  expect(frame).not.toContain("ses_abcdef1234567890");
+});
+
+test("copies the full session id on a click, and never on render alone", async () => {
+  const writes: string[] = [];
+  const renderer = {
+    capabilities: { osc52_support: "supported", remote: false },
+    copyToClipboardOSC52: (text: string) => {
+      writes.push(text);
+      return true;
+    },
+  };
+  const { context, claims } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION, { renderer });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+
+  const setup = await testRender(
+    () => sidebar!.render({ sessionID: "ses_abcdef1234567890" }) as never,
+    { width: 40, height: 4 },
+  );
+  try {
+    await setup.renderOnce();
+    // Painting the row is not a gesture: nothing is copied.
+    expect(writes).toEqual([]);
+    // The `ses` row is the only line, at the top-left of the rail.
+    await setup.mockMouse.click(2, 0);
+    expect(writes).toEqual(["ses_abcdef1234567890"]);
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("a click on the ses row stays quiet when the renderer cannot copy", async () => {
+  // The harness supplies no renderer, so the OSC52 boundary is unreachable: the
+  // click must not throw and the rail must keep rendering.
+  const { context, claims } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION);
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+
+  const setup = await testRender(
+    () => sidebar!.render({ sessionID: "ses_abcdef1234567890" }) as never,
+    { width: 40, height: 4 },
+  );
+  try {
+    await setup.renderOnce();
+    await setup.mockMouse.click(2, 0);
+    expect(setup.captureCharFrame()).toContain("ses       ses_abcd");
+  } finally {
+    setup.renderer.destroy();
+  }
 });
 
 

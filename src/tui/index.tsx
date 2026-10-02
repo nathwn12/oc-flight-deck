@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
 import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
+import { copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
@@ -70,14 +71,14 @@ export default Plugin.define({
     // instead of assigning `undefined` over it, so the shipped config draws
     // exactly what it always drew. Shared with the sidebar footer slot so both
     // rails stay one styling path.
-    const themedLine = (line: RailLine) => {
+    const themedLine = (line: RailLine, copyId?: string) => {
       const style = railLineStyle(config.style, line);
       const lineFg = themeColor(style.color, context.theme) as string | undefined;
       // The span mapping — which run inherits the line's colour and which
       // takes its own tone — lives in a pure helper, so the "only the flagged
       // window is red" decision is tested directly. All this renderer does is
       // resolve each role to a theme colour and pass `fg`, never ANSI.
-      return (
+      const text = (
         <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
           {railLineSpans(line, style).map((span) => (
             <span style={{ fg: themeColor(span.color, context.theme) as string | undefined }}>
@@ -86,6 +87,13 @@ export default Plugin.define({
           ))}
         </text>
       );
+      // The `ses` row is the one live row with a second gesture: a click copies
+      // the full session id. The handler wraps the line in a box so it fires
+      // wherever the row is clicked (mouse events bubble up, never down), and
+      // it closes over the id from THIS render — see `snapshot` for why the id
+      // is never cached.
+      if (copyId === undefined) return text;
+      return <box onMouseUp={() => copyToClipboard(context.renderer, copyId)}>{text}</box>;
     };
 
     // Bound a bankable window to a few ticks: `min(60s, max(5s, 4 * refreshMs))`,
@@ -222,6 +230,10 @@ export default Plugin.define({
         // Read the go store inside the render too, so a poll re-runs the rail
         // exactly as the guard read does.
         go: goBridge?.usage,
+        // The id comes from the slot render props, read fresh on every render
+        // rather than cached: the sidebar is not remounted on a session switch,
+        // so a signal or module variable here would copy a stale session.
+        sessionId: wants("ses") ? sessionID : undefined,
         // Read the tick inside the render so the host registers a dependency on
         // it; that read is what makes the rail re-run on the ticker's schedule.
         frame: ticker?.frame ?? 0,
@@ -287,7 +299,7 @@ export default Plugin.define({
               // No padding here: the host already lays out and pads the sidebar,
               // so adding our own would push the rows out of alignment with it.
               <box flexDirection="column">
-                {lines.map(themedLine)}
+                {lines.map((line) => themedLine(line, line.field === "ses" ? sessionID : undefined))}
               </box>
             );
           },
