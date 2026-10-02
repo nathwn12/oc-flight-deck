@@ -35,3 +35,29 @@ export function copyToClipboard(renderer: unknown, text: string): boolean {
     return false;
   }
 }
+
+/**
+ * The confirmation for a copy gesture, as a host-toast description.
+ *
+ * Split from {@link copyToClipboard} so the success and failure wordings are
+ * pure and tested directly: a click must always report what actually happened,
+ * and the two outcomes must never read alike. `ok` mirrors the attempted write.
+ * The success text names the full `id` and says the copy was *sent* - an
+ * `attempted` status only confirms the local dispatch to the terminal, not that
+ * the terminal then copied - so a message never claims a write that was not
+ * guaranteed. The failure text names the terminal's inability and carries no id
+ * at all, because nothing was copied, so a silent no-op can never masquerade as
+ * a success.
+ */
+export function copyFeedback(
+  attempted: boolean,
+  id: string,
+): {
+  readonly ok: boolean;
+  readonly variant: "success" | "error";
+  readonly message: string;
+} {
+  return attempted
+    ? { ok: true, variant: "success", message: `Sent the full session id ${id} to the clipboard.` }
+    : { ok: false, variant: "error", message: "This terminal cannot copy to the clipboard." };
+}

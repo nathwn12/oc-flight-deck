@@ -64,7 +64,7 @@ The panel's only fixed text — `▸ FLIGHT DECK` over a separator — is **opt-
 | `turns` | How many prompts you've sent this session · **off by default** |
 | `guard` | Harness status from oc-harness-guard · **off by default** |
 | `go` | Zen Go account usage — a dial and a whole-number percent for the **5h**, **1w**, and **1m** windows, in that fixed order; a window at 90% or more turns its dial and number red, and the reset hint appears only then · **off by default** |
-| `ses` | The open session id, shortened to its first **8 characters**; **click the row** to copy the full id to the terminal clipboard · **off by default** (requires the host's mouse) |
+| `ses` | The open session id, which the rail wraps; **click the row** to copy the full id to the terminal clipboard · **off by default** (requires the host's mouse) |
 
 `project` matches on the host's **project id**, not on a directory, so a worktree counts as part of the same project. A host that reports no project id leaves nothing to match on, and the row then totals every session that host knows about.
 

@@ -24,8 +24,8 @@ export interface StatSource {
   readonly branch?: unknown;
   /**
    * The open session id, straight from the slot render props. Untrusted like
-   * every other field: the `ses` row draws only the first eight characters,
-   * while the full value is what that row's copy gesture writes.
+   * every other field: the `ses` row draws the FULL id (the rail wraps it), and
+   * that same full value is what the row's copy gesture writes.
    */
   readonly sessionId?: unknown;
   readonly tree?: unknown;
