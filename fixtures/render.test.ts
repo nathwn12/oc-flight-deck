@@ -1,11 +1,33 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import flightDeck from "../src/tui/index.js";
 import { copyFeedback } from "../src/tui/clipboard.js";
 import { sparkline } from "../src/tui/stats.js";
+
+// The render tests mount the real JSX, so the copy path reaches the real host
+// clipboard unless it is stood in for. This seam replaces ONLY the host
+// clipboard module (never all of `@opentui/core`, which the headless renderer
+// itself needs) with a controllable fake. Each click test sets the behaviour it
+// needs; the default keeps the fake harmless.
+type HostWrite = (text: string) => Promise<{ status: string }>;
+let hostWrite: HostWrite = async () => ({ status: "written" });
+
+mock.module("../src/tui/host-clipboard.js", () => ({
+  createHostClipboard: () => ({ writeText: (text: string) => hostWrite(text) }),
+}));
+
+/** Set the fake host write for one test, recording what it is asked to copy. */
+function hostReturns(status: string): string[] {
+  const writes: string[] = [];
+  hostWrite = async (text: string) => {
+    writes.push(text);
+    return { status };
+  };
+  return writes;
+}
 
 // These tests mount the exact JSX the plugin hands to the host, in a real
 // headless OpenTUI renderer, and read the resulting character frame. That is
@@ -54,6 +76,8 @@ beforeEach(() => {
   savedXdg = process.env.XDG_CONFIG_HOME;
   xdgDirectory = workspace();
   process.env.XDG_CONFIG_HOME = xdgDirectory;
+  // Default the fake host to a verified write; a test that cares overrides it.
+  hostWrite = async () => ({ status: "written" });
 });
 
 afterEach(() => {
@@ -1027,12 +1051,15 @@ test("wraps the full ses id at a narrow width without dropping characters", asyn
   expect(frame.replace(/\s/g, "")).toContain(id);
 });
 
-test("copies the full session id on a click, confirms it, and never on render alone", async () => {
-  const writes: string[] = [];
+test("copies the full session id on a click through the verified host write, and never on render alone", async () => {
+  // The host backend is stood in for; the OSC52 renderer is present too, so if
+  // the host write is what carries the copy, the OSC52 path must stay untouched.
+  const writes = hostReturns("written");
+  const osc52: string[] = [];
   const renderer = {
     capabilities: { osc52_support: "supported", remote: false },
     copyToClipboardOSC52: (text: string) => {
-      writes.push(text);
+      osc52.push(text);
       return true;
     },
   };
@@ -1051,19 +1078,54 @@ test("copies the full session id on a click, confirms it, and never on render al
     expect(toasts).toEqual([]);
     // The `ses` row is the only line, at the top-left of the rail.
     await setup.mockMouse.click(2, 0);
+    // The handler awaits the host write before it toasts.
+    await Bun.sleep(1);
     expect(writes).toEqual(["ses_abcdef1234567890"]);
-    // The success confirmation is recorded: the click proves it happened.
+    // The verified path carried it: the OSC52 fallback was never reached.
+    expect(osc52).toEqual([]);
+    // The success confirmation is recorded: the verified write proves it happened.
     expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toBe(copyFeedback(true, "ses_abcdef1234567890").message);
+    expect(toasts[0]).toBe(copyFeedback({ verified: true, outcome: "written" }, "ses_abcdef1234567890").message);
   } finally {
     setup.renderer.destroy();
   }
 });
 
-test("a click on the ses row reports the failure and never the success when the renderer cannot copy", async () => {
-  // The harness supplies no renderer, so the OSC52 boundary is unreachable: the
-  // click must not throw, the rail must keep rendering, and the confirmation
-  // must state the failure rather than implying a copy that did not happen.
+test("an OSC52-only dispatch on a click reports a non-success, never a verified copy", async () => {
+  // The host backend fails and the renderer can only dispatch OSC52: the copy
+  // may never have landed in the terminal, so the toast must not claim it did.
+  hostReturns("unsupported");
+  const { context, claims, toasts } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION, {
+    renderer: {
+      capabilities: { osc52_support: "supported", remote: false },
+      copyToClipboardOSC52: () => true,
+    },
+  });
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+
+  const setup = await testRender(
+    () => sidebar!.render({ sessionID: "ses_abcdef1234567890" }) as never,
+    { width: 40, height: 4 },
+  );
+  try {
+    await setup.renderOnce();
+    await setup.mockMouse.click(2, 0);
+    await Bun.sleep(1);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toBe(copyFeedback({ verified: false, outcome: "osc52-dispatched" }, "ses_abcdef1234567890").message);
+    expect(toasts[0]).not.toContain("ses_abcdef1234567890");
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("a click on the ses row reports failure and never the success when no backend can copy", async () => {
+  // The host write is unsupported and the harness supplies no renderer, so no
+  // transport is reachable: the click must not throw, the rail must keep
+  // rendering, and the confirmation must state the failure rather than
+  // implying a copy that did not happen.
+  hostReturns("unsupported");
   const { context, claims, toasts } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION);
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
@@ -1075,13 +1137,15 @@ test("a click on the ses row reports the failure and never the success when the 
   try {
     await setup.renderOnce();
     await setup.mockMouse.click(2, 0);
+    await Bun.sleep(1);
     expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toBe(copyFeedback(false, "ses_abcdef1234567890").message);
-    expect(toasts[0]).not.toBe(copyFeedback(true, "ses_abcdef1234567890").message);
+    expect(toasts[0]).toBe(copyFeedback({ verified: false, outcome: "unsupported" }, "ses_abcdef1234567890").message);
+    expect(toasts[0]).not.toBe(copyFeedback({ verified: true, outcome: "written" }, "ses_abcdef1234567890").message);
     expect(setup.captureCharFrame()).toContain("ses       ses_abcdef1234567890");
   } finally {
     setup.renderer.destroy();
   }
 });
+
 
 
