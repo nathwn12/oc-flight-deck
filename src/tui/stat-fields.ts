@@ -22,6 +22,12 @@ export interface StatSource {
   readonly cost?: unknown;
   readonly tokens?: unknown;
   readonly branch?: unknown;
+  /**
+   * The open session id, straight from the slot render props. Untrusted like
+   * every other field: the `ses` row draws only the first eight characters,
+   * while the full value is what that row's copy gesture writes.
+   */
+  readonly sessionId?: unknown;
   readonly tree?: unknown;
   readonly context?: unknown;
   readonly project?: unknown;
@@ -76,6 +82,7 @@ export const STAT_FIELDS = [
   "turns",
   "guard",
   "go",
+  "ses",
 ] as const;
 
 type StatField = (typeof STAT_FIELDS)[number];

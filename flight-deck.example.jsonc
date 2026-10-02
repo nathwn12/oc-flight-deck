@@ -120,6 +120,9 @@
     //   go         Zen Go account usage for the 5h / 1w / 1m windows: a dial and
     //              a percent each, turning red as a window approaches its limit.
     //              Reads OPENCODE_GO_API_KEY. Available, off by default.
+    //   ses        the open session id, shortened to its first 8 characters.
+    //              A mouse click on the row copies the full id to the terminal
+    //              clipboard. Off by default; needs the host's mouse enabled.
     //
     // Every named row renders persistently, so the rail keeps a stable shape:
     // a row with no data yet shows the placeholder below, in the same label
@@ -140,6 +143,7 @@
       // ,"go"        — Zen Go account usage (needs OPENCODE_GO_API_KEY)
       // ,"caution"   — the annunciator
       // ,"branch"    — current git branch
+      // ,"ses"       — current session id (first 8 chars); click to copy the full id
     ],
 
     // Every named row renders persistently: with no data yet it shows the

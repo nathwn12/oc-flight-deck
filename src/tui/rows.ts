@@ -383,6 +383,13 @@ export function statLine(
       const token = guardToken(source.guard);
       return token === undefined ? undefined : row("guard", token);
     }
+    case "ses": {
+      const id = asText(source.sessionId);
+      // Only the first eight characters are drawn: a session id is longer than
+      // the rail and would wrap. The full id stays in the source so the row's
+      // copy gesture can write it.
+      return id === undefined ? undefined : row("ses", id.slice(0, 8));
+    }
     case "go": {
       // The plain string is the exact join of the coloured segments, so the
       // string view (tests, `sidebarTextLines`) and the JSX view agree
