@@ -385,10 +385,9 @@ export function statLine(
     }
     case "ses": {
       const id = asText(source.sessionId);
-      // Only the first eight characters are drawn: a session id is longer than
-      // the rail and would wrap. The full id stays in the source so the row's
-      // copy gesture can write it.
-      return id === undefined ? undefined : row("ses", id.slice(0, 8));
+      // The full id is drawn: it is the only usable form of the value, and the
+      // rail wraps it on character boundaries rather than clipping it.
+      return id === undefined ? undefined : row("ses", id);
     }
     case "go": {
       // The plain string is the exact join of the coloured segments, so the

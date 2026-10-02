@@ -720,19 +720,21 @@ describe("elapsed span union (tokens ignored)", () => {
   });
 });
 
-// The `ses` row shows only the first eight characters of the session id: the
-// full id is longer than the rail and would wrap. The full value is what the
-// row's click gesture copies, so shortening the display loses nothing.
+// The `ses` row draws the FULL session id. A truncated display cannot be told
+// apart from another session sharing its prefix, so the rail wraps the id
+// instead of shortening it, and the row's click gesture copies exactly what is
+// drawn.
 describe("the session-id row", () => {
-  test("draws only the first eight characters of the id", () => {
-    expect(statLine("ses", { sessionId: "ses_abcdef1234567890" })).toBe("ses       ses_abcd");
+  test("draws the full session id", () => {
+    expect(statLine("ses", { sessionId: "ses_abcdef1234567890" })).toBe("ses       ses_abcdef1234567890");
   });
 
-  test("never puts the full id in the display string", () => {
+  test("puts the whole id in the display string, not just a prefix", () => {
     const id = "ses_abcdef1234567890";
     const line = statLine("ses", { sessionId: id })!;
-    expect(line).not.toContain(id);
-    expect(line).toContain(id.slice(0, 8));
+    expect(line).toContain(id);
+    // The old eight-character truncation must not come back.
+    expect(line).not.toBe(`ses       ${id.slice(0, 8)}`);
   });
 
   test("omits the row when the id is absent or not a string", () => {
@@ -747,9 +749,9 @@ describe("the session-id row", () => {
   });
 
   test("flattens a control character in the id before it is drawn", () => {
-    // The eighth character is a newline: `plain` replaces it, so the row can
-    // never become two lines.
-    expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("ses       ses_ab c");
+    // A newline in the middle of the id: `plain` replaces it, so the row can
+    // never become two lines - the whole id still reaches the rail.
+    expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("ses       ses_ab cd1234");
   });
 });
 

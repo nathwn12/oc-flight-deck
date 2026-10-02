@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyToClipboard } from "../src/tui/clipboard.js";
+import { copyFeedback, copyToClipboard } from "../src/tui/clipboard.js";
 
 // The plugin Context exposes no clipboard member, so the copy path is a
 // hand-rolled OSC52 write through the renderer OpenTUI already hands the
@@ -50,5 +50,32 @@ describe("the session-id copy path", () => {
     expect(copyToClipboard(undefined, "ses_x")).toBe(false);
     expect(copyToClipboard({}, "ses_x")).toBe(false);
     expect(copyToClipboard({ capabilities: { osc52_support: "unknown" } }, "ses_x")).toBe(false);
+  });
+});
+
+// The click's confirmation is derived from the attempt, never assumed. These
+// pin that a copy which happened is reported as one - naming the full id - and
+// that a copy which did not happen is not: the two outcomes must differ, so a
+// silent no-op cannot read as success.
+describe("the copy confirmation", () => {
+  const id = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
+
+  test("reports an attempted write as a success naming the full id", () => {
+    const fb = copyFeedback(true, id);
+    expect(fb.ok).toBe(true);
+    expect(fb.variant).toBe("success");
+    expect(fb.message).toContain(id);
+  });
+
+  test("reports a failed write as an error, with a message unlike the success one", () => {
+    const success = copyFeedback(true, id);
+    const failed = copyFeedback(false, id);
+    expect(failed.ok).toBe(false);
+    expect(failed.variant).toBe("error");
+    // A failure must never carry the success wording: the user has to be able
+    // to tell that nothing was copied.
+    expect(failed.message).not.toBe(success.message);
+    // Nothing was copied, so the failure must not name the id as if it had been.
+    expect(failed.message).not.toContain(id);
   });
 });

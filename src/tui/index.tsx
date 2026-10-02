@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
 import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
-import { copyToClipboard } from "./clipboard.js";
+import { copyFeedback, copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
@@ -79,7 +79,17 @@ export default Plugin.define({
       // window is red" decision is tested directly. All this renderer does is
       // resolve each role to a theme colour and pass `fg`, never ANSI.
       const text = (
-        <text fg={lineFg} attributes={attributeMask(style.attributes) ?? 0}>
+        <text
+          fg={lineFg}
+          attributes={attributeMask(style.attributes) ?? 0}
+          // Only the `ses` row breaks on character boundaries. Its value is one
+          // unbroken 30-character id with no word boundary; pinning `char`
+          // guarantees that token breaks deterministically at a character
+          // boundary, rather than depending on how the renderer's word-break
+          // handles a token it cannot break. Every other line keeps the
+          // renderer's own `word` default.
+          wrapMode={line.field === "ses" ? "char" : undefined}
+        >
           {railLineSpans(line, style).map((span) => (
             <span style={{ fg: themeColor(span.color, context.theme) as string | undefined }}>
               {span.text}
@@ -90,10 +100,34 @@ export default Plugin.define({
       // The `ses` row is the one live row with a second gesture: a click copies
       // the full session id. The handler wraps the line in a box so it fires
       // wherever the row is clicked (mouse events bubble up, never down), and
-      // it closes over the id from THIS render — see `snapshot` for why the id
-      // is never cached.
+      // it closes over the id from THIS render - see `snapshot` for why the id
+      // is never cached. The confirmation is a host toast, not an on-row glyph:
+      // a signal from this plugin's own Solid is invisible to the host's
+      // renderer (`./ticker.ts`), so the one host-reactive surface is used
+      // instead. The toast is wrapped so a failure in it can never throw out of
+      // the mouse handler.
       if (copyId === undefined) return text;
-      return <box onMouseUp={() => copyToClipboard(context.renderer, copyId)}>{text}</box>;
+      return (
+        <box
+          onMouseUp={() => {
+            const attempted = copyToClipboard(context.renderer, copyId);
+            const fb = copyFeedback(attempted, copyId);
+            try {
+              context.ui.toast.show({
+                title: "Flight Deck",
+                message: fb.message,
+                variant: fb.variant,
+                duration: 1500,
+              });
+            } catch {
+              // A confirmation must never be able to break the click that
+              // produced it, nor the panel it confirms.
+            }
+          }}
+        >
+          {text}
+        </box>
+      );
     };
 
     // Bound a bankable window to a few ticks: `min(60s, max(5s, 4 * refreshMs))`,
