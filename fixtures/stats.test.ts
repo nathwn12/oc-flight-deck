@@ -720,21 +720,36 @@ describe("elapsed span union (tokens ignored)", () => {
   });
 });
 
-// The `ses` row draws the FULL session id. A truncated display cannot be told
-// apart from another session sharing its prefix, so the rail wraps the id
-// instead of shortening it, and the row's click gesture copies exactly what is
-// drawn.
+// The `ses` row draws a SHORT PRUNED PREVIEW of the session id - `clip` to 18
+// cells, matching the `perms` row's column budget - because a full 30-character
+// id runs past the roughly thirty-odd-column rail. The ellipsis `clip` appends
+// is what tells the reader this is a preview of a longer value. The full id
+// stays on the source and is what the row's click gesture copies, so the
+// display and the copy are deliberately different strings.
 describe("the session-id row", () => {
-  test("draws the full session id", () => {
-    expect(statLine("ses", { sessionId: "ses_abcdef1234567890" })).toBe("ses       ses_abcdef1234567890");
+  const FULL_ID = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
+
+  test("prunes a long id to a preview that fits the value column", () => {
+    // A real 30-character id: `clip(id, 18)` keeps 17 characters plus its
+    // ellipsis, so the value is 18 cells and the row cannot bleed.
+    expect(statLine("ses", { sessionId: FULL_ID })).toBe(`ses       ${FULL_ID.slice(0, 17)}…`);
   });
 
-  test("puts the whole id in the display string, not just a prefix", () => {
-    const id = "ses_abcdef1234567890";
-    const line = statLine("ses", { sessionId: id })!;
-    expect(line).toContain(id);
-    // The old eight-character truncation must not come back.
-    expect(line).not.toBe(`ses       ${id.slice(0, 8)}`);
+  test("the rendered row stays inside the label column plus an 18-cell value", () => {
+    const line = statLine("ses", { sessionId: FULL_ID })!;
+    // Label column (10) plus its guaranteed separator (1) plus the value budget
+    // (18) is what the rail was designed to fit; the row must not exceed it.
+    expect(line.length).toBeLessThanOrEqual(10 + 1 + 18);
+    // The full id must never appear in the display.
+    expect(line).not.toContain(FULL_ID);
+    // And it still reads as a preview, not a silently truncated value.
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  test("a short id is drawn whole, since it already fits", () => {
+    // `clip` is width-aware, not a fixed slice: an id within the budget is
+    // unchanged and gains no ellipsis.
+    expect(statLine("ses", { sessionId: "ses_abcd" })).toBe("ses       ses_abcd");
   });
 
   test("omits the row when the id is absent or not a string", () => {
@@ -750,7 +765,7 @@ describe("the session-id row", () => {
 
   test("flattens a control character in the id before it is drawn", () => {
     // A newline in the middle of the id: `plain` replaces it, so the row can
-    // never become two lines - the whole id still reaches the rail.
+    // never become two lines.
     expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("ses       ses_ab cd1234");
   });
 });

@@ -1011,10 +1011,11 @@ test("a subagent session keeps its own spans, not its family's", async () => {
   expect(frame).not.toContain("12120.0 tok/s");
 });
 
-// The `ses` row is opt-in and draws the FULL id (the rail wraps it on character
-// boundaries rather than clipping it), and its click gesture must carry the FULL
-// id. These pin the full-id display, the gesture-only copy with its host toast,
-// and the graceful, distinctly-reported no-op when the host cannot take the write.
+// The `ses` row is opt-in and draws a SHORT PRUNED PREVIEW of the id (clipped
+// width-aware to the value column, with an ellipsis), while its click gesture
+// must carry the FULL id. These pin the pruned display, the gesture-only copy
+// against the full id, the silent verified success, and the honest, distinctly
+// reported toast when the copy genuinely fails.
 
 test("draws no ses row unless it is opted in", async () => {
   const { context, claims } = harness(undefined, workspace(), LIVE_SESSION);
@@ -1025,33 +1026,34 @@ test("draws no ses row unless it is opted in", async () => {
   expect(frame).not.toContain("ses_");
 });
 
-test("renders the opt-in ses row as the full session id", async () => {
+test("renders the opt-in ses row as a pruned preview, never the full id", async () => {
   const id = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
   const { context, claims } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION);
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // Width 60 gives the label column plus all 30 characters on one line.
   const frame = await frameOf(sidebar!.render, 60, 4, id);
-  expect(frame).toContain(`ses       ${id}`);
-  // No line is the old 8-character truncation: the full id is drawn, not a
-  // short prefix of it. (A full id necessarily contains its own first 8
-  // characters, so the check is on the line, not on substring presence.)
-  expect(frame.split("\n").some((line) => line.trimEnd().endsWith(id.slice(0, 8)))).toBe(false);
+  // The preview is drawn, inside the label column plus an 18-cell value.
+  expect(frame).toContain("ses       ses_f07dc9b3bffeV…");
+  // The full 30-character id is never drawn: that is the bleed this fixes.
+  expect(frame).not.toContain(id);
 });
 
-test("wraps the full ses id at a narrow width without dropping characters", async () => {
+test("never lets the ses row exceed the value column, even at a narrow width", async () => {
   const id = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
   const { context, claims } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION);
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // Width 20 is too narrow for the label plus the 30-character id on one line.
+  // A width well under the 30-character id: the value was clipped before the
+  // renderer ever saw it, so the full id never reaches the frame even though
+  // the narrow width wraps the preview row into two lines.
   const frame = await frameOf(sidebar!.render, 20, 6, id);
-  // Stripping whitespace removes the wrap boundary and any indent padding: if
-  // any character were clipped at the wrap, the full id would no longer appear.
-  expect(frame.replace(/\s/g, "")).toContain(id);
+  // The full id must not be drawn, wrapped or otherwise. The designed column
+  // budget (10 label + 1 separator + 18 value) is asserted against the unwrapped
+  // line in fixtures/stats.test.ts.
+  expect(frame.replace(/\s/g, "")).not.toContain(id);
 });
 
-test("copies the full session id on a click through the verified host write, and never on render alone", async () => {
+test("copies the full session id on a click while the row shows the pruned preview, with no success toast", async () => {
   // The host backend is stood in for; the OSC52 renderer is present too, so if
   // the host write is what carries the copy, the OSC52 path must stay untouched.
   const writes = hostReturns("written");
@@ -1063,29 +1065,36 @@ test("copies the full session id on a click through the verified host write, and
       return true;
     },
   };
+  const fullId = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
   const { context, claims, toasts } = harness({ sidebar: { rows: ["ses"] } }, workspace(), LIVE_SESSION, { renderer });
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
 
   const setup = await testRender(
-    () => sidebar!.render({ sessionID: "ses_abcdef1234567890" }) as never,
+    () => sidebar!.render({ sessionID: fullId }) as never,
     { width: 40, height: 4 },
   );
   try {
     await setup.renderOnce();
+    // The display shows the preview, not the full id.
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain(fullId);
+    expect(frame).toContain("ses_f07dc9b3bffeV…");
     // Painting the row is not a gesture: nothing is copied, nothing is toasted.
     expect(writes).toEqual([]);
     expect(toasts).toEqual([]);
     // The `ses` row is the only line, at the top-left of the rail.
     await setup.mockMouse.click(2, 0);
-    // The handler awaits the host write before it toasts.
+    // The handler awaits the host write before it decides on a toast.
     await Bun.sleep(1);
-    expect(writes).toEqual(["ses_abcdef1234567890"]);
+    // The FULL id was copied, not the preview: pruning never leaked this way.
+    expect(writes).toEqual([fullId]);
+    expect(writes[0]).not.toBe("ses_f07dc9b3bffeV…");
     // The verified path carried it: the OSC52 fallback was never reached.
     expect(osc52).toEqual([]);
-    // The success confirmation is recorded: the verified write proves it happened.
-    expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toBe(copyFeedback({ verified: true, outcome: "written" }, "ses_abcdef1234567890").message);
+    // A verified success is silent: the noise on a copy that worked is the
+    // whole objection this change answers.
+    expect(toasts).toEqual([]);
   } finally {
     setup.renderer.destroy();
   }
@@ -1112,6 +1121,7 @@ test("an OSC52-only dispatch on a click reports a non-success, never a verified 
     await setup.renderOnce();
     await setup.mockMouse.click(2, 0);
     await Bun.sleep(1);
+    // A failure still speaks: the silent-success change must not silence this.
     expect(toasts).toHaveLength(1);
     expect(toasts[0]).toBe(copyFeedback({ verified: false, outcome: "osc52-dispatched" }, "ses_abcdef1234567890").message);
     expect(toasts[0]).not.toContain("ses_abcdef1234567890");
@@ -1138,10 +1148,14 @@ test("a click on the ses row reports failure and never the success when no backe
     await setup.renderOnce();
     await setup.mockMouse.click(2, 0);
     await Bun.sleep(1);
+    // The failure is reported, and it is not the success wording.
     expect(toasts).toHaveLength(1);
     expect(toasts[0]).toBe(copyFeedback({ verified: false, outcome: "unsupported" }, "ses_abcdef1234567890").message);
     expect(toasts[0]).not.toBe(copyFeedback({ verified: true, outcome: "written" }, "ses_abcdef1234567890").message);
-    expect(setup.captureCharFrame()).toContain("ses       ses_abcdef1234567890");
+    // The rail kept rendering, and it shows the pruned preview, not the full id.
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("ses       ses_abcdef1234567…");
+    expect(frame).not.toContain("ses_abcdef1234567890");
   } finally {
     setup.renderer.destroy();
   }
