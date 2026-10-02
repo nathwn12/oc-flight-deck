@@ -110,19 +110,24 @@ export default Plugin.define({
       return (
         <box
           onMouseUp={() => {
-            const attempted = copyToClipboard(context.renderer, copyId);
-            const fb = copyFeedback(attempted, copyId);
-            try {
-              context.ui.toast.show({
-                title: "Flight Deck",
-                message: fb.message,
-                variant: fb.variant,
-                duration: 1500,
-              });
-            } catch {
-              // A confirmation must never be able to break the click that
-              // produced it, nor the panel it confirms.
-            }
+            void (async () => {
+              // Everything, the copy included, sits inside the try: a backend
+              // that throws or rejects must degrade to a failure result, never
+              // an exception out of the mouse handler.
+              try {
+                const result = await copyToClipboard(context.renderer, copyId);
+                const fb = copyFeedback(result, copyId);
+                context.ui.toast.show({
+                  title: "Flight Deck",
+                  message: fb.message,
+                  variant: fb.variant,
+                  duration: 1500,
+                });
+              } catch {
+                // A confirmation must never be able to break the click that
+                // produced it, nor the panel it confirms.
+              }
+            })();
           }}
         >
           {text}
