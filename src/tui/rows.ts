@@ -24,6 +24,17 @@ import {
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /**
+ * Value-column budget for the `ses` row's preview, in cells.
+ *
+ * Same width the `perms` row clips its resource to, because that is the column
+ * this roughly thirty-odd-column rail was designed to fit: the label column
+ * plus a value of this length stays inside the panel. A full 30-character
+ * session id is always shortened at this budget and gets the ellipsis appended
+ * - the row reads as a preview of a longer value, never as the value.
+ */
+const SES_PREVIEW_WIDTH = 18;
+
+/**
  * Flatten control characters in anything about to be drawn.
  *
  * A rail is one line per row, so a newline or an escape sequence in a
@@ -385,9 +396,17 @@ export function statLine(
     }
     case "ses": {
       const id = asText(source.sessionId);
-      // The full id is drawn: it is the only usable form of the value, and the
-      // rail wraps it on character boundaries rather than clipping it.
-      return id === undefined ? undefined : row("ses", id);
+      // A short preview, never the full id: the rail is roughly thirty-odd
+      // columns wide and the label already costs its column, so the 30-character
+      // id runs past the panel. `clip` shortens width-aware and appends the
+      // ellipsis that tells the reader this is a preview, not the value. The
+      // full id still lives on `source.sessionId`, which is what the row's click
+      // gesture copies - the display and the copy are separate values.
+      //
+      // Budget `SES_PREVIEW_WIDTH` (18), matching the `perms` row's clip width:
+      // that is the column this rail was designed to fit, so a preview of that
+      // length sits inside it beside the label.
+      return id === undefined ? undefined : row("ses", clip(id, SES_PREVIEW_WIDTH));
     }
     case "go": {
       // The plain string is the exact join of the coloured segments, so the

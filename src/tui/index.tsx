@@ -101,10 +101,11 @@ export default Plugin.define({
       // the full session id. The handler wraps the line in a box so it fires
       // wherever the row is clicked (mouse events bubble up, never down), and
       // it closes over the id from THIS render - see `snapshot` for why the id
-      // is never cached. The confirmation is a host toast, not an on-row glyph:
-      // a signal from this plugin's own Solid is invisible to the host's
-      // renderer (`./ticker.ts`), so the one host-reactive surface is used
-      // instead. The toast is wrapped so a failure in it can never throw out of
+      // is never cached. A verified copy is silent: the owner objects to the
+      // noise of a toast confirming a gesture that plainly worked, so the only
+      // host-reactive surface (`./ticker.ts`) is reserved for a genuine failure,
+      // where the honesty rail requires that a no-op can never pass as a
+      // success. The call is wrapped so a failure in it can never throw out of
       // the mouse handler.
       if (copyId === undefined) return text;
       return (
@@ -117,6 +118,7 @@ export default Plugin.define({
               try {
                 const result = await copyToClipboard(context.renderer, copyId);
                 const fb = copyFeedback(result, copyId);
+                if (fb.ok) return;
                 context.ui.toast.show({
                   title: "Flight Deck",
                   message: fb.message,
