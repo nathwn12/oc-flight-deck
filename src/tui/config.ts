@@ -159,11 +159,13 @@ interface LayoutConfig {
 }
 
 /**
- * The annunciator's glyphs.
+ * The annunciator's glyphs: one mark per severity.
  *
- * Configurable because this is the one row that has to read at a glance, and
- * some terminals render `⚠` as a box or the wrong width. Swapping it for `!` is
- * a worse-looking but working panel, which beats an unreadable one.
+ * All three are single-cell marks — `▲` watch, `●` caution, `○` clear — so the
+ * annunciator row lines up with every other row on the rail regardless of how
+ * the terminal classifies their East Asian width. Configurable because this is
+ * the one row that has to read at a glance, and a terminal that draws one of
+ * these badly can be given a substitute without a rebuild.
  */
 interface GlyphConfig {
   readonly watch: string;
@@ -196,7 +198,7 @@ const DEFAULT_FORMAT: FormatConfig = { duration: "spaced" };
 
 const DEFAULT_GLYPHS: GlyphConfig = {
   watch: "▲",
-  caution: "⚠",
+  caution: "●",
   clear: "○",
 };
 

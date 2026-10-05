@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import stringWidth from "string-width";
+import { CAUTION_GLYPH, WATCH_GLYPH, cautionMark } from "../src/tui/caution.js";
 import { DEFAULT_CONFIG } from "../src/tui/config.js";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
-import { sidebarLines } from "../src/tui/presentation.js";
+import { railLines, sidebarLines } from "../src/tui/presentation.js";
 import { sparkline, statLine, STAT_FIELDS, type StatSource } from "../src/tui/stats.js";
 
 // A rail that wraps is not a rail. The sidebar is roughly 30-40 columns, and the
@@ -29,7 +31,7 @@ const FULL: StatSource = {
   elapsedMs: 840000,
   turns: 48,
   spark: [1, 2, 3, 4, 5, 6, 7, 8],
-  caution: "⚠ shell running 8m41s",
+  caution: "● shell running 8m41s",
   frame: 0,
 };
 
@@ -149,11 +151,11 @@ describe("the rail fits", () => {
 
   test("no row wraps when the caution row is at its longest", () => {
     for (const text of [
-      "⚠ shell running 8m41s",
-      "⚠ read ×3 identical",
-      "⚠ shell failing ×3",
+      "● shell running 8m41s",
+      "● read ×3 identical",
+      "● shell failing ×3",
       "▲ no progress 11m",
-      "⚠ delegate_task failing ×12",
+      "● delegate_task failing ×12",
     ]) {
       expect(overBudget({ ...FULL, caution: text })).toEqual([]);
     }
@@ -195,5 +197,83 @@ describe("the rail fits", () => {
       },
     });
     expect(long).toEqual([]);
+  });
+});
+
+// A cell is not a character. The annunciator is the proof: `⚠` (U+26A0) is
+// East-Asian Neutral, but the renderer's bundled string-width checks emoji-regex
+// before East-Asian width and charges it two cells, so the row drew a column
+// wider than the rest of the rail. These tests measure the drawn row in cells —
+// the renderer's own algorithm — rather than trusting its character count.
+describe("the caution row aligns in cells", () => {
+  const LABEL_WIDTH = 10;
+  const ENVELOPE = 38;
+  const RAIL = {
+    ...DEFAULT_CONFIG,
+    sidebar: { ...DEFAULT_CONFIG.sidebar, rows: ["caution"] },
+    layout: { ...DEFAULT_CONFIG.layout, labelWidth: LABEL_WIDTH },
+    caution: { ...DEFAULT_CONFIG.caution, enabled: true },
+  };
+
+  /** The three states the row can draw, with the mark each one carries. */
+  const STATES = [
+    { name: "silent", glyph: "", source: {} as StatSource },
+    {
+      name: "watch",
+      glyph: WATCH_GLYPH,
+      source: {
+        caution: cautionMark({ kind: "silent-turn", severity: "watch", elapsedMs: 660_000, key: "w" }),
+      } as StatSource,
+    },
+    {
+      name: "caution",
+      glyph: CAUTION_GLYPH,
+      source: {
+        caution: cautionMark({
+          kind: "hung-shell",
+          severity: "caution",
+          tool: "shell",
+          elapsedMs: 521_000,
+          key: "c",
+        }),
+      } as StatSource,
+    },
+  ];
+
+  test("the words after the mark begin at one cell offset in every state", () => {
+    // The value column starts after the ASCII label (10 cells) and the words
+    // after a one-cell mark start one cell later (11) - identical for watch and
+    // caution, so the severity mark never shifts the sentence.
+    const offsets = STATES.map(({ name, glyph, source }) => {
+      const [line] = sidebarLines(RAIL, source).filter((row) => row.startsWith("caution"));
+      expect(line, `${name} row missing`).toBeDefined();
+      expect(line!.slice(0, LABEL_WIDTH)).toBe("caution   ");
+      expect(stringWidth(line!)).toBeLessThanOrEqual(ENVELOPE);
+      return stringWidth(line!.slice(0, LABEL_WIDTH + glyph.length));
+    });
+    // Logged so a green run carries the measured columns, not just a verdict.
+    console.log("caution row cell offsets (silent, watch, caution):", offsets);
+    expect(offsets).toEqual([10, 11, 11]);
+  });
+
+  test("every severity mark is exactly one cell wide", () => {
+    expect(stringWidth(CAUTION_GLYPH)).toBe(1);
+    expect(stringWidth(WATCH_GLYPH)).toBe(1);
+    // The mark this replaced, kept as the regression being guarded: two cells in
+    // the renderer's own measure, which is what pushed the row wide.
+    expect(stringWidth("\u26A0")).toBe(2);
+  });
+
+  test("the mark rides a coloured run and the words keep the row's colour", () => {
+    const [, watch, caution] = STATES;
+    const line = railLines(RAIL, caution!.source).find((row) => row.field === "caution");
+    expect(line).toBeDefined();
+    // One source of truth: the plain text is the exact join of the segments.
+    expect(line!.text).toBe(line!.segments!.map((segment) => segment.text).join(""));
+    // The glyph alone takes the error tone; the words after it do not.
+    expect(line!.segments![1]).toEqual({ text: CAUTION_GLYPH, tone: "error" });
+
+    const watchLine = railLines(RAIL, watch!.source).find((row) => row.field === "caution");
+    expect(watchLine!.segments![1]).toEqual({ text: WATCH_GLYPH, tone: "warning" });
   });
 });

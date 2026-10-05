@@ -1,6 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
-import { cautionDetail, cautionText, detectCautions, worstCaution, type Caution } from "./caution.js";
+import {
+  cautionDetail,
+  cautionMark,
+  detectCautions,
+  worstCaution,
+  type Caution,
+  type CautionMark,
+} from "./caution.js";
 import { copyFeedback, copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
@@ -216,14 +223,13 @@ export default Plugin.define({
     // Only the worst is ever drawn: the rail has one line for this, and two
     // simultaneous observations is one problem with two symptoms.
     //
-    // Returns a plain string, themed exactly like every other live row. The
-    // annunciator carries its meaning in its glyph, not in a colour of its own:
-    // a row that suddenly brightens reads as a different kind of thing rather
-    // than as the same panel telling you something.
-    const announce = (sessionID: string): string | undefined => {
+    // Returns the mark itself, not just its text: severity survives to the
+    // renderer as the mark's own tone, so the glyph takes the rail's error or
+    // warning colour while the rest of the row keeps its own.
+    const announce = (sessionID: string): CautionMark | undefined => {
       if (!config.caution.enabled) return undefined;
       const top = worstCaution(cautionsOf(sessionID, Date.now()));
-      return top === undefined ? undefined : cautionText(top, config.glyphs);
+      return top === undefined ? undefined : cautionMark(top, config.glyphs);
     };
 
     // A VCS call on a directory with no repository must not throw and take the

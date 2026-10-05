@@ -198,6 +198,49 @@ function goValueSegments(source: StatSource, layout: LayoutHint): StatSegment[] 
 }
 
 /**
+ * The annunciator mark the caller built, validated at the untrusted boundary.
+ *
+ * `source.caution` is `unknown`, so the shape is re-checked here: a mark is kept
+ * only when its glyph and text are non-empty strings and its tone is one of the
+ * two severity roles. Anything else falls through to the plain-string path.
+ */
+function asCautionMark(value: unknown): { glyph: string; tone: StyleColor; text: string } | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+  const glyph = asText(record["glyph"]);
+  const text = asText(record["text"]);
+  const tone = record["tone"];
+  if (glyph === undefined || text === undefined) return undefined;
+  if (tone !== "warning" && tone !== "error") return undefined;
+  return { glyph, tone, text };
+}
+
+/**
+ * The `caution` row's value as coloured segments, or `undefined` when there is
+ * nothing to draw.
+ *
+ * The annunciator carries its severity in the mark itself: the glyph runs in the
+ * severity's own tone (`error` for a caution, `warning` for a watch) while the
+ * words after it keep the row's colour, so the row does not read as a different
+ * kind of line. A legacy plain-string value is accepted unchanged, in the row's
+ * own colour, which keeps every existing caller working.
+ */
+function cautionValueSegments(source: StatSource): StatSegment[] | undefined {
+  const mark = asCautionMark(source.caution);
+  if (mark !== undefined) {
+    // `plain` first, then split: flattening replaces each control character with
+    // one space, so the glyph's length still indexes the run boundary.
+    const text = plain(mark.text);
+    return [
+      { text: text.slice(0, mark.glyph.length), tone: mark.tone },
+      { text: text.slice(mark.glyph.length) },
+    ];
+  }
+  const text = asText(source.caution);
+  return text === undefined ? undefined : [{ text: plain(text) }];
+}
+
+/**
  * Render one named field, or `undefined` when the host has not supplied it yet.
  *
  * Returning `undefined` rather than a placeholder is deliberate: a rail that
@@ -226,10 +269,13 @@ export function statLine(
     case "caution": {
       // Rendered only when the caller found something to say, which is what
       // keeps a healthy session visually identical to one without the
-      // annunciator at all. The string already carries its glyph; nothing here
-      // knows or cares about severity.
-      const text = asText(source.caution);
-      return text === undefined ? undefined : row("caution", text);
+      // annunciator at all. The plain string is the exact join of the coloured
+      // segments, so the string view and the coloured view agree; a legacy plain
+      // string value is accepted too, with no tone.
+      const value = cautionValueSegments(source);
+      return value === undefined
+        ? undefined
+        : row("caution", value.map((segment) => segment.text).join(""));
     }
     case "status": {
       const status = asText(source.status);
@@ -424,16 +470,21 @@ export function statLine(
  * One field's rail row as coloured segments, or `undefined` when the field is
  * not segment-aware or has nothing to draw.
  *
- * Only `go` is segment-aware today — the one row whose severity lives on part
- * of the line rather than the whole. Every other field returns `undefined` and
- * the caller falls through to {@link statLine}, so there is still exactly one
- * place that knows a row's text.
+ * The `go` dials and the `caution` mark are the segment-aware rows — the two
+ * whose severity lives on part of the line rather than the whole. Every other
+ * field returns `undefined` and the caller falls through to {@link statLine},
+ * so there is still exactly one place that knows a row's text.
  */
 export function statSegments(
   field: string,
   source: StatSource,
   layout: LayoutHint = {},
 ): readonly StatSegment[] | undefined {
+  if (field === "caution") {
+    const value = cautionValueSegments(source);
+    if (value === undefined) return undefined;
+    return [{ text: labelPrefix("caution", layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
+  }
   if (field !== "go") return undefined;
   const value = goValueSegments(source, layout);
   if (value === undefined) return undefined;

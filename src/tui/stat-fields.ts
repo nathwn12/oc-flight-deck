@@ -12,9 +12,11 @@ export interface StatSource {
   /**
    * The annunciator line, precomputed by the caller.
    *
-   * A plain string on purpose: the rules that decide whether something is wrong
-   * live in ./caution.ts and need the clock and the session snapshot, not a
-   * formatting function. Severity is already encoded in the glyph.
+   * Either a plain string (legacy, drawn in the row's own colour) or the mark
+   * returned by `caution.ts`'s `cautionMark`: its `glyph` and `tone` ride to
+   * the renderer so severity is carried by a coloured run. The rules that
+   * decide whether something is wrong live in ./caution.ts and need the clock
+   * and the session snapshot, not a formatting function.
    */
   readonly caution?: unknown;
   readonly agent?: unknown;

@@ -23,8 +23,9 @@ export interface RailLine {
   readonly field?: string;
   /**
    * The same line split into coloured runs, when a row's severity lives on part
-   * of it (only `go` today). `text` is always the exact join of these segments,
-   * so a caller that ignores them draws the row unchanged.
+   * of it (the `go` dials and the `caution` mark). `text` is always the exact
+   * join of these segments, so a caller that ignores them draws the row
+   * unchanged.
    */
   readonly segments?: readonly StatSegment[];
 }
