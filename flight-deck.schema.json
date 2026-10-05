@@ -115,7 +115,7 @@
           "type": "integer",
           "minimum": 0,
           "default": 420,
-          "description": "A tool running longer than this becomes a real ⚠. Raised to match toolWatchSeconds if set below it, and reported."
+          "description": "A tool running longer than this becomes a real ●. Raised to match toolWatchSeconds if set below it, and reported."
         },
         "turnWatchSeconds": {
           "type": "integer",
@@ -127,7 +127,7 @@
           "type": "integer",
           "minimum": 0,
           "default": 1200,
-          "description": "A quiet session becomes a real ⚠ after this long. Raised to match turnWatchSeconds if set below it, and reported."
+          "description": "A quiet session becomes a real ● after this long. Raised to match turnWatchSeconds if set below it, and reported."
         },
         "repeatThreshold": {
           "type": "integer",
@@ -208,7 +208,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 2,
-          "default": "⚠",
+          "default": "●",
           "description": "Shown for a real caution. This is the row that has to read at a glance."
         },
         "clear": {

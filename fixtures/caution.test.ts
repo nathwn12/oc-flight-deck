@@ -3,6 +3,7 @@ import {
   CAUTION_GLYPH,
   WATCH_GLYPH,
   cautionDetail,
+  cautionMark,
   cautionText,
   detectCautions,
   formatElapsed,
@@ -304,6 +305,24 @@ describe("ordering, helpers and wording", () => {
     expect(glyphFor(found[0])).toBe(CAUTION_GLYPH);
     expect(glyphFor(undefined)).toBe("○");
     expect(WATCH_GLYPH).toBe("▲");
+    // Single-cell marks, so the annunciator row lines up with the others.
+    expect(CAUTION_GLYPH).toBe("●");
+    expect(CAUTION_GLYPH.length).toBe(1);
+  });
+
+  test("the mark carries its severity as a tone, and its text is the row value", () => {
+    const severe = run({ parts: [part("shell", "running", {}, { ran: NOW - 8 * MINUTE })] })[0]!;
+    const mark = cautionMark(severe);
+    expect(mark.tone).toBe("error");
+    expect(mark.glyph).toBe(CAUTION_GLYPH);
+    // The mark's text is the exact row value, glyph first.
+    expect(mark.text).toBe(cautionText(severe));
+    expect(mark.text.startsWith(mark.glyph)).toBe(true);
+
+    const quiet = run({ parts: [], lastMessageAt: NOW - 11 * MINUTE })[0]!;
+    expect(quiet.severity).toBe("watch");
+    expect(cautionMark(quiet).tone).toBe("warning");
+    expect(cautionMark(quiet).glyph).toBe(WATCH_GLYPH);
   });
 
   test("a quiet turn admits it could be thinking rather than wedged", () => {

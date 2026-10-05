@@ -12,6 +12,7 @@
         "@opentui/solid": "0.5.12",
         "@types/bun": "^1.4.2",
         "solid-js": "1.9.15",
+        "string-width": "7.2.0",
         "typescript": "^5.9.3",
       },
       "peerDependencies": {

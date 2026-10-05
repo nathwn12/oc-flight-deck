@@ -253,7 +253,7 @@
   // an unreadable one. One or two characters each.
   "glyphs": {
     "watch": "▲",
-    "caution": "⚠",
+    "caution": "●",
     "clear": "○"
   },
 

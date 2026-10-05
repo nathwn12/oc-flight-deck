@@ -405,8 +405,8 @@ describe("the shipped default rail", () => {
 
     // The default rail never draws a caution even when the source has one: the
     // row is off the rail, and enabling it is a second, explicit edit.
-    expect(sidebarLines(DEFAULT_CONFIG, { caution: "⚠ shell running 8m41s" })).not.toContain(
-      "caution   ⚠ shell running 8m41s",
+    expect(sidebarLines(DEFAULT_CONFIG, { caution: "● shell running 8m41s" })).not.toContain(
+      "caution   ● shell running 8m41s",
     );
 
     // Named but with the annunciator off and nothing to say, it is a placeholder.
@@ -416,8 +416,8 @@ describe("the shipped default rail", () => {
     // Enabled AND on the rail: the annunciator actually draws its text, so the
     // opt-in is a real path and not just a flag that changes nothing.
     const onRail = resolveConfig({ caution: { enabled: true }, sidebar: { rows: ["caution"] } }).config;
-    expect(sidebarLines(onRail, { caution: "⚠ shell running 8m41s" })).toContain(
-      "caution   ⚠ shell running 8m41s",
+    expect(sidebarLines(onRail, { caution: "● shell running 8m41s" })).toContain(
+      "caution   ● shell running 8m41s",
     );
   });
 });

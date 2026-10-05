@@ -420,7 +420,7 @@ describe("host text is flattened before it is drawn", () => {
   });
 
   test("flattens a control character inside a tool name", () => {
-    expect(statLine("caution", { caution: "⚠ sh\u0007ell running" })).toBe("caution   ⚠ sh ell running");
+    expect(statLine("caution", { caution: "● sh\u0007ell running" })).toBe("caution   ● sh ell running");
   });
 });
 

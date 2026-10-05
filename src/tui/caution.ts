@@ -339,7 +339,7 @@ export function worstCaution(cautions: readonly Caution[]): Caution | undefined 
 // ---------------------------------------------------------------------------
 
 export const WATCH_GLYPH = "▲";
-export const CAUTION_GLYPH = "⚠";
+export const CAUTION_GLYPH = "●";
 const CLEAR_GLYPH = "○";
 
 /**
@@ -358,9 +358,8 @@ export function glyphFor(caution: Caution | undefined, glyphs: GlyphHint = {}): 
   return caution.severity === "caution" ? (glyphs.caution ?? CAUTION_GLYPH) : (glyphs.watch ?? WATCH_GLYPH);
 }
 
-/** The short value beside the label. Says what was seen, not what it means. */
-export function cautionText(caution: Caution, glyphs: GlyphHint = {}): string {
-  const glyph = glyphFor(caution, glyphs);
+/** Everything after the mark: what was seen, with no severity and no colour. */
+function cautionBody(caution: Caution): string {
   const elapsed = caution.elapsedMs === undefined ? "" : ` ${formatElapsed(caution.elapsedMs)}`;
   switch (caution.kind) {
     case "hung-tool": {
@@ -368,19 +367,47 @@ export function cautionText(caution: Caution, glyphs: GlyphHint = {}): string {
       // is a different situation from a tool that is executing and has not
       // returned. Calling both "running" would be a small lie.
       const phase = caution.status === "streaming" ? "streaming" : "running";
-      return `${glyph} ${caution.tool ?? "tool"} ${phase}${elapsed}`;
+      return `${caution.tool ?? "tool"} ${phase}${elapsed}`;
     }
     case "hung-shell":
-      return `${glyph} ${caution.tool ?? "shell"} running${elapsed}`;
+      return `${caution.tool ?? "shell"} running${elapsed}`;
     case "repeat-loop":
-      return `${glyph} ${caution.tool ?? "tool"} ×${caution.repeats ?? 0} identical`;
+      return `${caution.tool ?? "tool"} ×${caution.repeats ?? 0} identical`;
     case "failure-loop":
-      return `${glyph} ${caution.tool ?? "tool"} failing ×${caution.repeats ?? 0}`;
+      return `${caution.tool ?? "tool"} failing ×${caution.repeats ?? 0}`;
     case "silent-turn":
-      return `${glyph} no progress${elapsed}`;
+      return `no progress${elapsed}`;
     default:
-      return `${glyph} unknown`;
+      return "unknown";
   }
+}
+
+/**
+ * The annunciator's mark: its one-cell glyph, the theme role its severity draws
+ * in, and the exact row text (`cautionText`'s value).
+ *
+ * The tone is structural on purpose, like `GlyphHint`: this module stays free
+ * of imports, and the caller maps the role onto a theme colour.
+ */
+export interface CautionMark {
+  readonly glyph: string;
+  /** `error` for a caution, `warning` for a watch — the rail's own roles. */
+  readonly tone: "warning" | "error";
+  readonly text: string;
+}
+
+export function cautionMark(caution: Caution, glyphs: GlyphHint = {}): CautionMark {
+  const glyph = glyphFor(caution, glyphs);
+  return {
+    glyph,
+    tone: caution.severity === "caution" ? "error" : "warning",
+    text: `${glyph} ${cautionBody(caution)}`,
+  };
+}
+
+/** The short value beside the label. Says what was seen, not what it means. */
+export function cautionText(caution: Caution, glyphs: GlyphHint = {}): string {
+  return cautionMark(caution, glyphs).text;
 }
 
 /** The longer sentence, used for the toast. States the observation, then the readings. */

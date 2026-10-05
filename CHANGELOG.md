@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-10-06
+
+### Fixed
+
+- The `caution` rail row draws a single-cell severity mark (`●` caution, `▲` watch) instead of `⚠`. The bundled `string-width` tests emoji-regex before East-Asian width and charges `⚠` two cells — and Windows Terminal draws it that way — so the annunciator ran a column wider than every other row. Severity now rides a coloured run on the mark itself (`error` for a caution, `warning` for a watch) while the words keep the row's colour, and a test measures the drawn row in cells at the rail's real width.
+
 ## [0.10.3] - 2026-10-02
 
 ### Changed
@@ -30,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in `ses` sidebar row: shows the full session id (the rail wraps it), and a mouse click copies that same full id and reports the outcome - a confirmation naming the id when the copy was sent, a distinct failure message when the terminal cannot take it. Off by default, and degrades gracefully when the terminal cannot copy.
 
+[0.10.4]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.0...v0.10.1
