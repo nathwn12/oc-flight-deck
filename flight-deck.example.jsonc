@@ -213,7 +213,7 @@
     // times, with a p99 of 14.7 minutes. Without this list the annunciator
     // lights on every delegated task - which is how an alert gets ignored.
     // Add your own long-running or orchestration tools here.
-    "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+    "exemptTools": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task", "tools.delegate", "tools.delegate_many", "tools.subagent", "tools.task"],
 
     // Also raise a toast, once per distinct problem, re-arming when the session
     // goes quiet. Off by default: the rail is the signal, a notification is an

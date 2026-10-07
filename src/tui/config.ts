@@ -209,7 +209,7 @@ const DEFAULT_CAUTION: CautionConfig = {
   turnWatchSeconds: 600,
   turnCautionSeconds: 1200,
   repeatThreshold: 3,
-  exemptTools: ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+  exemptTools: ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task", "tools.delegate", "tools.delegate_many", "tools.subagent", "tools.task"],
   /**
    * Off by default. The rail is the signal; a toast is an interruption.
    *

@@ -73,7 +73,7 @@
           "minimum": 1,
           "maximum": 24,
           "default": 24,
-          "description": "Maximum height of the whole rail, including fixed lines and live rows. Defaults to 24 and may be lowered from 1 to 23; lines past the limit are dropped."
+          "description": "Maximum height of the whole rail, including fixed lines and live rows. Defaults to 24 and may be lowered from 1 to 24; lines past the limit are dropped."
         }
       }
     },
@@ -138,7 +138,7 @@
         "exemptTools": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "default": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task"],
+          "default": ["question", "task", "subagent", "agent", "delegate", "delegate_many", "delegate_task", "tools.delegate", "tools.delegate_many", "tools.subagent", "tools.task"],
           "description": "Tools that are slow by nature, so slow is not an anomaly for them. Matched by exact name. Calibrated against 54,218 real settled tool calls: at the default threshold 307 calls exceed it and 200 of those are these tools — `subagent` alone crossed 152 times with a p99 of 14.7 minutes. Without this list the annunciator lights on every delegated task, which is how an alert gets ignored. Add your own long-running or orchestration tools here."
         },
         "toast": {
