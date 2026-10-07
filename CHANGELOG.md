@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The `caution` rail row draws a single-cell severity mark (`●` caution, `▲` watch) instead of `⚠`. The bundled `string-width` tests emoji-regex before East-Asian width and charges `⚠` two cells — and Windows Terminal draws it that way — so the annunciator ran a column wider than every other row. Severity now rides a coloured run on the mark itself (`error` for a caution, `warning` for a watch) while the words keep the row's colour, and a test measures the drawn row in cells at the rail's real width.
+- The default `caution.exemptTools` list now carries the `tools.`-prefixed aliases (`tools.delegate`, `tools.delegate_many`, `tools.subagent`, `tools.task`) alongside the bare names it already exempted. Matching is by exact name, and the host reaches these delegated-work tools under both spellings, so a fresh install lit the row on ordinary delegation the bare names were meant to cover. The schema default and `flight-deck.example.jsonc` carry the same eleven names.
+- The `caution` rail row draws a single-cell severity mark (`●` caution, `▲` watch) instead of `:warning:`. The bundled `string-width` tests emoji-regex before East-Asian width and charges `⚠` two cells — and Windows Terminal draws it that way — so the annunciator ran a column wider than every other row. Severity now rides a coloured run on the mark itself (`error` for a caution, `warning` for a watch) while the words keep the row's colour, and a test measures the drawn row in cells at the rail's real width.
 
 ## [0.10.3] - 2026-10-02
 
