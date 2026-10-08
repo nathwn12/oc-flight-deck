@@ -648,12 +648,12 @@ test("a subagent total is still summed for the family root", async () => {
   expect(frame).toContain("cost      $0.211 · 1 subagent");
 });
 
-test("reads tps as the family's live output rate, integer and reasoning-free", async () => {
+test("reads tps as the family's live generation rate, integer and reasoning-inclusive", async () => {
   // One settled 2 s turn on the parent (200 output + 900 reasoning) and one
-  // settled 2 s turn on a subagent (300 output, same span): 500 output tokens
-  // over a 2 s union = 250 tok/s, drawn whole. Reasoning never enters the
-  // numerator (it has its own row); idle never enters the denominator; the
-  // session records' lifetime totals must not leak in.
+  // settled 2 s turn on a subagent (300 output, same span): 1,400 generation
+  // tokens over a 2 s union = 700 tok/s, drawn whole. Reasoning rides the
+  // numerator (and keeps its own row too); idle never enters the denominator;
+  // the session records' lifetime totals must not leak in.
   const now = Date.now();
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
@@ -679,13 +679,13 @@ test("reads tps as the family's live output rate, integer and reasoning-free", a
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       250 tok/s");
-  expect(frame).not.toContain("500 tok/s");
+  expect(frame).toContain("tps       700 tok/s");
+  expect(frame).not.toContain("250 tok/s");
 });
 
 // The tps row is selected by host CAPABILITY - are assistant messages stamped? -
 // and never by the momentary state of the session. A stamped host takes the
-// live output rate: per-poll output deltas over the union of the turns' own
+// live generation rate: per-poll generation deltas over the union of the turns' own
 // spans, so idle between turns is never billed and the figure freezes when
 // work stops.
 
@@ -795,7 +795,7 @@ test("ends a turn at streamed, then completed, and never at created", async () =
   expect(frame).not.toContain("17 tok/s");
 });
 
-test("leaves a turn's reasoning out of the numerator", async () => {
+test("counts a turn's reasoning in the numerator", async () => {
   const now = Date.now();
   // One message carrying both timestamps and both token counts, the shape a
   // real host hands over: `streamed` is the decoding clock, `completed` settles
@@ -816,14 +816,15 @@ test("leaves a turn's reasoning out of the numerator", async () => {
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // 60 output over the 2 s streamed = 30 tok/s. The old numerator (output plus
-  // reasoning) read 50 tok/s; the old denominator (completed) read 2 tok/s.
-  expect(frame).toContain("tps       30 tok/s");
-  expect(frame).not.toContain("2 tok/s");
-  expect(frame).not.toContain("50 tok/s");
+  // 100 generation (60 output + 40 reasoning) over the 2 s streamed = 50
+  // tok/s. The old output-only numerator read 30 tok/s; the old denominator
+  // (completed) reads 3 tok/s.
+  expect(frame).toContain("tps       50 tok/s");
+  expect(frame).not.toContain("30 tok/s");
+  expect(frame).not.toContain("3 tok/s");
 });
 
-test("keeps reasoning on its own row while tps counts output", async () => {
+test("keeps reasoning on its own row while tps counts generation", async () => {
   const now = Date.now();
   const messages = [
     {
@@ -836,16 +837,16 @@ test("keeps reasoning on its own row while tps counts output", async () => {
     { sidebar: { rows: ["tps", "reasoning"], persist: false } },
     workspace(),
     // The reasoning rung lives on the session record (the row's source); the
-    // tps numerator reads output off the turns. Same host state, two rows.
+    // tps numerator reads generation off the turns. Same host state, two rows.
     { time: { created: now - 600_000 }, tokens: { output: 60, reasoning: 174857 } },
     { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // 60 output over 2 s = 30 tok/s; the 174,857 reasoning tokens ride their own
-  // row (175k) and never inflate the rate.
-  expect(frame).toContain("tps       30 tok/s");
+  // 174,917 generation (60 output + 174,857 reasoning) over 2 s = 87,459
+  // tok/s; the reasoning tokens still ride their own row (175k).
+  expect(frame).toContain("tps       87459 tok/s");
   expect(frame).toContain("reasoning 175k");
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { clip, DEFAULT_PLACEHOLDER, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
-import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionOutputTotals } from "../src/tui/throughput.js";
+import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals, unionOutputTotals } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -726,6 +726,26 @@ describe("instantaneous tps", () => {
         { key: "id:msg_1", tokens: 60, start: 0, end: 9_000 },
       ]),
     ).toEqual({ tokens: 60, unionMs: 1_000 });
+  });
+
+  test("the TPS union counts generation, so reasoning reads as speed", () => {
+    expect(unionGenerationTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
+      tokens: 100,
+      unionMs: 1_000,
+    });
+    // Reasoning alone is generation too: a thinking-heavy turn that emits
+    // nothing still paced the decoder for two seconds.
+    expect(unionGenerationTotals([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toEqual({
+      tokens: 120,
+      unionMs: 2_000,
+    });
+    // Dedup and merge match the union's own rules.
+    expect(
+      unionGenerationTotals([
+        { key: "id:msg_1", tokens: 60, reasoning: 40, start: 0, end: 1_000 },
+        { key: "id:msg_1", tokens: 60, reasoning: 40, start: 0, end: 9_000 },
+      ]),
+    ).toEqual({ tokens: 100, unionMs: 1_000 });
   });
 
   test("an id-less streaming turn keeps one identity across polls, so repeat polls never inflate the rate", () => {
