@@ -7,8 +7,9 @@
 // the rate is the DELTA between successive polls, smoothed (alpha 0.3) and
 // repainted only on a move of >= 1 tok/s or >= 10%, so the row tracks live
 // decoding instead of sagging behind everything the session ever did. The
-// numerator is output tokens only - reasoning keeps its own row - and the
-// denominator is generating time only: the union of the turns' own streaming
+// numerator is generation tokens - output plus reasoning, which keeps its own
+// row too - and the denominator is generating time only: the union of the
+// turns' own streaming
 // spans on a stamped host, the busy-gated active clock on one without stamps.
 // Idle is never divided by; when nothing is busy the tracker freezes and the
 // row holds its last figure. The row hides until ~2 s of generating time and
@@ -37,7 +38,7 @@ import {
   createInstantTps,
   turnKey,
   turnSpan,
-  unionOutputTotals,
+  unionGenerationTotals,
   unionSpanMs,
   type ThroughputSpan,
 } from "./stats.js";
@@ -130,42 +131,49 @@ export function createTpsReader(
       const span = turnSpan(created, completed, streamed, now, "streamed");
       if (span === undefined) continue;
       const tokens = asRecord(message["tokens"]);
-      // Output only: reasoning has its own row and no longer inflates the rate.
+      // Generation: output plus reasoning, which keeps its own row too. A
+      // settled id-less turn keys on its final counts, so two settled records
+      // sharing a start but differing in reasoning stay distinct.
+      const output = tokens?.["output"];
+      const reasoning = tokens?.["reasoning"];
+      const settled = completed !== undefined || streamed !== undefined;
+      const key = turnKey(message["id"], created, completed, output, streamed);
       spans.push({
-        key: turnKey(message["id"], created, completed, tokens?.["output"], streamed),
-        tokens: tokens?.["output"],
+        key: settled ? `${key}:${asCount(reasoning) ?? "?"}` : key,
+        tokens: output,
+        reasoning,
         ...span,
       });
     }
     return { ok: true, assistant, stamped, spans };
   };
 
-  // Output tokens on record for the scope, for a host with no message
-  // timestamps: the session records' own `output` rung, summed over the family
-  // from a root. A child asking `family()` gets its ancestors and siblings
-  // too, so it keeps its own figure. Reasoning is deliberately excluded.
-  const recordOutput = (sessionID: string, session: SessionLike | undefined): number => {
-    const outputOf = (source: SessionLike | undefined): number => {
+  // Generation tokens on record for the scope, for a host with no message
+  // timestamps: the session records' own `output` and `reasoning` rungs,
+  // summed over the family from a root. A child asking `family()` gets its
+  // ancestors and siblings too, so it keeps its own figure.
+  const recordGeneration = (sessionID: string, session: SessionLike | undefined): number => {
+    const generationOf = (source: SessionLike | undefined): number => {
       const tokens = asRecord(source?.tokens);
-      return asCount(tokens?.["output"]) ?? 0;
+      return (asCount(tokens?.["output"]) ?? 0) + (asCount(tokens?.["reasoning"]) ?? 0);
     };
-    if (!isFamilyRoot(sessionID)) return outputOf(session);
+    if (!isFamilyRoot(sessionID)) return generationOf(session);
     try {
       const ids = context.data.session.family(sessionID) ?? [];
-      if (ids.length <= 1) return outputOf(session);
+      if (ids.length <= 1) return generationOf(session);
       let total = 0;
       for (const id of ids) {
         if (id === sessionID) continue;
         try {
-          total += outputOf(context.data.session.get(id) as SessionLike | undefined);
+          total += generationOf(context.data.session.get(id) as SessionLike | undefined);
         } catch {
           // One unreadable member must not hide the rest.
         }
       }
-      return outputOf(session) + total;
+      return generationOf(session) + total;
     } catch {
       // No family on this host: the session's own tokens still stand.
-      return outputOf(session);
+      return generationOf(session);
     }
   };
 
@@ -186,9 +194,9 @@ export function createTpsReader(
     const now = Date.now();
     const busy = busyOf(sessionID);
 
-    // Timestamped assistant output this session has produced, plus - only from
-    // a family root - every subagent session's. A child asking `family()` gets
-    // its ancestors and siblings back, so it keeps its own spans.
+    // Timestamped assistant generation this session has produced, plus - only
+    // from a family root - every subagent session's. A child asking `family()`
+    // gets its ancestors and siblings back, so it keeps its own spans.
     const scans: TpsScan[] = hostStamps === false ? [] : [scanMessages(sessionID, now)];
     if (hostStamps !== false && isFamilyRoot(sessionID)) {
       try {
@@ -225,8 +233,9 @@ export function createTpsReader(
       // Generating time is the union of the turns' own streaming spans: idle
       // between turns was never recorded, so it can never enter the rate. An
       // in-flight turn ends at now, so the denominator keeps pace with the
-      // decoder while work happens and freezes the instant it settles.
-      const { tokens } = unionOutputTotals(spans);
+      // decoder while work happens and freezes the instant it settles. The
+      // numerator over it is generation: output plus reasoning.
+      const { tokens } = unionGenerationTotals(spans);
       const genMs = unionSpanMs(spans);
       return tracker(tokens, genMs, busy);
     }
@@ -235,14 +244,14 @@ export function createTpsReader(
     // clock, which runs only while the scope is actually working. Without that
     // clock there is no honest denominator - the row hides rather than falling
     // back to a lifetime average that bills idle as work.
-    if (created === undefined) return tracker(recordOutput(sessionID, session), 0, busy);
+    if (created === undefined) return tracker(recordGeneration(sessionID, session), 0, busy);
     let genMs = 0;
     try {
       genMs = live?.elapsedMsOf?.(sessionID, now) ?? 0;
     } catch {
       genMs = 0;
     }
-    return tracker(recordOutput(sessionID, session), genMs, busy);
+    return tracker(recordGeneration(sessionID, session), genMs, busy);
   };
 
   const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {

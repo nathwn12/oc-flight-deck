@@ -11,7 +11,7 @@
 // reasoning tokens divided by the union of the assistant turns' own streaming
 // spans, so idle and tool-settlement time is never in the denominator and the
 // figure freezes once everything settles. `createInstantTps` is the live row's
-// tracker: output-only per-poll deltas over generating-time deltas, smoothed
+// tracker: generation-token per-poll deltas over generating-time deltas, smoothed
 // with an EWMA and repainted through hysteresis, so the rail shows what the
 // decoder is doing now instead of everything the session ever did.
 
@@ -270,7 +270,7 @@ export const TPS_REPAINT_ABS = 1;
 export const TPS_REPAINT_RATIO = 0.1;
 
 /**
- * One per-poll instantaneous rate: output-token DELTA over generating-time
+ * One per-poll instantaneous rate: generation-token DELTA over generating-time
  * DELTA, never over idle time. The caller passes only what happened since the
  * previous poll; both deltas exclude idle by construction (the union of
  * streaming spans, or the busy-gated active clock), so a pause can never sag
@@ -310,12 +310,46 @@ export function tpsNeedsRepaint(displayed: number | undefined, smoothed: number)
 }
 
 /**
- * Output tokens and generating time for the TPS numerator's twin rule.
+ * Generation tokens and generating time for the TPS numerator: output plus
+ * reasoning, the same pair the official TUI divides.
+ *
+ * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`.
+ * Only the live TPS path uses this. `unionOutputTotals` below stays as the
+ * output-only twin, and `unionSpanTotals` (which feeds the other rows) is
+ * unchanged.
+ */
+export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTotals {
+  const seen = new Set<string>();
+  const accepted: Array<{ start: number; end: number }> = [];
+  let tokens = 0;
+
+  for (const span of spans) {
+    const key = asText(span.key);
+    if (key === undefined || seen.has(key)) continue;
+
+    const start = asCount(span.start);
+    const end = asCount(span.end);
+    if (start === undefined || end === undefined) continue;
+    const output = asCount(span.tokens);
+    const reasoning = asCount(span.reasoning);
+
+    seen.add(key);
+    accepted.push({ start, end: Math.max(start, end) });
+    tokens += (output ?? 0) + (reasoning ?? 0);
+  }
+
+  return { tokens, unionMs: mergedSpanMs(accepted) };
+}
+
+/**
+ * Output tokens and generating time: the output-only twin of
+ * `unionGenerationTotals`.
  *
  * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`, but
- * the numerator counts OUTPUT tokens only: reasoning has its own row and no
- * longer inflates the rate. A thinking-heavy turn that emits nothing reads as
- * what it is - time spent with no output yet - rather than as speed.
+ * the numerator counts OUTPUT tokens only. The live TPS path no longer uses
+ * this - it divides generation tokens (`unionGenerationTotals`) - so a
+ * thinking-heavy turn reads as speed on that row rather than as time spent
+ * with no output yet.
  */
 export function unionOutputTotals(spans: readonly ThroughputSpan[]): SpanTotals {
   const seen = new Set<string>();
@@ -340,9 +374,9 @@ export function unionOutputTotals(spans: readonly ThroughputSpan[]): SpanTotals 
 }
 
 /**
- * Near-instantaneous output rate for one displayed session scope.
+ * Near-instantaneous generation rate for one displayed session scope.
  *
- * The caller feeds each poll's cumulative output tokens and cumulative
+ * The caller feeds each poll's cumulative generation tokens and cumulative
  * generating milliseconds (streaming-span union, or the busy-gated active
  * clock - both exclude idle by construction) plus whether the scope is busy,
  * and gets back the figure to draw, or `undefined` while there is nothing

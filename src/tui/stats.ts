@@ -28,6 +28,7 @@ export {
   tpsNeedsRepaint,
   turnKey,
   turnSpan,
+  unionGenerationTotals,
   unionOutputTotals,
   unionSpanMs,
   unionSpanThroughput,

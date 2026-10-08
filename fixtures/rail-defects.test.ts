@@ -179,3 +179,78 @@ describe("per-session maps stay bounded", () => {
     expect(reads.sessionElapsed("a", 1_000)).toBe(9_000);
   });
 });
+
+// The TPS numerator is generation - output plus reasoning - on both host
+// paths: the stamped union over message turns, and the unstamped session
+// record. A thinking-heavy turn reads as speed, not as idle time with no
+// output yet.
+describe("TPS counts reasoning as generation", () => {
+  const stampedContext = (messages: Record<string, readonly unknown[]>) =>
+    ({
+      data: {
+        session: {
+          family: (id: string) => [id],
+          message: { list: (id: string) => messages[id] ?? [] },
+        },
+      },
+    }) as unknown as Parameters<typeof createTpsReader>[0];
+
+  test("a stamped turn divides output plus reasoning over its streaming span", () => {
+    const reader = createTpsReader(
+      stampedContext({
+        s: [
+          {
+            id: "m1",
+            type: "assistant",
+            time: { created: 0, streamed: 2_000 },
+            tokens: { output: 60, reasoning: 40 },
+          },
+        ],
+      }),
+      () => false,
+      { busyOf: () => true },
+    );
+    // 100 generation tokens over 2 s of streaming: the cumulative average
+    // seeds the figure on the first poll.
+    expect(reader.sessionTps("s", { time: { created: 0 } })).toBe(50);
+  });
+
+  test("a reasoning-only stamped turn still paces the decoder", () => {
+    const reader = createTpsReader(
+      stampedContext({
+        s: [
+          {
+            id: "m1",
+            type: "assistant",
+            time: { created: 0, streamed: 2_000 },
+            tokens: { reasoning: 120 },
+          },
+        ],
+      }),
+      () => false,
+      { busyOf: () => true },
+    );
+    // Output-only would see 0 tokens and hide below the minimum sample; the
+    // generation numerator seeds 120 / 2 s instead.
+    expect(reader.sessionTps("s", { time: { created: 0 } })).toBe(60);
+  });
+
+  test("the unstamped record path sums the output and reasoning rungs", () => {
+    const context = {
+      data: {
+        session: {
+          family: (id: string) => [id],
+          message: { list: () => [{ type: "assistant" }] },
+        },
+      },
+    } as unknown as Parameters<typeof createTpsReader>[0];
+    const reader = createTpsReader(context, () => false, {
+      busyOf: () => true,
+      elapsedMsOf: () => 10_000,
+    });
+    // 100 output + 50 reasoning over 10 s of active clock.
+    expect(
+      reader.sessionTps("s", { time: { created: 0 }, tokens: { output: 100, reasoning: 50 } }),
+    ).toBe(15);
+  });
+});
