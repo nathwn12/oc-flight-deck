@@ -71,6 +71,12 @@ interface ActiveState {
  * the boundary. Undercount is acceptable, over-count is not.
  */
 export function createActiveElapsed(isBusy: BusyRead, options: ActiveElapsedOptions = {}) {
+  // One entry per viewed session, bounded: without eviction a TUI lifetime of
+  // session-hopping grows this map forever. Eviction only drops a stale tally -
+  // a revisit rebaselines and re-seeds from the host, exactly like a first
+  // sight. Recency refreshes on every read, so the watched session is always
+  // the last one evicted.
+  const MAX_STATES = 50;
   const states = new Map<string, ActiveState>();
   // The module's own contract must hold without the caller opting in; the
   // production caller still passes its own derived bound.
@@ -97,7 +103,7 @@ export function createActiveElapsed(isBusy: BusyRead, options: ActiveElapsedOpti
     if (state === undefined) {
       // First sight of this session: take the seed once, here, so the record
       // covers everything up to the moment observation begins and the
-      // accumulator below covers everything after — no overlap, no double
+      // accumulator below covers everything after - no overlap, no double
       // count. Floored at zero; a non-finite or throwing read is zero.
       let seed = 0;
       if (options.seedOf !== undefined) {
@@ -109,13 +115,23 @@ export function createActiveElapsed(isBusy: BusyRead, options: ActiveElapsedOpti
         }
       }
       state = { accumulated: seed, lastAt: now, running: false };
+      if (states.size >= MAX_STATES) {
+        for (const oldest of states.keys()) {
+          states.delete(oldest);
+          break;
+        }
+      }
       states.set(sessionID, state);
-    } else if (!boundary && state.running && busy) {
-      // Only a window that was busy at BOTH ends and short enough to have been
-      // observed is work. A settled gap is idle; a stalled or stepped-back
-      // clock must never subtract; an over-long window was not watched.
-      const delta = now - state.lastAt;
-      if (delta > 0 && delta <= maxBankedMs) state.accumulated += delta;
+    } else {
+      states.delete(sessionID);
+      states.set(sessionID, state);
+      if (!boundary && state.running && busy) {
+        // Only a window that was busy at BOTH ends and short enough to have been
+        // observed is work. A settled gap is idle; a stalled or stepped-back
+        // clock must never subtract; an over-long window was not watched.
+        const delta = now - state.lastAt;
+        if (delta > 0 && delta <= maxBankedMs) state.accumulated += delta;
+      }
     }
 
     state.running = busy;

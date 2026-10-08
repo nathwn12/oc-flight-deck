@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { clip, DEFAULT_PLACEHOLDER, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
+import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionOutputTotals } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -83,9 +84,10 @@ describe("flight deck live rows", () => {
   });
 
   test("reads context occupancy from the last request, not the running total", () => {
-    expect(statLine("context", { context: { used: 218_000 } })).toBe("context   218k used");
+    // An estimate, not an exact count: the occupancy proxy earns its `~`.
+    expect(statLine("context", { context: { used: 218_000 } })).toBe("context   ~218k used");
     expect(statLine("context", { context: { used: 218_000, limit: 1_000_000 } })).toBe(
-      "context   ██░░░░░░░░ 22%",
+      "context   ██░░░░░░░░ ~22%",
     );
     // A window the host never reports still shows the honest half of the answer.
     expect(statLine("context", { context: { used: 0 } })).toBeUndefined();
@@ -107,10 +109,20 @@ describe("flight deck live rows", () => {
     expect(statLine("cache", { tokens: { cache: { read: 1000 } } })).toBe("cache     1k read");
   });
 
+  test("draws a zero cache read instead of hiding it", () => {
+    // "No cache" is a state worth seeing, distinct from "no data yet" (which
+    // still hides and lets persist draw the placeholder).
+    expect(statLine("cache", { tokens: { input: 500, cache: { read: 0 } } })).toBe(
+      "cache     0% hit · 0 read",
+    );
+    expect(statLine("cache", { tokens: { cache: { read: 0 } } })).toBe("cache     0 read");
+    expect(statLine("cache", { tokens: {} })).toBeUndefined();
+    expect(statLine("cache", {})).toBeUndefined();
+  });
+
   test("omits a row instead of inventing a placeholder", () => {
     expect(statLine("branch", {})).toBeUndefined();
     expect(statLine("agent", {})).toBeUndefined();
-    expect(statLine("cache", { tokens: { cache: { read: 0 } } })).toBeUndefined();
     // Omission is `persist: false`: the default for a direct `statRows` call,
     // and the opt-out for `sidebarLines`.
     expect(statRows(["agent", "cost"], {}, { persist: false })).toEqual([]);
@@ -178,9 +190,12 @@ describe("flight deck live rows", () => {
   });
 
   test("reports measured throughput, not an estimate", () => {
-    // One decimal, matching the official TUI's own rendering.
-    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106.3 tok/s");
-    expect(statLine("tps", { tps: 106 })).toBe("tps       106.0 tok/s");
+    // Whole tokens/second, honestly rounded: the value is already an EWMA of
+    // per-poll deltas, so a decimal would fake a precision the samples never
+    // had. No fractional rendering, ever.
+    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: 106 })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: 106.5 })).toBe("tps       107 tok/s");
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
   });
 
@@ -202,6 +217,10 @@ describe("flight deck live rows", () => {
   test("hides the tps row rather than printing a zero rate", () => {
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
     expect(statLine("tps", { tps: Number.NaN })).toBeUndefined();
+    // Below half a token/second rounds to zero, which hides rather than
+    // printing "0 tok/s".
+    expect(statLine("tps", { tps: 0.4 })).toBeUndefined();
+    expect(statLine("tps", { tps: 0.5 })).toBe("tps       1 tok/s");
   });
 
   test("draws recent turn sizes as a sparkline", () => {
@@ -556,7 +575,7 @@ describe("active-work throughput", () => {
   test("counts a stamped turn that produced no tokens in the denominator", () => {
     // The official TUI's rule: a step with a streamed rung counts in the
     // denominator even when it produced nothing. 100 tokens over the two 2 s
-    // turns reads 25.0; dropping the empty turn's span would have read 50.0.
+    // turns reads 25; dropping the empty turn's span would have read 50.
     const spans = [
       { key: "producing", tokens: 100, start: 0, end: 2_000 },
       { key: "empty", tokens: 0, start: 2_000, end: 4_000 },
@@ -650,6 +669,142 @@ describe("active-work throughput", () => {
   });
 });
 
+// The live `tps` row is a NEAR-INSTANTANEOUS output rate, not an average: the
+// delta of output tokens between successive polls over the delta of generating
+// time (streaming-span union, or the busy-gated active clock - both exclude
+// idle by construction), smoothed with an EWMA (alpha 0.3) and repainted only
+// on a move of >= 1 tok/s or >= 10%. Reasoning is out of the numerator (it has
+// its own row); the row hides until ~2 s of generating time and ~10 tokens are
+// on record; a non-busy poll freezes on the last figure; rendering is whole
+// tokens/second, never fractional.
+describe("instantaneous tps", () => {
+  test("divides deltas, never idle-inclusive totals", () => {
+    expect(instantTpsRate(100, 2_000)).toBe(50);
+    expect(instantTpsRate(0, 2_000)).toBe(0);
+    // No new generating time is no sample, not a zero rate and never an
+    // infinity: the tracker holds instead of dividing.
+    expect(instantTpsRate(100, 0)).toBeUndefined();
+    expect(instantTpsRate(100, -5)).toBeUndefined();
+    expect(instantTpsRate(undefined, 2_000)).toBeUndefined();
+  });
+
+  test("smooths with an EWMA that bends instead of replacing", () => {
+    // The first sample seeds the average directly.
+    expect(smoothTpsRate(undefined, 100)).toBe(100);
+    // Alpha 0.3: 100 moves 30% of the way toward 200.
+    expect(smoothTpsRate(100, 200)).toBeCloseTo(130, 10);
+    // A single slow poll dents the figure; it does not halve it.
+    expect(smoothTpsRate(130, 0)).toBeCloseTo(91, 10);
+  });
+
+  test("repaints only past the hysteresis band", () => {
+    // The first rate always paints.
+    expect(tpsNeedsRepaint(undefined, 50)).toBe(true);
+    // Sub-token jitter holds.
+    expect(tpsNeedsRepaint(100, 100.5)).toBe(false);
+    // One whole token/second moves it, and so does ten percent.
+    expect(tpsNeedsRepaint(100, 101)).toBe(true);
+    expect(tpsNeedsRepaint(100, 99)).toBe(true);
+    expect(tpsNeedsRepaint(10, 11)).toBe(true);
+    expect(tpsNeedsRepaint(10, 10.5)).toBe(false);
+  });
+
+  test("counts output only, so reasoning never inflates the rate", () => {
+    expect(unionOutputTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
+      tokens: 60,
+      unionMs: 1_000,
+    });
+    // Reasoning alone is time with no output yet: no numerator, no rate.
+    expect(unionOutputTotals([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toEqual({
+      tokens: 0,
+      unionMs: 2_000,
+    });
+    // Dedup and merge match the union's own rules.
+    expect(
+      unionOutputTotals([
+        { key: "id:msg_1", tokens: 60, start: 0, end: 1_000 },
+        { key: "id:msg_1", tokens: 60, start: 0, end: 9_000 },
+      ]),
+    ).toEqual({ tokens: 60, unionMs: 1_000 });
+  });
+
+  test("an id-less streaming turn keeps one identity across polls, so repeat polls never inflate the rate", () => {
+    // The review's mechanism: the fallback key embedded the growing output
+    // count, so each poll of the same in-flight turn looked like a new span
+    // and the union summed the cumulative snapshots repeatedly.
+    const created = 1_000;
+    const now = created + 10_000;
+    const polls = [10, 20, 30].map((output) => {
+      const span = turnSpan(created, undefined, undefined, now, "streamed")!;
+      return { key: turnKey(undefined, created, undefined, output), tokens: output, ...span };
+    });
+    // Stable identity: every poll keys the same, whatever the output count.
+    expect(polls[1]?.key).toBe(polls[0]?.key);
+    expect(polls[2]?.key).toBe(polls[0]?.key);
+    // Every snapshot seen together (re-sent history beside the live record)
+    // counts once: never above the single latest-poll baseline.
+    const baseline = unionOutputTotals([polls[2]!]);
+    expect(unionOutputTotals(polls).tokens).toBeLessThanOrEqual(baseline.tokens);
+    expect(unionOutputTotals(polls).unionMs).toBe(baseline.unionMs);
+  });
+
+  test("a settled id-less turn still keys on its final output count", () => {
+    // Once `completed` is recorded the output count is final, so it stays in
+    // the key and two settled records with different totals stay distinct.
+    expect(turnKey(undefined, 1, 2, 3)).toBe(turnKey(undefined, 1, 2, 3));
+    expect(turnKey(undefined, 1, 2, 3)).not.toBe(turnKey(undefined, 1, 2, 4));
+    // A turn that finished decoding (`streamed` recorded, tools unsettled) has
+    // a final output count too: same start, different totals stay distinct.
+    expect(turnKey(undefined, 1, undefined, 200, 2)).not.toBe(turnKey(undefined, 1, undefined, 300, 2));
+  });
+
+  test("hides until the minimum sample is on record", () => {
+    // Plenty of tokens but only a sliver of time: hidden.
+    expect(createInstantTps()(500, 500, true)).toBeUndefined();
+    // Plenty of time but a trickle of tokens: hidden.
+    expect(createInstantTps()(5, 10_000, true)).toBeUndefined();
+    // Both on record: the cumulative active average seeds the figure.
+    expect(createInstantTps()(500, 2_000, true)).toBe(250);
+  });
+
+  test("tracks per-poll deltas once seeded", () => {
+    const tps = createInstantTps();
+    expect(tps(200, 2_000, true)).toBe(100);
+    // 100 new tokens over 1 new second: instant 100, already at 100, holds.
+    expect(tps(300, 3_000, true)).toBe(100);
+    // 400 new tokens over 1 new second: instant 400, EWMA bends 100 toward it
+    // (100 + 0.3 * 300 = 190), which clears hysteresis and repaints.
+    expect(tps(700, 4_000, true)).toBeCloseTo(190, 10);
+  });
+
+  test("freezes on idle without diluting the next delta", () => {
+    const tps = createInstantTps();
+    expect(tps(200, 2_000, true)).toBe(100);
+    // Idle polls hold the last figure and touch nothing: the baselines stay
+    // where work stopped, so the idle stretch contributes to neither side.
+    expect(tps(200, 2_000, false)).toBe(100);
+    expect(tps(999_999, 999_999_999, false)).toBe(100);
+    // Work resumes: the delta spans only the new second, not the idle gap.
+    expect(tps(300, 3_000, true)).toBe(100);
+  });
+
+  test("holds through a poll with no new generating time", () => {
+    const tps = createInstantTps();
+    expect(tps(200, 2_000, true)).toBe(100);
+    // Busy, but the clock has not advanced: no sample, hold - never divide by
+    // zero new time.
+    expect(tps(200, 2_000, true)).toBe(100);
+  });
+
+  test("rebaselines a backwards counter instead of dividing it", () => {
+    const tps = createInstantTps();
+    expect(tps(200, 2_000, true)).toBe(100);
+    expect(tps(50, 1_000, true)).toBe(100);
+    // The new baselines stand with a fresh smoother: the next honest delta
+    // (100 tokens over 1 s) seeds 100 again, not a blend with the old era.
+    expect(tps(150, 2_000, true)).toBe(100);
+  });
+});
 // `unionSpanMs` is the token-blind twin of `unionSpanTotals`, used to seed
 // `elapsed`. It shares the dedup, clamp, pre-sort and merge, and simply returns
 // the wall time without the numerator `elapsed` has no use for.

@@ -295,10 +295,10 @@ test("draws the context gauge, matching provider as well as model id", async () 
 
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 16);
-  // 212 + 175,744 against a 1,000,000 window is 18%, not the 17% the other
-  // provider's larger window would give.
+  // 212 + 175,744 against a 1,000,000 window is ~18%, not the 17% the other
+  // provider's larger window would give. The `~` marks the occupancy proxy.
   expect(frame).toContain("context");
-  expect(frame).toContain("██░░░░░░░░ 18%");
+  expect(frame).toContain("██░░░░░░░░ ~18%");
   expect(frame).not.toContain("17%");
 });
 
@@ -648,35 +648,46 @@ test("a subagent total is still summed for the family root", async () => {
   expect(frame).toContain("cost      $0.211 · 1 subagent");
 });
 
-test("reads tps as the whole family's session average", async () => {
-  // The main chat's own 30,000 output tokens plus a subagent's 10,000, over a
-  // minute of session life: 40,000 / 60s = 666.7 tok/s. The session's average,
-  // not the last turn's rate - the parent alone would read 500.0 tok/s.
+test("reads tps as the family's live output rate, integer and reasoning-free", async () => {
+  // One settled 2 s turn on the parent (200 output + 900 reasoning) and one
+  // settled 2 s turn on a subagent (300 output, same span): 500 output tokens
+  // over a 2 s union = 250 tok/s, drawn whole. Reasoning never enters the
+  // numerator (it has its own row); idle never enters the denominator; the
+  // session records' lifetime totals must not leak in.
+  const now = Date.now();
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
-    { time: { created: 0, updated: 60_000 }, tokens: { output: 30_000 } },
+    { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
       family: ["ses_test", "ses_child"],
-      children: { ses_child: { tokens: { output: 10_000 } } },
-      // An assistant turn with no usable timestamp is what proves the host
-      // exposes none - the only thing that selects the lifetime average. A host
-      // with no assistant turns at all has unknown capability, which hides the
-      // row instead (covered below).
-      messages: [{ type: "assistant", tokens: { output: 1 } }],
+      messagesBySession: {
+        ses_test: [
+          {
+            type: "assistant",
+            time: { created: now - 60_000, streamed: now - 58_000 },
+            tokens: { output: 200, reasoning: 900 },
+          },
+        ],
+        ses_child: [
+          { type: "assistant", time: { created: now - 60_000, streamed: now - 58_000 }, tokens: { output: 300 } },
+        ],
+      },
+      status: () => "running",
     },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("666.7 tok/s");
-  expect(frame).not.toContain("500.0 tok/s");
+  expect(frame).toContain("tps       250 tok/s");
+  expect(frame).not.toContain("500 tok/s");
 });
 
-// The tps row is selected by host CAPABILITY — are assistant messages stamped? —
+// The tps row is selected by host CAPABILITY - are assistant messages stamped? -
 // and never by the momentary state of the session. A stamped host takes the
-// active-work average: output tokens over the union of the turns' own spans, so
-// idle between turns is never billed and the figure freezes when work stops.
+// live output rate: per-poll output deltas over the union of the turns' own
+// spans, so idle between turns is never billed and the figure freezes when
+// work stops.
 
 test("sums the family's active turn spans, not the wall clock between them", async () => {
   const now = Date.now();
@@ -697,6 +708,7 @@ test("sums the family's active turn spans, not the wall clock between them", asy
     {
       family: ["ses_test", "ses_child"],
       messagesBySession: { ses_test: parent, ses_child: child },
+      status: () => "running",
     },
   );
   flightDeck.setup(context);
@@ -704,32 +716,34 @@ test("sums the family's active turn spans, not the wall clock between them", asy
   const frame = await frameOf(sidebar!.render, 40, 6);
   // The old turn (1 s) | the recent turn (1 s) | the subagent (1.5 s,
   // overlapping the recent turn) = 3 s of active work for 300 tokens.
-  expect(frame).toContain("tps       100.0 tok/s");
-  expect(frame).not.toContain("50.0 tok/s");
+  expect(frame).toContain("tps       100 tok/s");
+  expect(frame).not.toContain("50 tok/s");
 });
 
-test("keeps showing the settled figure when the host goes idle", async () => {
+test("holds the settled figure when the host goes idle", async () => {
   const now = Date.now();
-  // Ran a minute ago and settled; nothing is in flight now. This deliberately
-  // replaces the old "hides the tps row when the trailing window is empty"
-  // expectation: the average has no window to fall out of.
+  // A settled 2 s turn with 500 output tokens seeds 250 tok/s while running,
+  // then holds it once idle: idle is never divided, only frozen on.
   const messages = [
-    { type: "assistant", time: { created: now - 120_000, completed: now - 119_000 }, tokens: { output: 500 } },
+    { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
   ];
+  let running = true;
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 500 } },
-    { messages },
+    { messages, status: () => (running ? "running" : "idle") },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const first = await frameOf(sidebar!.render, 40, 6);
+  expect(first).toContain("tps       250 tok/s");
+  // Past the reader's 1 s cache, so the second render re-derives rather than
+  // re-reading the cache: the idle poll must hold, not hide or decay.
+  running = false;
+  await Bun.sleep(1_100);
   const second = await frameOf(sidebar!.render, 40, 6);
-  // Both sides stopped growing, so the figure stays on the rail — it does not
-  // decay, and it is not hidden.
-  expect(first).toContain("tps       500.0 tok/s");
-  expect(second).toContain("tps       500.0 tok/s");
+  expect(second).toContain("tps       250 tok/s");
 });
 
 test("a long gap between turns does not lower the figure", async () => {
@@ -742,15 +756,15 @@ test("a long gap between turns does not lower the figure", async () => {
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 200 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
   // 200 tokens over the 2 s the two turns actually ran, even though ~95 s of
-  // idle sat between them. Billing that idle would read 2.0 tok/s.
-  expect(frame).toContain("tps       100.0 tok/s");
-  expect(frame).not.toContain("2.0 tok/s");
+  // idle sat between them. Billing that idle would read 2 tok/s.
+  expect(frame).toContain("tps       100 tok/s");
+  expect(frame).not.toContain("2 tok/s");
 });
 
 test("ends a turn at streamed, then completed, and never at created", async () => {
@@ -758,7 +772,7 @@ test("ends a turn at streamed, then completed, and never at created", async () =
   const messages = [
     // Both rungs present: `streamed` decides the end, `completed` does not.
     // 60 tokens over the 2 s the provider streamed. `completed` (5 s) would
-    // settle the turn after its tools ran and read 17.1 tok/s instead.
+    // settle the turn after its tools ran and read a slower rate instead.
     {
       type: "assistant",
       time: { created: now - 60_000, streamed: now - 58_000, completed: now - 55_000 },
@@ -771,17 +785,17 @@ test("ends a turn at streamed, then completed, and never at created", async () =
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
   // 2 s + 2 s = 4 s of streaming work for 120 tokens.
-  expect(frame).toContain("tps       30.0 tok/s");
-  expect(frame).not.toContain("17.1 tok/s");
+  expect(frame).toContain("tps       30 tok/s");
+  expect(frame).not.toContain("17 tok/s");
 });
 
-test("counts a turn's reasoning tokens in the numerator", async () => {
+test("leaves a turn's reasoning out of the numerator", async () => {
   const now = Date.now();
   // One message carrying both timestamps and both token counts, the shape a
   // real host hands over: `streamed` is the decoding clock, `completed` settles
@@ -797,25 +811,50 @@ test("counts a turn's reasoning tokens in the numerator", async () => {
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // 60 output + 40 reasoning over the 2 s streamed = 50.0 tok/s. The old
-  // numerator (output only) over the old denominator (completed) read 2.0;
-  // dropping reasoning alone would read 30.0.
-  expect(frame).toContain("tps       50.0 tok/s");
-  expect(frame).not.toContain("2.0 tok/s");
-  expect(frame).not.toContain("30.0 tok/s");
+  // 60 output over the 2 s streamed = 30 tok/s. The old numerator (output plus
+  // reasoning) read 50 tok/s; the old denominator (completed) read 2 tok/s.
+  expect(frame).toContain("tps       30 tok/s");
+  expect(frame).not.toContain("2 tok/s");
+  expect(frame).not.toContain("50 tok/s");
+});
+
+test("keeps reasoning on its own row while tps counts output", async () => {
+  const now = Date.now();
+  const messages = [
+    {
+      type: "assistant",
+      time: { created: now - 60_000, streamed: now - 58_000 },
+      tokens: { output: 60, reasoning: 174857 },
+    },
+  ];
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps", "reasoning"], persist: false } },
+    workspace(),
+    // The reasoning rung lives on the session record (the row's source); the
+    // tps numerator reads output off the turns. Same host state, two rows.
+    { time: { created: now - 600_000 }, tokens: { output: 60, reasoning: 174857 } },
+    { messages, status: () => "running" },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  // 60 output over 2 s = 30 tok/s; the 174,857 reasoning tokens ride their own
+  // row (175k) and never inflate the rate.
+  expect(frame).toContain("tps       30 tok/s");
+  expect(frame).toContain("reasoning 175k");
 });
 
 test("counts a stamped turn that produced no tokens in the denominator", async () => {
   const now = Date.now();
   // The reviewer's two-turn shape: 100 tokens streamed over 2 s, then a second
-  // stamped turn that streamed for 2 s and produced nothing. The official TUI
-  // divides by both spans: 100 / 4 s = 25.0. Dropping the empty turn's span
-  // would inflate the figure to 50.0.
+  // stamped turn that streamed for 2 s and produced nothing. The union divides
+  // by both spans: 100 / 4 s = 25 tok/s. Dropping the empty turn's span would
+  // inflate the figure to 50 tok/s.
   const messages = [
     { type: "assistant", time: { created: now - 4_000, streamed: now - 2_000 }, tokens: { output: 100 } },
     { type: "assistant", time: { created: now - 2_000, streamed: now }, tokens: { output: 0 } },
@@ -824,33 +863,34 @@ test("counts a stamped turn that produced no tokens in the denominator", async (
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       25.0 tok/s");
-  expect(frame).not.toContain("50.0 tok/s");
+  expect(frame).toContain("tps       25 tok/s");
+  expect(frame).not.toContain("50 tok/s");
 });
 
-test("an in-flight turn ends at now, floored at one second", async () => {
+test("hides an in-flight turn until the minimum sample is on record", async () => {
   const now = Date.now();
-  // No `completed` or `streamed`: the turn is still running, so its span ends
-  // at now. Half a second of work is floored at one second, so it reads 50.
+  // Half a second of work: a per-poll rate over this sliver would flash an
+  // absurd figure, so the row hides until ~2 s of generating time is on
+  // record - no more one-second floor inventing a rate for a sliver.
   const messages = [{ type: "assistant", time: { created: now - 500 }, tokens: { output: 50 } }];
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       50.0 tok/s");
+  expect(frame).not.toContain("tok/s");
 });
 
-test("falls back to the lifetime average when messages carry no timestamps", async () => {
+test("hides tps on an unstamped host instead of billing idle as work", async () => {
   const now = Date.now();
   const messages = [
     { type: "assistant", tokens: { output: 10_000 } },
@@ -860,49 +900,15 @@ test("falls back to the lifetime average when messages carry no timestamps", asy
     { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 60_000, updated: now }, tokens: { output: 30_000 } },
-    { messages },
+    { messages, status: () => "running" },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // No usable stamps means no spans at all: the whole-conversation average,
-  // which includes idle and can therefore sag. Residual, documented.
-  expect(frame).toContain("500.0 tok/s");
-});
-
-test("the lifetime fallback counts the session record's reasoning", async () => {
-  const now = Date.now();
-  // The same unstamped host and the same output, once with the session
-  // record's `reasoning` rung and once without. `tokens` is a
-  // `TokenUsage.Info`, so reasoning belongs in the lifetime numerator too:
-  // 30k output + 30k reasoning over 60 s reads 1000.0, double the 500.0 that
-  // counting output alone would report.
-  const messages = [
-    { type: "assistant", tokens: { output: 10_000 } },
-    { type: "assistant", tokens: { output: 20_000 } },
-  ];
-  const outputOnly = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
-    workspace(),
-    { time: { created: now - 60_000, updated: now }, tokens: { output: 30_000 } },
-    { messages },
-  );
-  const withReasoning = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
-    workspace(),
-    { time: { created: now - 60_000, updated: now }, tokens: { output: 30_000, reasoning: 30_000 } },
-    { messages },
-  );
-
-  flightDeck.setup(outputOnly.context);
-  const plain = railClaims(outputOnly.claims).sidebar;
-  flightDeck.setup(withReasoning.context);
-  const counted = railClaims(withReasoning.claims).sidebar;
-
-  const plainFrame = await frameOf(plain!.render, 40, 6);
-  const countedFrame = await frameOf(counted!.render, 40, 6);
-  expect(plainFrame).toContain("tps       500.0 tok/s");
-  expect(countedFrame).toContain("tps       1000.0 tok/s");
+  // No usable stamps means no span union, and the busy-gated clock has banked
+  // nothing on first sight: there is no honest denominator, so the row hides
+  // rather than printing the old lifetime average (30,000 / 60 s).
+  expect(frame).not.toContain("tok/s");
 });
 
 test("hides tps until the host has proven it stamps or not", async () => {
@@ -924,11 +930,10 @@ test("hides tps until the host has proven it stamps or not", async () => {
 test("a zero-output stamped turn proves the host stamps and is counted, but yields no rate", async () => {
   const now = Date.now();
   // The turn carries a stamp, so the host is known to stamp. Its span still
-  // counts in the denominator — that is the current rule, and the official
-  // TUI's — but the numerator stays at zero, so there is nothing to divide and
-  // the row hides rather than printing `0 tok/s`. It must NOT be mistaken for a
-  // host with no timestamps and fall back to this session's lifetime average
-  // (30,000 / 60s = 500 tok/s).
+  // counts in the denominator - that is the current rule - but the numerator
+  // stays at zero, so there is nothing to divide and the row hides rather
+  // than printing a rate. It must NOT be mistaken for a host with no
+  // timestamps and fall back to a lifetime average over the session record.
   const messages = [
     { type: "assistant", time: { created: now - 2_000, completed: now - 1_000 }, tokens: { output: 0 } },
   ];
@@ -947,7 +952,7 @@ test("a zero-output stamped turn proves the host stamps and is counted, but yiel
 test("never falls back once the host is known to stamp, even if a read fails", async () => {
   const now = Date.now();
   const stamped = [
-    { type: "assistant", time: { created: now - 2_000, completed: now - 1_000 }, tokens: { output: 60 } },
+    { type: "assistant", time: { created: now - 3_000, completed: now - 1_000 }, tokens: { output: 60 } },
   ];
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
@@ -963,32 +968,32 @@ test("never falls back once the host is known to stamp, even if a read fails", a
         if (id === "ses_other") throw new Error("transient message read failure");
         return stamped;
       },
+      status: (id) => (id === "ses_test" ? "running" : "idle"),
     },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
 
   const first = await frameOf(sidebar!.render, 40, 6);
-  expect(first).toContain("tps       60.0 tok/s");
+  expect(first).toContain("tps       30 tok/s");
 
   // A different session is a cache miss, so the read is attempted again - and
   // fails. The capability is already known true, so the row hides rather than
-  // reverting to the lifetime average (30,000 / 60s = 500.0 tok/s).
+  // reverting to a lifetime average over the session record.
   const second = await frameOf(sidebar!.render, 40, 6, "ses_other");
   expect(second).not.toContain("tok/s");
-  expect(second).not.toContain("500.0 tok/s");
 });
 
 test("a subagent session keeps its own spans, not its family's", async () => {
   const now = Date.now();
   const child = [
-    { type: "assistant", time: { created: now - 10_000, completed: now - 9_000 }, tokens: { output: 120 } },
+    { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 120 } },
   ];
   const root = [
-    { type: "assistant", time: { created: now - 10_000, completed: now - 9_000 }, tokens: { output: 6_000 } },
+    { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 6_000 } },
   ];
   const sibling = [
-    { type: "assistant", time: { created: now - 10_000, completed: now - 9_000 }, tokens: { output: 6_000 } },
+    { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 6_000 } },
   ];
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false } },
@@ -1000,15 +1005,16 @@ test("a subagent session keeps its own spans, not its family's", async () => {
       family: ["ses_root", "ses_test", "ses_sibling"],
       messagesBySession: { ses_root: root, ses_test: child, ses_sibling: sibling },
       root: () => "ses_root",
+      status: () => "running",
     },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // Only the child's own 120 tokens over its 1 s: 120.0 tok/s. Folding the
-  // family in would read (120 + 6,000 + 6,000) / 1 s = 12,120.0 tok/s.
-  expect(frame).toContain("tps       120.0 tok/s");
-  expect(frame).not.toContain("12120.0 tok/s");
+  // Only the child's own 120 tokens over its 2 s: 60 tok/s. Folding the
+  // family in would read (120 + 6,000 + 6,000) / 2 s = 6060 tok/s.
+  expect(frame).toContain("tps       60 tok/s");
+  expect(frame).not.toContain("6060 tok/s");
 });
 
 // The `ses` row is opt-in and draws a SHORT PRUNED PREVIEW of the id (clipped

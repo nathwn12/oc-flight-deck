@@ -176,7 +176,10 @@ export default Plugin.define({
         thresholds: cautionThreshold,
       });
 
-    const { sessionTps } = createTpsReader(context, isFamilyRoot);
+    const { sessionTps } = createTpsReader(context, isFamilyRoot, {
+      busyOf: busy,
+      elapsedMsOf: (id, now) => sessionElapsed(id, now),
+    });
 
     // Recent turn sizes, oldest first. Drawn from messages the host already
     // holds, so the sparkline needs no history of our own to accumulate.

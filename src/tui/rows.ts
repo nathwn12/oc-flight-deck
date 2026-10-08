@@ -364,13 +364,27 @@ export function statLine(
     }
     case "cache": {
       const tokens = asRecord(source.tokens);
-      const cache = asRecord(tokens?.cache);
+      if (tokens === undefined) return undefined;
+      const cache = asRecord(tokens.cache);
       const read = asCount(cache?.read);
-      if (read === undefined || read === 0) return undefined;
+      if (read === undefined) return undefined;
       const input = asCount(tokens?.input);
       // Hit ratio is the whole point: it explains a cheap bill on a huge token
       // count, and it is the first thing to break when caching stops working.
+      // The denominator is `read + input` only: a cache write creates a new
+      // entry rather than answering a lookup, so it is not a hit-or-miss event
+      // and would dilute the rate. Context occupancy (./session-reads.ts) DOES
+      // count `write`, because a written entry still occupies the window - the
+      // two denominators differ on purpose, and this comment is the record.
+      // A zero read is drawn, not hidden: "no cache" is a state worth seeing,
+      // distinct from "no data yet" (which still hides and lets persist draw
+      // the placeholder).
       const total = input === undefined ? undefined : read + input;
+      if (read === 0) {
+        return total === undefined || total === 0
+          ? row("cache", `0 read`)
+          : row("cache", `0% hit · 0 read`);
+      }
       const value =
         total === undefined || total === 0
           ? `${formatCount(read)} read`
@@ -382,11 +396,14 @@ export function statLine(
       const used = asCount(context?.used);
       if (used === undefined || used === 0) return undefined;
       const limit = asCount(context?.limit);
-      if (limit === undefined || limit === 0) return row("context", `${formatCount(used)} used`);
+      // `used` is an occupancy PROXY (last request's input + cache read +
+      // cache write), not a host-reported figure, so both shapes below carry
+      // a `~`: the row reads as the estimate it is, never as an exact count.
+      if (limit === undefined || limit === 0) return row("context", `~${formatCount(used)} used`);
       const ratio = used / limit;
       // Show the percentage whenever the host reports it, but never a bar that
       // reads as more than full.
-      return row("context", `${fuelBar(ratio, barWidth)} ${Math.round(Math.min(1, ratio) * 100)}%`);
+      return row("context", `${fuelBar(ratio, barWidth)} ~${Math.round(Math.min(1, ratio) * 100)}%`);
     }
     case "perms": {
       const perms = asRecord(source.perms);
@@ -413,10 +430,14 @@ export function statLine(
     }
     case "tps": {
       const tps = asCount(source.tps);
-      if (tps === undefined || tps === 0) return undefined;
-      // One decimal, exactly as the official TUI renders it: rounding to a
-      // whole number would overstate a slow turn by up to half a token/second.
-      return row("tps", `${tps.toFixed(1)} tok/s`);
+      if (tps === undefined) return undefined;
+      // Whole tokens/second, honestly rounded: the value is already an EWMA of
+      // per-poll deltas, so a decimal would fake a precision the samples never
+      // had. Anything below half a token/second hides rather than printing
+      // "0 tok/s".
+      const rounded = Math.round(tps);
+      if (rounded <= 0) return undefined;
+      return row("tps", `${rounded} tok/s`);
     }
     case "spark": {
       const values = Array.isArray(source.spark) ? source.spark.map((value) => asCount(value) ?? 0) : [];

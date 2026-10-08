@@ -16,9 +16,19 @@ export type { StatSegment } from "./rows.js";
 export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, isStatField } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
 export {
+  createInstantTps,
+  instantTpsRate,
   sessionThroughput,
+  smoothTpsRate,
+  TPS_EWMA_ALPHA,
+  TPS_MIN_GEN_MS,
+  TPS_MIN_TOKENS,
+  TPS_REPAINT_ABS,
+  TPS_REPAINT_RATIO,
+  tpsNeedsRepaint,
   turnKey,
   turnSpan,
+  unionOutputTotals,
   unionSpanMs,
   unionSpanThroughput,
   unionSpanTotals,

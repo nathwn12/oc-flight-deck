@@ -24,9 +24,10 @@ describe("persistent sidebar rows", () => {
     // `statRows` with persist layers the placeholder on top, padded exactly
     // like a live row (`cache` + five spaces at the default width of 10).
     expect(statRows(["cache"], { tokens: {} }, { persist: true })).toEqual(["cache     —"]);
-    // Zero is also "no data" for this row, not a value to draw.
+    // Zero is a drawn state for this row ("no cache"), not a placeholder: only
+    // "no data yet" falls through to persist.
     expect(statRows(["cache"], { tokens: { cache: { read: 0 } } }, { persist: true })).toEqual([
-      "cache     —",
+      "cache     0 read",
     ]);
     // The full default rail renders through `sidebarLines` the same way.
     expect(sidebarLines(DEFAULT_CONFIG, { tokens: {} })).toContain("cache     —");

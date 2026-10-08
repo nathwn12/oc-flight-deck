@@ -65,20 +65,68 @@ export function fuelBar(ratio: number, width: number = DEFAULT_BAR_WIDTH): strin
 const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 
 /**
+ * Terminal cell width of one code point: East Asian wide/fullwidth ranges and
+ * emoji take two cells, everything else one. Deliberately conservative - an
+ * ambiguous or unknown character counts one, so the rail may clip slightly
+ * early but can never overrun its column. Combines nothing: a combining mark
+ * counts one for the same reason, since over-counting only ever clips earlier.
+ */
+function cellWidthOf(code: number): number {
+  if (
+    (code >= 0x1100 && code <= 0x115f) ||
+    code === 0x2329 ||
+    code === 0x232a ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x20000 && code <= 0x3fffd) ||
+    (code >= 0x2600 && code <= 0x27bf) ||
+    (code >= 0x2b00 && code <= 0x2bff) ||
+    (code >= 0x1f000 && code <= 0x1faff)
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+/** The columns a string draws: its cell width, not its length. */
+function cellWidth(text: string): number {
+  let width = 0;
+  for (const char of text) width += cellWidthOf(char.codePointAt(0) ?? 0);
+  return width;
+}
+
+/**
  * Shorten a value for a narrow rail.
  *
  * The sidebar is roughly thirty-odd columns wide and the label already costs
  * ten, so a resource path has to be cut. The ellipsis is deliberate: a silently
- * truncated path reads as a complete one.
+ * truncated path reads as a complete one. The budget is CELLS, not characters:
+ * a CJK or emoji value that fits in characters can still draw twice as wide,
+ * so the cut keeps the longest prefix of at most `max - 1` cells and reserves
+ * the last cell for the ellipsis. Iterating by code point never splits a
+ * surrogate pair, so the orphaned-half guard the length-based cut needed is
+ * structurally gone.
  */
 export function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, Math.max(1, max - 1));
-  // Never cut a surrogate pair in half: the orphaned half renders as a
-  // replacement character, which reads as corruption rather than as a shortened
-  // path. Losing one more column is the cheaper mistake.
-  const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
-  return `${safe}…`;
+  const ellipsis = String.fromCharCode(0x2026);
+  if (cellWidth(text) <= max) return text;
+  const budget = max - 1;
+  let kept = "";
+  let width = 0;
+  for (const char of text) {
+    const next = width + cellWidthOf(char.codePointAt(0) ?? 0);
+    // The first character is always kept, mirroring the old floor: a budget
+    // below one cell still shortens rather than returning a bare ellipsis.
+    if (kept !== "" && next > budget) break;
+    kept += char;
+    width = next;
+  }
+  return `${kept}${ellipsis}`;
 }
 
 /**

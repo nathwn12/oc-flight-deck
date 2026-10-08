@@ -38,13 +38,11 @@ export interface StatSource {
   readonly busy?: unknown;
   readonly perms?: unknown;
   /**
-   * Session throughput. On a host that stamps its messages this is an
-   * active-work average: output plus reasoning tokens divided by the union of
-   * the assistant turns' provider-active spans (`streamed - created`), with
-   * idle between turns and the tool settlement after one excluded, subagents
-   * summed in, so the figure freezes when work stops. On a host without
-   * message timestamps it falls back to the lifetime average, which can still
-   * sag. Either way it is derived from state the host already holds.
+   * Session output rate, drawn whole. A near-instantaneous figure: the delta
+   * of output tokens between successive polls over the delta of generating
+   * time (streaming spans, or the busy-gated active clock), smoothed and held
+   * through noise, frozen while idle, hidden until a minimum sample is on
+   * record. Derived from state the host already holds.
    */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;
@@ -98,8 +96,12 @@ type StatField = (typeof STAT_FIELDS)[number];
  * `caution` belongs here for a stronger reason than the others: its whole job is
  * noticing that time has passed without anything happening, so without a tick
  * its thresholds could never be crossed on screen.
+ *
+ * `tps` belongs here because it is a per-poll rate: without a tick it would
+ * only recompute on host events and sit static between them, which is what
+ * made the old figure feel frozen.
  */
-export const ANIMATED_FIELDS = ["caution", "status", "elapsed"] as const;
+export const ANIMATED_FIELDS = ["caution", "status", "elapsed", "tps"] as const;
 
 export function isStatField(value: string): value is StatField {
   return STAT_FIELDS.some((field) => field === value);
