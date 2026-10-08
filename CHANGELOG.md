@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-10-08
+
+### Changed
+
+- TPS now reports a delta-based instantaneous rate instead of the session-lifetime average. The display is an integer, smoothed with an EWMA, with hysteresis so the last digit does not flicker, a minimum token sample before the rate is trusted, and an idle freeze that holds the last value when no new tokens arrive.
+- The `context` row now reads as an estimate (`~`), reflecting that the underlying usage figure is approximate.
+- The cache hit-rate denominator is now documented as deliberate in code and docs.
+
+### Fixed
+
+- `treeTotals` now wraps each per-id lookup in its own `try/catch`, so one bad id no longer blanks the cost/total rollup.
+- Width-aware clipping keeps rows inside the rail instead of overflowing it.
+- Per-session maps are now LRU-capped, closing a slow leak across long sessions.
+- The `ses` row documents that the display is a pruned preview while click-to-copy still copies the full id.
+
 ## [0.10.4] - 2026-10-06
 
 ### Fixed
@@ -37,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in `ses` sidebar row: shows the full session id (the rail wraps it), and a mouse click copies that same full id and reports the outcome - a confirmation naming the id when the copy was sent, a distinct failure message when the terminal cannot take it. Off by default, and degrades gracefully when the terminal cannot copy.
 
+[0.11.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.4...v0.11.0
 [0.10.4]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.1...v0.10.2
