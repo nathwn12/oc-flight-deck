@@ -55,7 +55,7 @@
           "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses"] },
           "default": ["status", "agent", "model", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
-          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows the full session id (the rail wraps it); a mouse click on that row copies the full id to the terminal clipboard."
+          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows an 18-wide clipped preview of the session id; a mouse click on that row copies the full id to the terminal clipboard."
         },
         "persist": {
           "type": "boolean",

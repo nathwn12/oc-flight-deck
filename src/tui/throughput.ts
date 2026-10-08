@@ -5,12 +5,15 @@
 // Pure: no clock, no I/O, no rendering. Untrusted sample fields are coerced
 // through ./coerce.js so a garbage value is skipped rather than guessed at.
 //
-// Two rates live here. `sessionThroughput` is the whole-lifetime average, kept
+// Three rates live here. `sessionThroughput` is the whole-lifetime average, kept
 // as the metric of last resort for a host that exposes no per-message
 // timestamps. `unionSpanThroughput` is the active-work average: output plus
 // reasoning tokens divided by the union of the assistant turns' own streaming
 // spans, so idle and tool-settlement time is never in the denominator and the
-// figure freezes once everything settles.
+// figure freezes once everything settles. `createInstantTps` is the live row's
+// tracker: output-only per-poll deltas over generating-time deltas, smoothed
+// with an EWMA and repainted through hysteresis, so the rail shows what the
+// decoder is doing now instead of everything the session ever did.
 
 import { asCount, asText } from "./coerce.js";
 
@@ -94,14 +97,28 @@ export function turnSpan(
 
 /**
  * Identity of one assistant turn: the host's own message id when it carries
- * one, otherwise the tuple `(created, completed, output)` that defines the
- * record. Retries, replays and re-sent records share a key, so they contribute
- * their tokens once and their time once.
+ * one, otherwise the tuple `(created, completed)` plus - only once the turn
+ * has stopped decoding - its `output` count. A turn with neither end rung yet
+ * is still streaming, so its output count is still growing: leaving it out of
+ * the key keeps one stable identity across polls instead of re-keying (and
+ * re-counting) every snapshot of the same turn. A turn that finished decoding
+ * (`streamed` or `completed` recorded) has a final output count, so it stays
+ * in the key and two settled turns that share a start stay distinct. Retries,
+ * replays and re-sent records share a key, so they contribute their tokens
+ * once and their time once.
  */
-export function turnKey(id: unknown, created: unknown, completed: unknown, output: unknown): string {
+export function turnKey(
+  id: unknown,
+  created: unknown,
+  completed: unknown,
+  output: unknown,
+  streamed?: unknown,
+): string {
   const own = asText(id);
   if (own !== undefined) return `id:${own}`;
-  return `t:${asCount(created) ?? "?"}:${asCount(completed) ?? "?"}:${asCount(output) ?? "?"}`;
+  const stamp = `t:${asCount(created) ?? "?"}:${asCount(completed) ?? "?"}`;
+  if (asCount(completed) === undefined && asCount(streamed) === undefined) return stamp;
+  return `${stamp}:${asCount(output) ?? "?"}`;
 }
 
 /** Output + reasoning tokens and wall time the accepted turns actually cover. */
@@ -226,4 +243,167 @@ export function unionSpanThroughput(spans: readonly ThroughputSpan[]): number | 
   const { tokens, unionMs } = unionSpanTotals(spans);
   if (tokens <= 0 || unionMs <= 0) return undefined;
   return tokens / (Math.max(unionMs, 1_000) / 1_000);
+}
+
+/**
+ * Smoothing weight for the instantaneous TPS rate: each new per-poll sample
+ * moves the displayed figure 30% of the way toward it. Heavy enough to stop
+ * the row flickering on every poll, light enough that a real speedup shows
+ * within a few polls rather than sagging behind a lifetime average.
+ */
+export const TPS_EWMA_ALPHA = 0.3;
+
+/**
+ * Minimum generating time (ms) and output tokens before the TPS row draws
+ * anything. Below either, a per-poll rate is one lucky sample over a sliver
+ * of time - the exact "cheaty" flash the row used to print.
+ */
+export const TPS_MIN_GEN_MS = 2_000;
+export const TPS_MIN_TOKENS = 10;
+
+/**
+ * Hysteresis for the TPS repaint: the held figure moves only when the new
+ * smoothed rate differs by at least one whole token/second or by at least
+ * ten percent, so sub-token jitter never repaints the row.
+ */
+export const TPS_REPAINT_ABS = 1;
+export const TPS_REPAINT_RATIO = 0.1;
+
+/**
+ * One per-poll instantaneous rate: output-token DELTA over generating-time
+ * DELTA, never over idle time. The caller passes only what happened since the
+ * previous poll; both deltas exclude idle by construction (the union of
+ * streaming spans, or the busy-gated active clock), so a pause can never sag
+ * the figure. Returns `undefined` when there is no new generating time to
+ * divide by.
+ */
+export function instantTpsRate(deltaTokens: unknown, deltaMs: unknown): number | undefined {
+  const tokens = asCount(deltaTokens);
+  const ms = asCount(deltaMs);
+  if (tokens === undefined || ms === undefined || ms <= 0) return undefined;
+  return tokens / (ms / 1_000);
+}
+
+/**
+ * Fold one instantaneous sample into the running rate. The first sample seeds
+ * the average directly; every later one moves it `alpha` of the way toward
+ * the sample, so a single fast or slow poll bends the figure instead of
+ * replacing it.
+ */
+export function smoothTpsRate(previous: number | undefined, sample: number, alpha: number = TPS_EWMA_ALPHA): number {
+  if (previous === undefined || !Number.isFinite(previous)) return sample;
+  if (!Number.isFinite(sample)) return previous;
+  return previous + alpha * (sample - previous);
+}
+
+/**
+ * Whether the held TPS figure should repaint for a new smoothed rate. The
+ * first rate always paints; afterwards only a move of at least one tok/s or
+ * at least ten percent does, so the row holds steady through noise.
+ */
+export function tpsNeedsRepaint(displayed: number | undefined, smoothed: number): boolean {
+  if (displayed === undefined || !Number.isFinite(displayed)) return true;
+  if (!Number.isFinite(smoothed)) return false;
+  if (Math.abs(smoothed - displayed) >= TPS_REPAINT_ABS) return true;
+  if (displayed === 0) return smoothed !== 0;
+  return Math.abs(smoothed - displayed) / Math.abs(displayed) >= TPS_REPAINT_RATIO;
+}
+
+/**
+ * Output tokens and generating time for the TPS numerator's twin rule.
+ *
+ * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`, but
+ * the numerator counts OUTPUT tokens only: reasoning has its own row and no
+ * longer inflates the rate. A thinking-heavy turn that emits nothing reads as
+ * what it is - time spent with no output yet - rather than as speed.
+ */
+export function unionOutputTotals(spans: readonly ThroughputSpan[]): SpanTotals {
+  const seen = new Set<string>();
+  const accepted: Array<{ start: number; end: number }> = [];
+  let tokens = 0;
+
+  for (const span of spans) {
+    const key = asText(span.key);
+    if (key === undefined || seen.has(key)) continue;
+
+    const start = asCount(span.start);
+    const end = asCount(span.end);
+    if (start === undefined || end === undefined) continue;
+    const output = asCount(span.tokens);
+
+    seen.add(key);
+    accepted.push({ start, end: Math.max(start, end) });
+    tokens += output ?? 0;
+  }
+
+  return { tokens, unionMs: mergedSpanMs(accepted) };
+}
+
+/**
+ * Near-instantaneous output rate for one displayed session scope.
+ *
+ * The caller feeds each poll's cumulative output tokens and cumulative
+ * generating milliseconds (streaming-span union, or the busy-gated active
+ * clock - both exclude idle by construction) plus whether the scope is busy,
+ * and gets back the figure to draw, or `undefined` while there is nothing
+ * honest to show yet. Deltas between successive polls are the rate; the
+ * EWMA smooths it; hysteresis holds the paint; the minimum sample hides the
+ * row until ~2 s of generating time and ~10 tokens are on record; and a
+ * non-busy poll freezes on the last figure without touching the baselines, so
+ * idle can never dilute the rate - it only holds it.
+ */
+export function createInstantTps(alpha: number = TPS_EWMA_ALPHA) {
+  let prevTokens: number | undefined;
+  let prevGenMs: number | undefined;
+  let smoothed: number | undefined;
+  let displayed: number | undefined;
+
+  return function sample(
+    totalTokens: unknown,
+    totalGenMs: unknown,
+    busy: unknown,
+  ): number | undefined {
+    // Not busy means frozen: hold the last figure, baselines untouched, so
+    // the idle stretch contributes nothing to either side of the next delta.
+    if (busy === false) return displayed;
+
+    const tokens = asCount(totalTokens);
+    const genMs = asCount(totalGenMs);
+    if (tokens === undefined || genMs === undefined) return displayed;
+
+    // First sight sets the baselines. The cumulative active average seeds the
+    // smoother, but only once the minimum sample is on record - before that
+    // the row hides rather than flashing a one-sample rate.
+    if (prevTokens === undefined || prevGenMs === undefined) {
+      prevTokens = tokens;
+      prevGenMs = genMs;
+      if (tokens < TPS_MIN_TOKENS || genMs < TPS_MIN_GEN_MS) return displayed;
+      smoothed = tokens / (genMs / 1_000);
+      if (tpsNeedsRepaint(displayed, smoothed)) displayed = smoothed;
+      return displayed;
+    }
+
+    const deltaTokens = tokens - prevTokens;
+    const deltaMs = genMs - prevGenMs;
+    // Counters must not step backwards; a reset rebaselines - baselines and
+    // smoother alike, since the pre-reset average belongs to another era -
+    // instead of dividing a negative delta into a nonsense rate.
+    if (deltaTokens < 0 || deltaMs < 0) {
+      prevTokens = tokens;
+      prevGenMs = genMs;
+      smoothed = undefined;
+      return displayed;
+    }
+    prevTokens = tokens;
+    prevGenMs = genMs;
+
+    if (tokens < TPS_MIN_TOKENS || genMs < TPS_MIN_GEN_MS) return displayed;
+    // No new generating time: nothing was produced *in time*, so there is no
+    // sample - hold, rather than dividing zero new tokens by zero new time.
+    if (deltaMs <= 0) return displayed;
+    const instant = deltaTokens / (deltaMs / 1_000);
+    smoothed = smoothTpsRate(smoothed, instant, alpha);
+    if (tpsNeedsRepaint(displayed, smoothed)) displayed = smoothed;
+    return displayed;
+  };
 }

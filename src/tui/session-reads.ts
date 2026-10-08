@@ -71,7 +71,13 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
     let count = 0;
     for (const id of ids) {
       if (id === sessionID) continue;
-      const child = context.data.session.get(id) as SessionLike | undefined;
+      let child: SessionLike | undefined;
+      try {
+        child = context.data.session.get(id) as SessionLike | undefined;
+      } catch {
+        // One unreadable member must not blank the rest of the tree.
+        continue;
+      }
       if (child === undefined) continue;
       count += 1;
       cost += asCount(child.cost) ?? 0;
@@ -80,7 +86,11 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
   };
 
   // A message's own totals are per-request, so the last assistant message's
-  // prompt size *is* the current context occupancy — not a running total.
+  // prompt size is an ESTIMATE of the current context occupancy - not a running
+  // total, and not a host-reported figure (hence the `~` on the `context` row).
+  // It sums input + cache read + cache WRITE: a written entry still occupies
+  // the window, even though `write` is deliberately excluded from the `cache`
+  // row's hit-rate denominator (creating an entry is not a lookup).
   const contextUsage = (sessionID: string, model: unknown) => {
     const messages = messagesOf(sessionID);
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -226,11 +236,30 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
   // takes the merged union of those assistant turns' spans, tokens ignored: a
   // zero-output turn still took wall time. The scan is memoised one result per
   // session id, and every read degrades to zero rather than throwing, so an
-  // absent family or an unstamped host leaves today's behaviour untouched.
+  // The scan is memoised one result per session id, and every read degrades to zero rather than throwing, so an
+  // absent family or an unstamped host leaves today's behaviour untouched. The
+  // memo holds at most `MAX_SEEDS` entries: without eviction a TUI lifetime of
+  // session-hopping grows it forever, and an evicted revisit simply re-scans
+  // the host's own timestamps, so nothing is lost.
+  const MAX_SEEDS = 50;
   const seeds = new Map<string, number>();
+  const rememberSeed = (sessionID: string, seed: number): void => {
+    if (seeds.has(sessionID)) seeds.delete(sessionID);
+    else if (seeds.size >= MAX_SEEDS) {
+      for (const oldest of seeds.keys()) {
+        seeds.delete(oldest);
+        break;
+      }
+    }
+    seeds.set(sessionID, seed);
+  };
   const seedElapsed = (sessionID: string): number => {
     const cached = seeds.get(sessionID);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      seeds.delete(sessionID);
+      seeds.set(sessionID, cached);
+      return cached;
+    }
 
     // One `now` for the whole scan, so every in-flight turn ends at the same
     // instant and the union cannot be skewed by the reads drifting apart.
@@ -258,7 +287,7 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
           const span = turnSpan(created, completed, streamed, now, "completed");
           if (span === undefined) continue;
           const output = asRecord(message["tokens"])?.["output"];
-          spans.push({ key: turnKey(message["id"], created, completed, output), ...span });
+          spans.push({ key: turnKey(message["id"], created, completed, output, streamed), ...span });
         }
       }
       seed = unionSpanMs(spans);
@@ -267,7 +296,7 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
       seed = 0;
     }
 
-    seeds.set(sessionID, seed);
+    rememberSeed(sessionID, seed);
     return seed;
   };
 

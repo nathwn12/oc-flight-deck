@@ -1,16 +1,24 @@
 // Session throughput, measured from the host's own message timestamps and never
-// from a clock this process keeps. A host that stamps its assistant turns gets
-// an active-work average: output plus reasoning tokens divided by the union of
-// the turns' own streaming spans (`streamed - created`, fallbacks in
-// ./throughput.js), so idle between turns and the tool settlement after one are
-// not in the denominator and the figure freezes once everything settles. A host
-// proven to expose no message timestamps uses the lifetime average instead.
+// from a clock this process keeps - as a near-instantaneous output rate, not a
+// lifetime average.
+//
+// Each poll feeds the scope's cumulative output tokens and cumulative
+// generating milliseconds into a per-session EWMA tracker (`./throughput.js`):
+// the rate is the DELTA between successive polls, smoothed (alpha 0.3) and
+// repainted only on a move of >= 1 tok/s or >= 10%, so the row tracks live
+// decoding instead of sagging behind everything the session ever did. The
+// numerator is output tokens only - reasoning keeps its own row - and the
+// denominator is generating time only: the union of the turns' own streaming
+// spans on a stamped host, the busy-gated active clock on one without stamps.
+// Idle is never divided by; when nothing is busy the tracker freezes and the
+// row holds its last figure. The row hides until ~2 s of generating time and
+// ~10 tokens are on record, rather than flashing a one-sample rate.
 //
 // The capability is learned once and remembered for the process. `undefined`
 // means "not yet known": a read that failed, or carried no assistant turns,
 // tells us nothing and must not choose a metric. Once known it is sticky in
 // BOTH directions, so a transient `message.list` failure can never flip a
-// stamped host back to the lifetime average (nor an unstamped host off it) —
+// stamped host back to the clock path (nor an unstamped host off it) -
 // a failure just hides the row. One value for the whole host, deliberately
 // not keyed by session.
 //
@@ -22,16 +30,19 @@
 // One factory closes over the plugin `context`; `isFamilyRoot` comes from
 // ./session-reads.js so a child session keeps its own figure while a root
 // sums its tree. The math itself lives in ./throughput.js (pure).
-//
-// RESIDUAL RISK, disclosed: the lifetime fallback for an unstamped host still
-// includes idle time and can therefore sag below a peak per-turn rate. There is
-// no timestamp on such a host with which to exclude it.
 
 import type { Plugin } from "@opencode/plugin/tui";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
-import { sessionThroughput, turnKey, turnSpan, unionSpanThroughput, type ThroughputSpan } from "./stats.js";
+import {
+  createInstantTps,
+  turnKey,
+  turnSpan,
+  unionOutputTotals,
+  unionSpanMs,
+  type ThroughputSpan,
+} from "./stats.js";
 
-/** What one session's message list contributes to its active-work average. */
+/** What one session's message list contributes to its instantaneous rate. */
 interface TpsScan {
   /** False only when the host refused to list the session's messages. */
   readonly ok: boolean;
@@ -43,15 +54,53 @@ interface TpsScan {
   readonly spans: readonly ThroughputSpan[];
 }
 
+/**
+ * The live signals the TPS reader borrows rather than re-deriving: the busy
+ * gate (is anything working?) freezes the row on idle, and the active clock
+ * (how much generating time is on record?) is the denominator for a host
+ * with no message timestamps. Both come from ./session-reads.js; absent, the
+ * stamped path still works and the unstamped path hides for lack of time.
+ */
+export interface TpsLiveReads {
+  readonly busyOf?: (sessionID: string) => boolean | undefined;
+  readonly elapsedMsOf?: (sessionID: string, now: number) => number | undefined;
+}
+
 export function createTpsReader(
   context: Plugin.Context,
   isFamilyRoot: (sessionID: string) => boolean,
+  live?: TpsLiveReads,
 ) {
   const TPS_CACHE_MS = 1_000;
   let hostStamps: boolean | undefined;
   let tpsCache:
     | { readonly sessionID: string; readonly at: number; readonly value: number | undefined }
     | undefined;
+  // One EWMA tracker per displayed session, bounded: without eviction a TUI
+  // lifetime of session-hopping grows this map forever. Eviction only drops
+  // smoothing - a revisit restarts its baselines, exactly like a first sight.
+  // Recency refreshes on every poll, so the watched session is always the last
+  // one evicted.
+  const MAX_TRACKERS = 50;
+  const trackers = new Map<string, ReturnType<typeof createInstantTps>>();
+
+  const trackerOf = (sessionID: string): ReturnType<typeof createInstantTps> => {
+    const known = trackers.get(sessionID);
+    if (known !== undefined) {
+      trackers.delete(sessionID);
+      trackers.set(sessionID, known);
+      return known;
+    }
+    const fresh = createInstantTps();
+    if (trackers.size >= MAX_TRACKERS) {
+      for (const oldest of trackers.keys()) {
+        trackers.delete(oldest);
+        break;
+      }
+    }
+    trackers.set(sessionID, fresh);
+    return fresh;
+  };
 
   const scanMessages = (id: string, now: number): TpsScan => {
     let messages: readonly unknown[];
@@ -81,86 +130,67 @@ export function createTpsReader(
       const span = turnSpan(created, completed, streamed, now, "streamed");
       if (span === undefined) continue;
       const tokens = asRecord(message["tokens"]);
-      // The numerator the TUI divides: output plus reasoning. Both are carried
-      // so the union can add them without losing either rung.
+      // Output only: reasoning has its own row and no longer inflates the rate.
       spans.push({
-        key: turnKey(message["id"], created, completed, tokens?.["output"]),
+        key: turnKey(message["id"], created, completed, tokens?.["output"], streamed),
         tokens: tokens?.["output"],
-        reasoning: tokens?.["reasoning"],
         ...span,
       });
     }
     return { ok: true, assistant, stamped, spans };
   };
 
-  // The lifetime average, the metric of last resort for a host that exposes no
-  // per-message timestamps. Measured from the session's own clock
-  // (`time.updated`, falling back to now) so a finished session settles on a
-  // stable figure instead of decaying as it sits on screen. The numerator is
-  // the session record's `output` plus its `reasoning`, the same pair the
-  // stamped path divides: `tokens` is a `TokenUsage.Info`, so the reasoning
-  // rung is present and counting output alone would under-report.
-  const lifetimeTps = (
-    sessionID: string,
-    session: SessionLike | undefined,
-    created: number,
-    time: Record<string, unknown> | undefined,
-  ): number | undefined => {
-    const updated = asCount(time?.["updated"]);
-    const end = updated === undefined ? Date.now() : Math.min(Date.now(), updated);
-    const elapsed = end - created;
-    if (elapsed <= 0) return undefined;
-
-    const tokensOf = (source: SessionLike | undefined): number | undefined => {
+  // Output tokens on record for the scope, for a host with no message
+  // timestamps: the session records' own `output` rung, summed over the family
+  // from a root. A child asking `family()` gets its ancestors and siblings
+  // too, so it keeps its own figure. Reasoning is deliberately excluded.
+  const recordOutput = (sessionID: string, session: SessionLike | undefined): number => {
+    const outputOf = (source: SessionLike | undefined): number => {
       const tokens = asRecord(source?.tokens);
-      if (tokens === undefined) return undefined;
-      return (asCount(tokens["output"]) ?? 0) + (asCount(tokens["reasoning"]) ?? 0);
+      return asCount(tokens?.["output"]) ?? 0;
     };
-
-    let output = tokensOf(session);
-    // Only a family root owns the tree beneath it; a child asking `family()`
-    // gets its ancestors and siblings too, so it keeps its own figure.
-    if (isFamilyRoot(sessionID)) {
-      try {
-        const ids = context.data.session.family(sessionID) ?? [];
-        if (ids.length > 1) {
-          let total = 0;
-          let sawOne = false;
-          for (const id of ids) {
-            const member = context.data.session.get(id) as SessionLike | undefined;
-            const memberTokens = tokensOf(member);
-            if (memberTokens === undefined) continue;
-            total += memberTokens;
-            sawOne = true;
-          }
-          if (sawOne) output = total;
+    if (!isFamilyRoot(sessionID)) return outputOf(session);
+    try {
+      const ids = context.data.session.family(sessionID) ?? [];
+      if (ids.length <= 1) return outputOf(session);
+      let total = 0;
+      for (const id of ids) {
+        if (id === sessionID) continue;
+        try {
+          total += outputOf(context.data.session.get(id) as SessionLike | undefined);
+        } catch {
+          // One unreadable member must not hide the rest.
         }
-      } catch {
-        // No family on this host: the session's own tokens still stand.
       }
+      return outputOf(session) + total;
+    } catch {
+      // No family on this host: the session's own tokens still stand.
+      return outputOf(session);
     }
-    return sessionThroughput(output, elapsed);
+  };
+
+  const busyOf = (sessionID: string): boolean | undefined => {
+    try {
+      return live?.busyOf?.(sessionID);
+    } catch {
+      return undefined;
+    }
   };
 
   const computeTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
     const time = asRecord(session?.time);
     const created = asCount(time?.["created"]);
-    if (created === undefined) return undefined;
-
-    // A host proven unstamped needs no message read at all: its metric is the
-    // lifetime average whether or not the read would have succeeded.
-    if (hostStamps === false) return lifetimeTps(sessionID, session, created, time);
 
     // One `now` for the whole scope, so every in-flight turn ends at the same
     // instant and the union cannot be skewed by the scans drifting apart.
     const now = Date.now();
+    const busy = busyOf(sessionID);
 
-    // Timestamped assistant tokens (output + reasoning) this session has
-    // produced, plus — only from a family root — every subagent session's. A
-    // child asking `family()` gets its ancestors and siblings back, so it keeps
-    // its own spans.
-    const scans: TpsScan[] = [scanMessages(sessionID, now)];
-    if (isFamilyRoot(sessionID)) {
+    // Timestamped assistant output this session has produced, plus - only from
+    // a family root - every subagent session's. A child asking `family()` gets
+    // its ancestors and siblings back, so it keeps its own spans.
+    const scans: TpsScan[] = hostStamps === false ? [] : [scanMessages(sessionID, now)];
+    if (hostStamps !== false && isFamilyRoot(sessionID)) {
       try {
         for (const id of context.data.session.family(sessionID) ?? []) {
           if (id !== sessionID) scans.push(scanMessages(id, now));
@@ -190,8 +220,29 @@ export function createTpsReader(
       else return undefined;
     }
 
-    if (hostStamps === true) return unionSpanThroughput(spans);
-    return lifetimeTps(sessionID, session, created, time);
+    const tracker = trackerOf(sessionID);
+    if (hostStamps === true) {
+      // Generating time is the union of the turns' own streaming spans: idle
+      // between turns was never recorded, so it can never enter the rate. An
+      // in-flight turn ends at now, so the denominator keeps pace with the
+      // decoder while work happens and freezes the instant it settles.
+      const { tokens } = unionOutputTotals(spans);
+      const genMs = unionSpanMs(spans);
+      return tracker(tokens, genMs, busy);
+    }
+
+    // No timestamps on this host: the denominator is the busy-gated active
+    // clock, which runs only while the scope is actually working. Without that
+    // clock there is no honest denominator - the row hides rather than falling
+    // back to a lifetime average that bills idle as work.
+    if (created === undefined) return tracker(recordOutput(sessionID, session), 0, busy);
+    let genMs = 0;
+    try {
+      genMs = live?.elapsedMsOf?.(sessionID, now) ?? 0;
+    } catch {
+      genMs = 0;
+    }
+    return tracker(recordOutput(sessionID, session), genMs, busy);
   };
 
   const sessionTps = (sessionID: string, session: SessionLike | undefined): number | undefined => {
