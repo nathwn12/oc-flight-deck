@@ -13,7 +13,7 @@ Stable default. Use this unless you have a reason not to. Measured working as np
 ## GITHUB - bleeding edge, experimental (MEASURED: WORKS as package spec)
 
 ```jsonc
-{ "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#5d9e0f4590c8a98f74df21b39d8de560b6b22579"] }
+{ "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#c5ee57c269fcd1db164a95bb7676e43e08298001"] }
 ```
 
 Experimental, unsupported, may be broken. Every commit is installable, so this route carries unreleased changes. Measured working as github PACKAGE spec `"oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#<full sha>"` (host log shows it loading).
