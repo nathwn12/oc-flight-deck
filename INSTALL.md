@@ -18,6 +18,19 @@ Stable default. Use this unless you have a reason not to.
 
 Experimental, unsupported, may be broken. Every commit is installable, so this route carries unreleased changes.
 
+## NO-NPM (directory entry)
+
+```jsonc
+{ "plugins": ["<path to repo - a local clone of this repository>"] }
+```
+
+Point the plugin entry at a local clone of this repo. Once pushed, the non-local form is
+`github:nathwn12/oc-flight-deck@bf7593f02536d6937b61b84e6e0670dd6623cf31` - pending live
+verification, not yet verified.
+
+This route needs the repo's `index.ts` and involves no npm install. It is the mechanism
+superpowers uses.
+
 ## Notes
 
 - Mounting by the git spec was MEASURED WORKING for the server half: the host provisions it through npm into `~/.cache/opencode/npm/git-<name>-<hash>/` and loads the entry resolved from `package.json` (`exports["."]`); the host log then records `msg="loading plugin" id=<spec> entrypoint=file:///… role=server`.
