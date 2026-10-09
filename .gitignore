@@ -9,3 +9,6 @@ Thumbs.db
 
 # Local OpenCode config (plugin loading, per-developer settings).
 .opencode/
+
+# Local-only agent guidance; never pushed.
+AGENTS.md
