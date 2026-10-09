@@ -27,6 +27,8 @@ Add the plugin to your `opencode.jsonc`:
 { "plugins": ["oc-flight-deck"] }
 ```
 
+See [INSTALL.md](./INSTALL.md) for the pinned npm and bleeding-edge git routes.
+
 Restart OpenCode. **That's the whole setup.** No config file, no options, nothing to learn. The panel appears beside an open session and starts reading.
 
 ---
