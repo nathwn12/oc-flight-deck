@@ -20,14 +20,19 @@ Install the oc-flight-deck OpenCode plugin:
 3. Verify: the panel appears beside an open session.
 ```
 
-Add the plugin to your `opencode.jsonc`:
+Add the plugin to your `opencode.jsonc` - stable (npm) or bleeding edge (github):
 
 ```jsonc
-// opencode.jsonc
-{ "plugins": ["oc-flight-deck"] }
+// opencode.jsonc - stable (npm):
+{ "plugins": ["oc-flight-deck@0.12.0"] }
 ```
 
-See [INSTALL.md](./INSTALL.md) for the pinned npm and bleeding-edge git routes.
+```jsonc
+// opencode.jsonc - bleeding edge (github) instead of stable, not in addition:
+{ "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#c5ee57c269fcd1db164a95bb7676e43e08298001"] }
+```
+
+See [INSTALL.md](./INSTALL.md) for the three routes: pinned npm, the github package spec, and a no-npm local directory entry.
 
 Restart OpenCode. **That's the whole setup.** No config file, no options, nothing to learn. The panel appears beside an open session and starts reading.
 
