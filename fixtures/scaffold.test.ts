@@ -134,7 +134,7 @@ describe("flight deck plugin", () => {
     // reader acts on: the plugin entry, the restart, the one config file's
     // real path, and the official API link.
     const readme = await readFile(join(root, "README.md"), "utf8");
-    expect(readme).toMatch(/"plugins"\s*:\s*\[\s*"oc-flight-deck"\s*\]/);
+    expect(readme).toMatch(/"plugins"\s*:\s*\[\s*"oc-flight-deck(@[^"]*)?"\s*\]/);
     expect(readme).toMatch(/\brestart\b/i);
     expect(readme).toContain("flight-deck.jsonc");
     expect(readme).toContain("~/.config/opencode/flight-deck.jsonc");
