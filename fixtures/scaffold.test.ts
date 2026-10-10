@@ -249,6 +249,28 @@ describe("flight deck plugin", () => {
     await cleanup?.();
   });
 
+  test("claims the footer slot for the Go panel alone, with no fixed lines", async () => {
+    // `sidebar.footer.go` is independent of `lines`: the live panel is reason
+    // enough to claim the slot, so the empty default list no longer means "no
+    // footer at all".
+    //
+    // The bridge reads OPENCODE_GO_API_KEY on every poll, so it is unset here:
+    // a key present in the developer's environment must never turn a test into
+    // a real request. Unset, the poll stores null and touches nothing.
+    const savedKey = process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    try {
+      const { context, slots, memoryCalls } = stubContext({ sidebar: { footer: { go: true } } });
+      const cleanup = await flightDeck.setup(context);
+      expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+      // The one bridge, not two: the panel and the `go` row share the store.
+      expect(memoryCalls.filter((key) => key === "flight-deck.go")).toHaveLength(1);
+      await cleanup?.();
+    } finally {
+      if (savedKey !== undefined) process.env.OPENCODE_GO_API_KEY = savedKey;
+    }
+  });
+
   test("registers both sidebar slots when the branding pair is opted in", async () => {
     // The documented opt-in: setting `sidebar.footer.lines` to the branding
     // pair claims the footer slot alongside the sidebar itself.

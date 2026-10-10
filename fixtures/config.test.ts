@@ -202,6 +202,30 @@ describe("the sidebar footer", () => {
     expect(resolution.issues).toEqual([]);
     expect(resolution.config.sidebar.footer.lines).toEqual([]);
     expect(DEFAULT_CONFIG.sidebar.footer.lines).toEqual(DEFAULT_SIDEBAR_FOOTER_LINES);
+    // The whole footer shape, so a new key cannot arrive without a default.
+    expect(DEFAULT_CONFIG.sidebar.footer).toEqual({ lines: [], go: false });
+  });
+
+  test("reads the footer's go panel flag, off by default", () => {
+    // Off by default, like every other opt-in surface: a fresh install claims
+    // no footer slot and spends no timer on the account-wide poll.
+    expect(DEFAULT_CONFIG.sidebar.footer.go).toBe(false);
+    expect(resolveConfig(undefined).config.sidebar.footer.go).toBe(false);
+
+    const on = resolveConfig({ sidebar: { footer: { go: true } } });
+    expect(on.issues).toEqual([]);
+    expect(on.config.sidebar.footer.go).toBe(true);
+    // Independent of `lines`: the panel is not a fixed line.
+    expect(on.config.sidebar.footer.lines).toEqual([]);
+
+    const off = resolveConfig({ sidebar: { footer: { go: false } } });
+    expect(off.issues).toEqual([]);
+    expect(off.config.sidebar.footer.go).toBe(false);
+
+    // A non-boolean falls back loudly, like every other option.
+    const bad = resolveConfig({ sidebar: { footer: { go: "yes" } } });
+    expect(bad.config.sidebar.footer.go).toBe(false);
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go");
   });
 
   test("replaces the empty default with an explicit list", () => {

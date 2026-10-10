@@ -137,6 +137,13 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 It is independent of `sidebar.lines`: setting your own top lines does not turn the footer on, and an explicitly empty `"lines": []` inside `sidebar.footer` keeps the slot off entirely. The footer never counts against `sidebar.maxLines`.
 
+`sidebar.footer.go` adds a **live Go usage panel** to that same footer slot: three lines - `Rolling` (`5h`), `Weekly` (`1w`), `Monthly` (`1m`) - each with a ten-cell bar, a whole-number percent, and a reset countdown. The bar uses the same glyphs as `context`, and a window at 90% or more - or reporting a non-`ok` status - turns its bar and number red, exactly like the `go` row. It is **off by default**; turning it on claims the footer slot even when `lines` is empty, and it reads `OPENCODE_GO_API_KEY` through the same account-wide poll the `go` row uses, so one poll serves both surfaces. Until the first poll lands it draws three dim resting lines rather than nothing.
+
+```jsonc
+// inside "sidebar":
+"footer": { "go": true }
+```
+
 Optional styling lives under `style`: `style.lines` controls the fixed branding/separator lines (the opt-in footer pair when you set `sidebar.footer.lines`, or whatever `sidebar.lines` you set), `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
 
 Everything else lives in the example file, documented inline - a typo is never fatal: the bad value is ignored, the default comes back, and you get a one-time toast naming the key to fix.

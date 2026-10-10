@@ -42,6 +42,8 @@ describe("the schema describes the real config", () => {
     expect(props["sidebar"]!.properties.footer.properties.lines.default).toEqual([
       ...DEFAULT_CONFIG.sidebar.footer.lines,
     ]);
+    expect(props["sidebar"]!.properties.footer.properties.go.default).toBe(DEFAULT_CONFIG.sidebar.footer.go);
+    expect(props["sidebar"]!.properties.footer.properties.go.type).toBe("boolean");
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
@@ -282,5 +284,13 @@ describe("the shipped example validates against the shipped schema", () => {
     const maxLinesResolution = resolveConfig(maxLines);
     expect(maxLinesResolution.config.sidebar.maxLines).toBe(DEFAULT_CONFIG.sidebar.maxLines);
     expect(maxLinesResolution.issues.join(" ")).toContain("sidebar.maxLines");
+
+    // The footer's Go panel flag is a boolean in the schema too, so a typo is
+    // rejected by the editor's validator and corrected loudly by the config.
+    const footerGo = { sidebar: { footer: { go: "yes" } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, footerGo, "")).not.toEqual([]);
+    const footerGoResolution = resolveConfig(footerGo);
+    expect(footerGoResolution.config.sidebar.footer.go).toBe(DEFAULT_CONFIG.sidebar.footer.go);
+    expect(footerGoResolution.issues.join(" ")).toContain("sidebar.footer.go");
   });
 });

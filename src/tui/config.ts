@@ -52,12 +52,23 @@ interface SidebarFooterConfig {
   /**
    * The footer's fixed lines. Empty by default since 0.8.1.
    *
-   * An explicitly empty list opts the footer slot out entirely. Only a
-   * non-empty list registers the slot: set the documented `▸ FLIGHT DECK` /
-   * `─────────────────` branding pair here to re-enable it. The two lists are
-   * independent, and the footer draws outside the rail's `maxLines` budget.
+   * An explicitly empty list removes the fixed lines; `go` can still claim the
+   * slot on its own. Set the documented two-line `▸ FLIGHT DECK` branding pair
+   * back here to re-enable it. The two lists are independent, and the footer
+   * draws outside the rail's `maxLines` budget.
    */
   readonly lines: readonly string[];
+  /**
+   * The live Go usage panel: three lines - Rolling, Weekly, Monthly - each with
+   * a bar, a percent, and a reset countdown. Off by default.
+   *
+   * Independent of `lines`, and it claims the footer slot on its own so the
+   * panel can sit under the rail with no fixed text. Turning it on starts the
+   * same account-wide poll the `go` row uses (one key, one quota), reads
+   * `OPENCODE_GO_API_KEY`, and draws a resting placeholder until the first
+   * poll lands - never a blank slot.
+   */
+  readonly go: boolean;
 }
 
 interface FooterConfig {
@@ -234,11 +245,11 @@ export const DEFAULT_SIDEBAR_LINES: readonly string[] = [];
  * The sidebar footer's default fixed lines.
  *
  * Empty since 0.8.1: a fresh install renders no footer text at all, so the
- * rail is the live rows and nothing else. The `▸ FLIGHT DECK` /
- * `─────────────────` branding pair is a documented opt-in — set
- * `sidebar.footer.lines` to the pair to re-enable it (see the README's
- * ⚙️ Configure section). An explicitly empty `sidebar.footer.lines` from a
- * config file removes the slot entirely.
+ * rail is the live rows and nothing else. The `▸ FLIGHT DECK` pair is a
+ * documented opt-in - set `sidebar.footer.lines` to the pair to re-enable it
+ * (see the README's Configure section). An explicitly empty
+ * `sidebar.footer.lines` from a config file removes the slot's fixed lines;
+ * `sidebar.footer.go` can still claim the slot on its own.
  */
 export const DEFAULT_SIDEBAR_FOOTER_LINES: readonly string[] = [];
 
@@ -298,7 +309,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
   sidebar: {
     enabled: true,
     lines: DEFAULT_SIDEBAR_LINES,
-    footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES },
+    footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES, go: false },
     rows: DEFAULT_SIDEBAR_ROWS,
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
@@ -420,12 +431,13 @@ function readLines(value: unknown, issues: string[], maxLines: number): readonly
 }
 
 /**
- * The sidebar footer's fixed lines — empty by default since 0.8.1.
+ * The sidebar footer's fixed lines - empty by default since 0.8.1.
  *
  * Unlike the top rail, an explicitly empty list is meaningful: it removes the
- * footer slot entirely. A non-empty list with no usable entries falls back to
- * the (empty) default, reported like every other bad value, and a runaway
- * footer is capped at `MAX_LINES` the way the top rail is.
+ * footer's fixed lines (the live Go panel, `sidebar.footer.go`, can still claim
+ * the slot). A non-empty list with no usable entries falls back to the (empty)
+ * default, reported like every other bad value, and a runaway footer is capped
+ * at `MAX_LINES` the way the top rail is.
  */
 function readSidebarFooterLines(value: unknown, issues: string[]): readonly string[] {
   return readLineList(value, issues, MAX_LINES, DEFAULT_SIDEBAR_FOOTER_LINES, "sidebar.footer.lines");
@@ -896,7 +908,13 @@ export function resolveConfig(options: unknown): ConfigResolution {
       sidebar: {
         enabled: readBoolean(sidebar.enabled, DEFAULT_CONFIG.sidebar.enabled, "sidebar.enabled", issues),
         lines,
-        footer: { lines: footerLines },
+        footer: {
+          lines: footerLines,
+          // Independent of `lines`, and off by default like the other opt-in
+          // machinery (`caution`, and the `go` row): the panel claims the slot
+          // on its own, so `lines: []` no longer means "no footer at all".
+          go: readBoolean(sidebarFooter.go, DEFAULT_CONFIG.sidebar.footer.go, "sidebar.footer.go", issues),
+        },
         rows,
         persist: readBoolean(sidebar.persist, DEFAULT_CONFIG.sidebar.persist, "sidebar.persist", issues),
         placeholder: readText(

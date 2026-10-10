@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-11
+
+### Added
+
+- A live Go usage panel in the sidebar footer slot, enabled with `sidebar.footer.go`. It draws three lines - `Rolling` (`5h`), `Weekly` (`1w`), `Monthly` (`1m`) - each with a ten-cell bar, a whole-number percent and a reset countdown, using the `context` row's bar glyphs and the `go` row's error tone (90% or more, or a non-`ok` window status). It is off by default, claims the footer slot even when `sidebar.footer.lines` is empty, and shares the `go` row's single account-wide poll of `OPENCODE_GO_API_KEY` rather than starting a second one. With no data yet it draws three dim resting lines, never a blank slot.
+
 ## [0.12.0] - 2026-10-09
 
 ### Changed
@@ -58,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in `ses` sidebar row: shows the full session id (the rail wraps it), and a mouse click copies that same full id and reports the outcome - a confirmation naming the id when the copy was sent, a distinct failure message when the terminal cannot take it. Off by default, and degrades gracefully when the terminal cannot copy.
 
+[0.13.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.4...v0.11.0
 [0.10.4]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.3...v0.10.4
