@@ -388,4 +388,91 @@ describe("go bridge", () => {
     expect(auth).not.toContain("Bearer store-key");
     bridge?.dispose();
   });
+
+  test("records no-client when the credential client cannot be asked", async () => {
+    await withEnvKey(undefined, async () => {
+      // No `client` at all: the lookup never had a chance.
+      const absent = fakeHost();
+      const absentBridge = startGoBridge(absent.host, { fetchJson: async () => FLAT }, 1_000);
+      await sleep(25);
+      expect(absentBridge?.usage).toBeUndefined();
+      expect(absentBridge?.reason).toBe("no-client");
+      expect(absent.state.value).toBeNull();
+      absentBridge?.dispose();
+
+      // A client whose `list` throws is the same "could not ask" case.
+      const thrown = fakeHostWithStore(async () => {
+        throw new Error("no store");
+      });
+      const thrownBridge = startGoBridge(thrown.host, { fetchJson: async () => FLAT }, 1_000);
+      await sleep(25);
+      expect(thrownBridge?.reason).toBe("no-client");
+      thrownBridge?.dispose();
+
+      // A non-array answer is not a usable list either.
+      const malformed = fakeHostWithStore(async () => "not-a-list");
+      const malformedBridge = startGoBridge(malformed.host, { fetchJson: async () => FLAT }, 1_000);
+      await sleep(25);
+      expect(malformedBridge?.reason).toBe("no-client");
+      malformedBridge?.dispose();
+    });
+  });
+
+  test("records no-key when the store answers but holds no usable entry", async () => {
+    await withEnvKey(undefined, async () => {
+      // A different integration's credential is not ours.
+      const other = fakeHostWithStore(async () => [entry("someone-else", true, keyValue("other-key"))]);
+      const otherBridge = startGoBridge(other.host, { fetchJson: async () => FLAT }, 1_000);
+      await sleep(25);
+      expect(otherBridge?.reason).toBe("no-key");
+      otherBridge?.dispose();
+
+      // An empty list is the same: the store answered, there was nothing in it.
+      const empty = fakeHostWithStore(async () => []);
+      const emptyBridge = startGoBridge(empty.host, { fetchJson: async () => FLAT }, 1_000);
+      await sleep(25);
+      expect(emptyBridge?.reason).toBe("no-key");
+      emptyBridge?.dispose();
+
+      // An injected accessor that yields nothing is no-key too.
+      const injected = fakeHost();
+      const injectedBridge = startGoBridge(
+        injected.host,
+        { key: () => undefined, fetchJson: async () => FLAT },
+        1_000,
+      );
+      await sleep(20);
+      expect(injectedBridge?.reason).toBe("no-key");
+      injectedBridge?.dispose();
+    });
+  });
+
+  test("records http when the request fails and parse when the body is unusable", async () => {
+    const http = fakeHost("stale");
+    const httpBridge = startGoBridge(
+      http.host,
+      { key: () => "k", fetchJson: async () => { throw new Error("refused"); } },
+      1_000,
+    );
+    await sleep(25);
+    expect(httpBridge?.usage).toBeUndefined();
+    expect(httpBridge?.reason).toBe("http");
+    httpBridge?.dispose();
+
+    const parse = fakeHost("stale");
+    const parseBridge = startGoBridge(parse.host, { key: () => "k", fetchJson: async () => "nonsense" }, 1_000);
+    await sleep(25);
+    expect(parseBridge?.usage).toBeUndefined();
+    expect(parseBridge?.reason).toBe("parse");
+    parseBridge?.dispose();
+  });
+
+  test("clears the reason once a value lands", async () => {
+    const { host } = fakeHost();
+    const bridge = startGoBridge(host, { key: () => "k", fetchJson: async () => FLAT }, 1_000);
+    await sleep(25);
+    expect(bridge?.usage?.windows.length).toBe(3);
+    expect(bridge?.reason).toBeUndefined();
+    bridge?.dispose();
+  });
 });
