@@ -137,12 +137,21 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 It is independent of `sidebar.lines`: setting your own top lines does not turn the footer on, and an explicitly empty `"lines": []` inside `sidebar.footer` keeps the slot off entirely. The footer never counts against `sidebar.maxLines`.
 
-`sidebar.footer.go` adds a **live Go usage panel** to that same footer slot: three lines - `Rolling` (`5h`), `Weekly` (`1w`), `Monthly` (`1m`) - each with a ten-cell bar, a whole-number percent, and a reset countdown. The bar uses the same glyphs as `context`, and a window at 90% or more - or reporting a non-`ok` status - turns its bar and number red, exactly like the `go` row. It is **off by default**; turning it on claims the footer slot even when `lines` is empty, and it reads `OPENCODE_GO_API_KEY` through the same account-wide poll the `go` row uses, so one poll serves both surfaces. Until the first poll lands it draws three dim resting lines rather than nothing.
+`sidebar.footer.go` adds a **live Go usage panel** to that same footer slot: three fixed-width lines - `ROLL` (`5h`), `WEEK` (`1w`), `MONTH` (`1m`) - each with a bar, a right-aligned percent, and a right-aligned reset countdown. Every row shares one column grid (label 6, meter 14, percent 4, reset 6, one space between columns), so the percent and the countdown sit on a shared axis and the bar never wanders. The bar uses the same glyphs as `context`, and a window at 90% or more - or reporting a non-`ok` status - turns its bar and number red, exactly like the `go` row. There is no header by default; the panel is three lines. It is **off by default**; turning it on claims the footer slot even when `lines` is empty, and it reads `OPENCODE_GO_API_KEY` through the same account-wide poll the `go` row uses, so one poll serves both surfaces. Until the first poll lands it draws three dim resting lines rather than nothing. The meter is static by default: it changes only when the percentage itself changes.
 
 ```jsonc
 // inside "sidebar":
 "footer": { "go": true }
 ```
+
+The look is configurable from the same key: `true` is the default look, and an object turns it on with a custom one (absent keys fall back to the defaults; a malformed value is reported and ignored, never a crash):
+
+```jsonc
+// inside "sidebar":
+"footer": { "go": { "header": false, "barWidth": 14, "labelWidth": 6, "percent": true, "reset": true, "sweep": false } }
+```
+
+`header` draws the dim `◈ OPENCODE GO` line above the meters; `barWidth` (1-40, default 14) and `labelWidth` (5-24, default 6) size the meter and label columns while the longest line stays within the sidebar; `percent` and `reset` toggle their columns; `sweep` lets a bright cell travel the fill (off by default).
 
 Optional styling lives under `style`: `style.lines` controls the fixed branding/separator lines (the opt-in footer pair when you set `sidebar.footer.lines`, or whatever `sidebar.lines` you set), `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
 

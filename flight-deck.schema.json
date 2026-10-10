@@ -49,9 +49,51 @@
               "description": "The footer's fixed lines, in order. Empty by default since 0.8.1 - set the documented `▸ FLIGHT DECK` pairing here to re-enable it. Independent of `sidebar.lines`, so setting your own top lines does not turn the footer on. An explicit empty array removes the fixed lines (and never registers the slot on its own; `go` can still claim it)."
             },
             "go": {
-              "type": "boolean",
               "default": false,
-              "description": "Draw the live Go usage panel under the footer's fixed lines: three lines - `Rolling`, `Weekly`, `Monthly` - each with a ten-cell bar, a whole-number percent and a reset countdown, read from Zen Go usage via OPENCODE_GO_API_KEY. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty."
+              "description": "Draw the live Go usage panel under the footer's fixed lines: three fixed-width lines - ROLL (5h), WEEK (1w), MONTH (1m) - each with a bar, a right-aligned percent and a right-aligned reset countdown, read from Zen Go usage via OPENCODE_GO_API_KEY. true enables with the default look (no header, 14-cell bar, 6-wide labels, both columns, static meter); an object with header, barWidth, labelWidth, percent, reset and sweep enables with a custom look. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty.",
+              "anyOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "header": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Draw the dim OPENCODE GO header above the three meters. Off by default; the panel is three lines unless this is true."
+                    },
+                    "barWidth": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 40,
+                      "default": 14,
+                      "description": "Cells in the panel meter. Honoured while the longest line stays within the sidebar width; capped rather than wrapped."
+                    },
+                    "labelWidth": {
+                      "type": "integer",
+                      "minimum": 5,
+                      "maximum": 24,
+                      "default": 6,
+                      "description": "Width of the panel label column holding ROLL, WEEK and MONTH. Left-aligned and shared by all three rows."
+                    },
+                    "percent": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Draw the right-aligned percent column beside the meter. Turn it off to show only the bar and the countdown."
+                    },
+                    "reset": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Draw the right-aligned reset countdown column. Turn it off to hide the time to relief."
+                    },
+                    "sweep": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Let a bright cell sweep the fill while the ticker runs. Off by default: the bar is static and changes only when the percentage itself changes."
+                    }
+                  }
+                }
+              ]
             }
           }
         },

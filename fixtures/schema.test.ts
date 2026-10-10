@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, resolveConfig } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, DEFAULT_GO_PANEL_LOOK, resolveConfig } from "../src/tui/config.js";
 import { parseJsonc } from "../src/tui/file-config.js";
 import { STAT_FIELDS } from "../src/tui/stats.js";
 
@@ -43,7 +43,22 @@ describe("the schema describes the real config", () => {
       ...DEFAULT_CONFIG.sidebar.footer.lines,
     ]);
     expect(props["sidebar"]!.properties.footer.properties.go.default).toBe(DEFAULT_CONFIG.sidebar.footer.go);
-    expect(props["sidebar"]!.properties.footer.properties.go.type).toBe("boolean");
+    expect(props["sidebar"]!.properties.footer.properties.go.default).toBe(false);
+    // Boolean or object: `true` keeps the default look, an object customises it.
+    const goBranches = props["sidebar"]!.properties.footer.properties.go.anyOf as Array<any>;
+    expect(goBranches.some((branch) => branch.type === "boolean")).toBe(true);
+    const goObject = goBranches.find((branch) => branch.type === "object");
+    expect(goObject.additionalProperties).toBe(false);
+    expect(goObject.properties.header.default).toBe(DEFAULT_GO_PANEL_LOOK.header);
+    expect(goObject.properties.header.default).toBe(false);
+    expect(goObject.properties.barWidth.default).toBe(DEFAULT_GO_PANEL_LOOK.barWidth);
+    expect(goObject.properties.barWidth.default).toBe(14);
+    expect(goObject.properties.labelWidth.default).toBe(DEFAULT_GO_PANEL_LOOK.labelWidth);
+    expect(goObject.properties.labelWidth.default).toBe(6);
+    expect(goObject.properties.percent.default).toBe(DEFAULT_GO_PANEL_LOOK.percent);
+    expect(goObject.properties.reset.default).toBe(DEFAULT_GO_PANEL_LOOK.reset);
+    expect(goObject.properties.sweep.default).toBe(DEFAULT_GO_PANEL_LOOK.sweep);
+    expect(goObject.properties.sweep.default).toBe(false);
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
@@ -159,6 +174,7 @@ describe("the example config points at the schema", () => {
 // may ship at runtime.
 interface SchemaNode {
   readonly type?: string;
+  readonly anyOf?: readonly SchemaNode[];
   readonly properties?: Record<string, SchemaNode>;
   readonly additionalProperties?: boolean | SchemaNode;
   readonly items?: SchemaNode;
@@ -174,6 +190,14 @@ interface SchemaNode {
 
 function schemaErrors(node: SchemaNode, value: unknown, path: string): string[] {
   const at = path === "" ? "config" : path;
+  if (node.anyOf !== undefined) {
+    // Valid when any branch validates cleanly; otherwise the first branch's
+    // errors, so the message still names the offending key.
+    for (const branch of node.anyOf) {
+      if (schemaErrors(branch, value, path).length === 0) return [];
+    }
+    return schemaErrors(node.anyOf[0] as SchemaNode, value, path);
+  }
   if (node.enum !== undefined) {
     return (node.enum as readonly unknown[]).includes(value) ? [] : [`${at} is not one of the allowed values`];
   }
@@ -285,12 +309,24 @@ describe("the shipped example validates against the shipped schema", () => {
     expect(maxLinesResolution.config.sidebar.maxLines).toBe(DEFAULT_CONFIG.sidebar.maxLines);
     expect(maxLinesResolution.issues.join(" ")).toContain("sidebar.maxLines");
 
-    // The footer's Go panel flag is a boolean in the schema too, so a typo is
-    // rejected by the editor's validator and corrected loudly by the config.
+    // The footer's Go panel flag is a boolean-or-object in the schema too, so
+    // a typo is rejected by the editor's validator and corrected loudly by
+    // the config.
     const footerGo = { sidebar: { footer: { go: "yes" } } };
     expect(schemaErrors(schema as unknown as SchemaNode, footerGo, "")).not.toEqual([]);
     const footerGoResolution = resolveConfig(footerGo);
     expect(footerGoResolution.config.sidebar.footer.go).toBe(DEFAULT_CONFIG.sidebar.footer.go);
     expect(footerGoResolution.issues.join(" ")).toContain("sidebar.footer.go");
+
+    // The object form validates: a full look passes, an unknown key or a
+    // mistyped knob does not, and the config still normalises safely.
+    const goObject = { sidebar: { footer: { go: { header: true, barWidth: 10, labelWidth: 8 } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goObject, "")).toEqual([]);
+    expect(resolveConfig(goObject).issues).toEqual([]);
+    const goExtra = { sidebar: { footer: { go: { header: true, colour: "red" } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goExtra, "")).not.toEqual([]);
+    const goWide = { sidebar: { footer: { go: { barWidth: 100 } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goWide, "")).not.toEqual([]);
+    expect(resolveConfig(goWide).issues.join(" ")).toContain("sidebar.footer.go.barWidth");
   });
 });

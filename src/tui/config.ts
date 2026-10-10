@@ -48,6 +48,41 @@ interface SidebarConfig {
   readonly maxLines: number;
 }
 
+/**
+ * The live Go panel's look, when `sidebar.footer.go` is an object.
+ *
+ * An object enables the panel exactly like `true`, with these knobs replacing
+ * the defaults. Absent keys fall back to the defaults below; a malformed value
+ * is reported and ignored, never a crash.
+ */
+export interface GoPanelLook {
+  /** Draw the dim `◈ OPENCODE GO` header above the three meters. Default `false`. */
+  readonly header: boolean;
+  /** Cells in the panel meter. Default `14`. */
+  readonly barWidth: number;
+  /** Width of the panel label column (`ROLL`/`WEEK`/`MONTH`). Default `6`. */
+  readonly labelWidth: number;
+  /** Draw the right-aligned percent column. Default `true`. */
+  readonly percent: boolean;
+  /** Draw the right-aligned reset countdown column. Default `true`. */
+  readonly reset: boolean;
+  /**
+   * Let a bright cell sweep the fill while the ticker runs. Default `false`:
+   * the bar is static and changes only when the percentage itself changes.
+   */
+  readonly sweep: boolean;
+}
+
+/** The panel look `true` enables: no header, static meter, both columns on. */
+export const DEFAULT_GO_PANEL_LOOK: GoPanelLook = {
+  header: false,
+  barWidth: 14,
+  labelWidth: 6,
+  percent: true,
+  reset: true,
+  sweep: false,
+};
+
 interface SidebarFooterConfig {
   /**
    * The footer's fixed lines. Empty by default since 0.8.1.
@@ -59,16 +94,20 @@ interface SidebarFooterConfig {
    */
   readonly lines: readonly string[];
   /**
-   * The live Go usage panel: three lines - Rolling, Weekly, Monthly - each with
-   * a bar, a percent, and a reset countdown. Off by default.
+   * The live Go usage panel: three fixed-width lines - ROLL (5h), WEEK (1w),
+   * MONTH (1m) - each with a bar, a right-aligned percent, and a right-aligned
+   * reset countdown. Off by default.
    *
-   * Independent of `lines`, and it claims the footer slot on its own so the
-   * panel can sit under the rail with no fixed text. Turning it on starts the
-   * same account-wide poll the `go` row uses (one key, one quota), reads
-   * `OPENCODE_GO_API_KEY`, and draws a resting placeholder until the first
-   * poll lands - never a blank slot.
+   * `true` enables it with the default look (no header, static meter, both
+   * columns); an object enables it with a custom look (`header`, `barWidth`,
+   * `labelWidth`, `percent`, `reset`, `sweep`, each falling back to its
+   * default). Independent of `lines`, and it claims the footer slot on its own
+   * so the panel can sit under the rail with no fixed text. Turning it on
+   * starts the same account-wide poll the `go` row uses (one key, one quota),
+   * reads `OPENCODE_GO_API_KEY`, and draws a resting placeholder until the
+   * first poll lands - never a blank slot.
    */
-  readonly go: boolean;
+  readonly go: boolean | GoPanelLook;
 }
 
 interface FooterConfig {
@@ -441,6 +480,46 @@ function readLines(value: unknown, issues: string[], maxLines: number): readonly
  */
 function readSidebarFooterLines(value: unknown, issues: string[]): readonly string[] {
   return readLineList(value, issues, MAX_LINES, DEFAULT_SIDEBAR_FOOTER_LINES, "sidebar.footer.lines");
+}
+
+/**
+ * The sidebar footer Go panel: `true`/`false` or a look object.
+ *
+ * A boolean keeps working exactly as before (`true` enables with the default
+ * look). An object enables with a custom look: absent keys fall back to
+ * {@link DEFAULT_GO_PANEL_LOOK}, a malformed value is reported and ignored,
+ * and unknown keys are ignored forward-compatibly. Anything else falls back
+ * to `false`, loudly, like every other bad option. Never throws.
+ */
+function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
+  if (value === undefined) return DEFAULT_CONFIG.sidebar.footer.go;
+  if (typeof value === "boolean") return value;
+  if (!isRecord(value)) {
+    issues.push("sidebar.footer.go must be true, false or an object; using false");
+    return false;
+  }
+  return {
+    header: readBoolean(value["header"], DEFAULT_GO_PANEL_LOOK.header, "sidebar.footer.go.header", issues),
+    barWidth: readNumber(
+      value["barWidth"],
+      DEFAULT_GO_PANEL_LOOK.barWidth,
+      "sidebar.footer.go.barWidth",
+      issues,
+      1,
+      40,
+    ),
+    labelWidth: readNumber(
+      value["labelWidth"],
+      DEFAULT_GO_PANEL_LOOK.labelWidth,
+      "sidebar.footer.go.labelWidth",
+      issues,
+      5,
+      24,
+    ),
+    percent: readBoolean(value["percent"], DEFAULT_GO_PANEL_LOOK.percent, "sidebar.footer.go.percent", issues),
+    reset: readBoolean(value["reset"], DEFAULT_GO_PANEL_LOOK.reset, "sidebar.footer.go.reset", issues),
+    sweep: readBoolean(value["sweep"], DEFAULT_GO_PANEL_LOOK.sweep, "sidebar.footer.go.sweep", issues),
+  };
 }
 
 /**
@@ -913,7 +992,9 @@ export function resolveConfig(options: unknown): ConfigResolution {
           // Independent of `lines`, and off by default like the other opt-in
           // machinery (`caution`, and the `go` row): the panel claims the slot
           // on its own, so `lines: []` no longer means "no footer at all".
-          go: readBoolean(sidebarFooter.go, DEFAULT_CONFIG.sidebar.footer.go, "sidebar.footer.go", issues),
+          // `true` enables with the default look; an object enables with a
+          // custom one.
+          go: readFooterGo(sidebarFooter.go, issues),
         },
         rows,
         persist: readBoolean(sidebar.persist, DEFAULT_CONFIG.sidebar.persist, "sidebar.persist", issues),

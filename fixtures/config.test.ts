@@ -222,10 +222,81 @@ describe("the sidebar footer", () => {
     expect(off.issues).toEqual([]);
     expect(off.config.sidebar.footer.go).toBe(false);
 
-    // A non-boolean falls back loudly, like every other option.
+    // A non-boolean non-object falls back loudly, like every other option.
     const bad = resolveConfig({ sidebar: { footer: { go: "yes" } } });
     expect(bad.config.sidebar.footer.go).toBe(false);
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go");
+  });
+
+  test("reads the footer's go panel look object, absent keys falling back to defaults", () => {
+    const empty = resolveConfig({ sidebar: { footer: { go: {} } } });
+    expect(empty.issues).toEqual([]);
+    expect(empty.config.sidebar.footer.go).toEqual({
+      header: false,
+      barWidth: 14,
+      labelWidth: 6,
+      percent: true,
+      reset: true,
+      sweep: false,
+    });
+
+    const custom = resolveConfig({
+      sidebar: { footer: { go: { header: true, barWidth: 10, labelWidth: 8, percent: false, reset: false, sweep: true } } },
+    });
+    expect(custom.issues).toEqual([]);
+    expect(custom.config.sidebar.footer.go).toEqual({
+      header: true,
+      barWidth: 10,
+      labelWidth: 8,
+      percent: false,
+      reset: false,
+      sweep: true,
+    });
+
+    // Partial objects fill the rest with defaults, cleanly.
+    const partial = resolveConfig({ sidebar: { footer: { go: { header: true } } } });
+    expect(partial.issues).toEqual([]);
+    expect(partial.config.sidebar.footer.go).toEqual({
+      header: true,
+      barWidth: 14,
+      labelWidth: 6,
+      percent: true,
+      reset: true,
+      sweep: false,
+    });
+  });
+
+  test("reports a malformed go look value and ignores it, never crashing", () => {
+    const bad = resolveConfig({
+      sidebar: {
+        footer: { go: { header: "yes", barWidth: "big", labelWidth: -3, percent: 1, reset: null, sweep: "often" } },
+      },
+    });
+    expect(bad.config.sidebar.footer.go).toEqual({
+      header: false,
+      barWidth: 14,
+      labelWidth: 6,
+      percent: true,
+      reset: true,
+      sweep: false,
+    });
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.header");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.barWidth");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labelWidth");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.percent");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.reset");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.sweep");
+
+    // Out-of-range numbers fall back too, loudly.
+    const range = resolveConfig({ sidebar: { footer: { go: { barWidth: 100, labelWidth: 100 } } } });
+    expect(range.config.sidebar.footer.go).toMatchObject({ barWidth: 14, labelWidth: 6 });
+    expect(range.issues.join(" ")).toContain("sidebar.footer.go.barWidth");
+    expect(range.issues.join(" ")).toContain("sidebar.footer.go.labelWidth");
+
+    // Unknown keys are ignored forward-compatibly, with no issue.
+    const future = resolveConfig({ sidebar: { footer: { go: { header: true, colour: "red" } } } });
+    expect(future.config.sidebar.footer.go).toMatchObject({ header: true });
+    expect(future.issues).toEqual([]);
   });
 
   test("replaces the empty default with an explicit list", () => {

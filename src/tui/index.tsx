@@ -202,11 +202,14 @@ export default Plugin.define({
     // the host's own events. It is skipped entirely when nothing on the rail
     // animates, and `refresh: 0` opts out regardless. The tick has to live in the
     // host's reactive graph rather than ours, or it re-renders nothing at all.
-    // The footer's Go panel animates too (its sweep rides this frame), so its
-    // being enabled is reason enough for a ticker on its own.
+    // The footer's Go panel draws a clock-derived countdown, so its being
+    // enabled is reason enough for a ticker on its own (its sweep rides this
+    // frame only when the look opts in; by default the bar is static).
+    const goOption = config.sidebar.footer.go;
+    const goPanelEnabled = goOption === true || (typeof goOption === "object" && goOption !== null);
     const animated =
       config.sidebar.enabled &&
-      (config.sidebar.footer.go ||
+      (goPanelEnabled ||
         config.sidebar.rows.some((name) => ANIMATED_FIELDS.some((field) => field === name)));
     let spinnerNeeded = false;
     const ticker = startTicker(context, animated ? config.refresh : 0, () => spinnerNeeded);
@@ -225,13 +228,14 @@ export default Plugin.define({
     // wider lines, so it wants the same bridge: either surface is reason enough
     // to start the one poll, and neither starts it alone.
     const wantGo =
-      config.sidebar.enabled && (config.sidebar.rows.includes("go") || config.sidebar.footer.go);
+      config.sidebar.enabled && (config.sidebar.rows.includes("go") || goPanelEnabled);
     const goBridge = wantGo ? startGoBridge(context) : undefined;
 
-    // The footer panel's geometry, resolved once from the same config the rail
-    // reads, so a narrowed `layout.barWidth` or `layout.labelWidth` moves the
-    // panel's lines with the rows instead of leaving them behind.
-    const goPanelLayout = { labelWidth: config.layout.labelWidth, barWidth: config.layout.barWidth };
+    // The footer panel's look, resolved once from the footer option itself, so
+    // `sidebar.footer.go` edits change the panel without touching the rows.
+    // `true` passes nothing (the panel's own defaults); an object passes its
+    // look straight through for the panel to re-read defensively.
+    const goPanelLayout = goOption === true ? undefined : (typeof goOption === "object" && goOption !== null ? goOption : undefined);
 
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
@@ -370,7 +374,7 @@ export default Plugin.define({
       );
     }
 
-    if (config.sidebar.enabled && (config.sidebar.footer.lines.length > 0 || config.sidebar.footer.go)) {
+    if (config.sidebar.enabled && (config.sidebar.footer.lines.length > 0 || goPanelEnabled)) {
       releases.push(
         context.ui.slot({
           // The sidebar footer: a separate host slot below the rows. The
@@ -398,7 +402,7 @@ export default Plugin.define({
               goBridge === undefined
                 ? "no-bridge"
                 : (goBridge.reason ?? (goUsage === undefined ? "pending" : undefined));
-            const panel = config.sidebar.footer.go
+            const panel = goPanelEnabled
               ? goPanelLines(goUsage, Date.now(), goPanelLayout, ticker?.frame ?? 0, goReason)
               : [];
             return (

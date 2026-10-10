@@ -79,14 +79,25 @@
     "footer": {
       "lines": [],
 
-      // The live Go usage panel: three lines - Rolling, Weekly, Monthly -
-      // each with a ten-cell bar, a whole-number percent, and a reset
-      // countdown. Reads Zen Go usage from OPENCODE_GO_API_KEY (the same
-      // account-wide poll the "go" row uses, one poll for both surfaces). A
-      // window at 90% or more - or reporting a non-ok status - turns its bar
-      // and number red. Off by default; turning it on claims this footer slot
-      // even with no fixed lines above, and draws three dim resting lines
-      // until the first poll lands.
+      // The live Go usage panel: three fixed-width lines - ROLL (5h), WEEK
+      // (1w), MONTH (1m) - each with a bar, a right-aligned percent, and a
+      // right-aligned reset countdown. Reads Zen Go usage from
+      // OPENCODE_GO_API_KEY (the same account-wide poll the "go" row uses,
+      // one poll for both surfaces). A window at 90% or more - or reporting
+      // a non-ok status - turns its bar and number red. Off by default;
+      // turning it on claims this footer slot even with no fixed lines
+      // above, and draws three dim resting lines until the first poll lands.
+      //
+      // `false` is off; `true` is on with the default look (no header,
+      // 14-cell bar, 6-wide labels, both columns, static meter). An object
+      // turns it on with a custom look - absent keys fall back to those
+      // defaults:
+      //
+      //   "go": { "header": false, "barWidth": 14, "labelWidth": 6, "percent": true, "reset": true, "sweep": false }
+      //
+      // `header` draws the dim OPENCODE GO line above the meters; `sweep`
+      // lets a bright cell travel the fill (off by default: the bar moves
+      // only when the percentage itself moves).
       "go": false
     },
 
