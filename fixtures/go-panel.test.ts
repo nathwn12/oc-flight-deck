@@ -10,13 +10,14 @@ import {
 import type { GoUsage } from "../src/tui/go-usage.js";
 
 // Every glyph is an escape so this file stays ASCII: the em dash is the
-// shipped placeholder, the diamond is the header mark, the bar cells are the
-// panel's own heavy/light rule, and the breathing mark is built from char
-// codes so no literal ring ever lands in the source.
+// shipped placeholder, the diamond is the header mark, the meter is one
+// light-rule cell throughout - fill and track told apart by tone alone - and
+// the breathing mark is built from char codes so no literal ring ever lands
+// in the source.
 const DASH = "\u2014";
 const DIAMOND = "\u25C8";
-const FULL = "\u2501";
-const EMPTY = "\u2500";
+const CELL = "\u2500";
+const SWEEP = "info";
 const REST = String.fromCharCode(0x25cb);
 const MID = String.fromCharCode(0x25ce);
 const LIVE = String.fromCharCode(0x25cf);
@@ -38,14 +39,49 @@ function labelCell(label: string, width: number = PANEL_LABEL): string {
   return `${label.padEnd(width)} `;
 }
 
-/** The exact meter `goPanelLines` draws, built here so the expectation is explicit. */
-function bar(filled: number, width: number = PANEL_BAR): string {
-  return `${FULL.repeat(filled)}${EMPTY.repeat(width - filled)}`;
+/**
+ * The exact meter `goPanelLines` draws: one light-rule cell across the whole
+ * width. The text carries no fill information - fill and track are the same
+ * glyph, told apart by tone in `segments` - so `filled` only documents which
+ * row the expectation belongs to, and the fill extent is asserted through
+ * `fillCells` below.
+ */
+function bar(_filled: number, width: number = PANEL_BAR): string {
+  return CELL.repeat(width);
+}
+
+/** The tone each of the meter's cells draws in, read from `segments` in order. */
+function meterTones(
+  line: { text: string; segments?: readonly { text: string; tone?: string }[] },
+  width: number = PANEL_BAR,
+): readonly (string | undefined)[] {
+  const segments = line.segments ?? [];
+  const joined = segments.map((segment) => segment.text).join("");
+  const start = joined.indexOf(CELL);
+  if (start < 0) return [];
+  const tones: (string | undefined)[] = [];
+  for (const segment of segments) {
+    for (let i = 0; i < segment.text.length; i += 1) tones.push(segment.tone);
+  }
+  const cells: (string | undefined)[] = [];
+  for (let i = start; cells.length < width && start + cells.length < joined.length; i += 1) {
+    if (joined[i] !== CELL) break;
+    cells.push(tones[i]);
+  }
+  return cells;
+}
+
+/** How many of the meter's cells draw bright (anything but the dim track). */
+function fillCount(
+  line: { text: string; segments?: readonly { text: string; tone?: string }[] },
+  width: number = PANEL_BAR,
+): number {
+  return meterTones(line, width).filter((tone) => tone !== "subdued").length;
 }
 
 /** The empty track the resting placeholder keeps. */
 function track(width: number = PANEL_BAR): string {
-  return EMPTY.repeat(width);
+  return CELL.repeat(width);
 }
 
 /** Right-aligned percent column: one-space gap plus the value padded to 4. */
@@ -75,10 +111,10 @@ function firstMark(nowMs: number = NOW, blinkMs: number = BLINK_MS): string {
 const OTHER_MARK = "  ";
 
 /**
- * The filled-cell index of the panel's bright sweep cell on the first meter
- * line, or `-1` when there is none. Counts `FULL` cells before the run toned
- * `default`. With no header the first meter line is index 0; with
- * `header: true` it is index 1.
+ * The filled-cell index of the panel's sweep highlight on the first meter
+ * line, or `-1` when there is none. Counts meter cells before the run toned
+ * with the sweep highlight. With no header the first meter line is index 0;
+ * with `header: true` it is index 1.
  */
 function brightCell(usage: GoUsage, frame?: number, layout?: unknown): number {
   const look = { sweep: true, ...(typeof layout === "object" && layout !== null ? layout : {}) };
@@ -87,19 +123,19 @@ function brightCell(usage: GoUsage, frame?: number, layout?: unknown): number {
   const segments = first?.segments ?? [];
   let index = 0;
   for (const segment of segments) {
-    if (segment.tone === "default") return index;
-    for (const char of segment.text) if (char === FULL) index += 1;
+    if (segment.tone === SWEEP) return index;
+    for (const char of segment.text) if (char === CELL) index += 1;
   }
   return -1;
 }
 
-/** Bright cell without opting in: the default static meter never has one. */
+/** Sweep highlight without opting in: the default static meter never has one. */
 function staticBrightCell(usage: GoUsage, frame?: number): number {
   const segments = goPanelLines(usage, NOW, undefined, frame)[0]?.segments ?? [];
   let index = 0;
   for (const segment of segments) {
-    if (segment.tone === "default") return index;
-    for (const char of segment.text) if (char === FULL) index += 1;
+    if (segment.tone === SWEEP) return index;
+    for (const char of segment.text) if (char === CELL) index += 1;
   }
   return -1;
 }
@@ -277,19 +313,34 @@ describe("go panel lines", () => {
     expect(flagged[2]).toEqual({ text: `${bar(10)}${percentCell("95%")}`, tone: "error" });
     expect(flagged[3]).toEqual({ text: countdownCell("1h"), tone: "subdued" });
 
-    // The healthy neighbour is untouched past the mark column, so the panel
-    // reads as one instrument with a problem.
-    expect((lines[1]?.segments ?? []).slice(1).every((segment) => segment.tone === undefined)).toBe(true);
-    expect(lines[1]?.text).toBe(`${OTHER_MARK}${labelCell("weekly")}${bar(5)}${percentCell("50%")}`);
+    // The healthy neighbour keeps the line's own colour on the label and the
+    // percent, while its meter splits bright fill over dim track: one glyph
+    // throughout, told apart by tone alone.
+    const weekly = lines[1];
+    expect(weekly?.segments).toEqual([
+      { text: OTHER_MARK },
+      { text: labelCell("weekly") },
+      { text: CELL.repeat(5), tone: "default" },
+      { text: CELL.repeat(5), tone: "subdued" },
+      { text: percentCell("50%") },
+    ]);
+    expect(weekly?.text).toBe(`${OTHER_MARK}${labelCell("weekly")}${bar(5)}${percentCell("50%")}`);
   });
 
   test("flags a window reporting a non-ok status, even at a calm ratio", () => {
     const throttled = goPanelLines({ windows: [{ id: "1m", ratio: 0.1, status: "throttled" }] }, NOW);
     expect(throttled[2]?.segments?.some((segment) => segment.tone === "error")).toBe(true);
 
-    // Past the mark column, the calm window is untouched.
+    // Past the mark column, the calm window draws a bright fill over a dim
+    // track while the label and percent keep the row's own colour.
     const ok = goPanelLines({ windows: [{ id: "1m", ratio: 0.1, status: "ok" }] }, NOW);
-    expect(ok[2]?.segments?.slice(1).every((segment) => segment.tone === undefined)).toBe(true);
+    expect(ok[2]?.segments).toEqual([
+      { text: OTHER_MARK },
+      { text: labelCell("monthly") },
+      { text: CELL, tone: "default" },
+      { text: CELL.repeat(9), tone: "subdued" },
+      { text: percentCell("10%") },
+    ]);
   });
 
   test("renders three dim resting lines with no usage and no header", () => {
@@ -391,7 +442,7 @@ describe("go panel lines", () => {
     ]);
     // One shared axis past the rename, and still inside the sidebar budget.
     for (const line of lines) {
-      expect(line.text.indexOf(EMPTY)).toBe(18 + 1);
+      expect(line.text.indexOf(CELL)).toBe(18 + 1);
       expect(line.text.length).toBeLessThanOrEqual(WIDTH_BUDGET);
     }
 
@@ -517,12 +568,59 @@ describe("go panel lines", () => {
   });
 
   test("fills the meter in proportion to the ratio, rounded to whole cells", () => {
-    const text = (ratio: number) => goPanelLines({ windows: [{ id: "5h", ratio }] }, NOW)[0]?.text;
+    const line = (ratio: number) => goPanelLines({ windows: [{ id: "5h", ratio }] }, NOW)[0];
+    const text = (ratio: number) => line(ratio)?.text;
     expect(text(0)).toBe(`${firstMark()}${labelCell("rolling")}${bar(0)}${percentCell("0%")}`);
     expect(text(0.05)).toBe(`${firstMark()}${labelCell("rolling")}${bar(1)}${percentCell("5%")}`);
     expect(text(0.5)).toBe(`${firstMark()}${labelCell("rolling")}${bar(5)}${percentCell("50%")}`);
     expect(text(0.99)).toBe(`${firstMark()}${labelCell("rolling")}${bar(10)}${percentCell("99%")}`);
     expect(text(1)).toBe(`${firstMark()}${labelCell("rolling")}${bar(10)}${percentCell("100%")}`);
+    // The text is one glyph throughout, so the extent lives in the tones:
+    // bright cells are the fill, dim cells the track.
+    expect(fillCount(line(0) ?? { text: "" })).toBe(0);
+    expect(fillCount(line(0.05) ?? { text: "" })).toBe(1);
+    expect(fillCount(line(0.5) ?? { text: "" })).toBe(5);
+    expect(fillCount(line(0.99) ?? { text: "" })).toBe(10);
+    expect(fillCount(line(1) ?? { text: "" })).toBe(10);
+  });
+
+  test("draws the whole meter in one glyph, fill from track by tone alone", () => {
+    // The pixel-alignment fix: every meter cell is the same light-rule glyph,
+    // so rows can never differ in advance width; the fill reads bright and
+    // the track dim. The owner's probe triple: 55%, 22%, 11%.
+    const usage: GoUsage = {
+      windows: [
+        { id: "5h", ratio: 0.55 },
+        { id: "1w", ratio: 0.22 },
+        { id: "1m", ratio: 0.11 },
+      ],
+    };
+    const lines = goPanelLines(usage, NOW);
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      const joined = (line?.segments ?? []).map((segment) => segment.text).join("");
+      const start = joined.indexOf(CELL);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const meter = joined.slice(start, start + PANEL_BAR);
+      // Exactly one distinct glyph across fill and track alike...
+      expect(new Set([...meter])).toEqual(new Set([CELL]));
+      // ...still exactly barWidth cells wide on every row.
+      expect([...meter]).toHaveLength(PANEL_BAR);
+      expect(meterTones(line ?? { text: "" }, PANEL_BAR)).toHaveLength(PANEL_BAR);
+    }
+    // The bright extent still matches each ratio: 6, 2 and 1 of 10 cells.
+    expect(fillCount(lines[0] ?? { text: "" })).toBe(6);
+    expect(fillCount(lines[1] ?? { text: "" })).toBe(2);
+    expect(fillCount(lines[2] ?? { text: "" })).toBe(1);
+    expect(meterTones(lines[0] ?? { text: "" }, PANEL_BAR)).toEqual([
+      ...Array<string>(6).fill("default"),
+      ...Array<string>(4).fill("subdued"),
+    ]);
+
+    // And at a custom width the bar is still exactly that many cells.
+    const wide = goPanelLines({ windows: [{ id: "5h", ratio: 0.5 }] }, NOW, { barWidth: 14 })[0];
+    expect(meterTones(wide ?? { text: "" }, 14)).toHaveLength(14);
+    expect(fillCount(wide ?? { text: "" }, 14)).toBe(7);
   });
 
   test("takes the warning role at 60% and the error role at 90%", () => {
@@ -532,10 +630,10 @@ describe("go panel lines", () => {
         (segment) => segment.tone,
       );
 
-    // 60% is the warning band; below it the row keeps its own colour.
+    // 60% is the warning band; below it the fill is bright but severity-free.
     expect(tones(0.6).some((tone) => tone === "warning")).toBe(true);
     expect(tones(0.6).some((tone) => tone === "error")).toBe(false);
-    expect(tones(0.59).every((tone) => tone === undefined)).toBe(true);
+    expect(tones(0.59).some((tone) => tone === "warning" || tone === "error")).toBe(false);
 
     // 90% is the error band (./go-usage.js's GO_ERROR_RATIO), not warning.
     expect(tones(0.9).some((tone) => tone === "error")).toBe(true);
@@ -568,11 +666,11 @@ describe("go panel lines", () => {
     expect(goPanelLines(usage, NOW, undefined, 3)[0]?.text).toBe(
       `${firstMark()}${labelCell("rolling")}${bar(5)}${percentCell("50%")}`,
     );
-    expect(goPanelLines(usage, NOW, { sweep: false }, 3)[0]?.segments?.some((s) => s.tone === "default")).toBe(
+    expect(goPanelLines(usage, NOW, { sweep: false }, 3)[0]?.segments?.some((s) => s.tone === SWEEP)).toBe(
       false,
     );
 
-    // Opted in: one bright cell travels the fill and wraps inside it.
+    // Opted in: one highlight cell travels the fill and wraps inside it.
     expect(brightCell(usage, 0)).toBe(0);
     expect(brightCell(usage, 1)).toBe(1);
     expect(brightCell(usage, 4)).toBe(4);

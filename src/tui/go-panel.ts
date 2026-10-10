@@ -18,7 +18,9 @@
 //
 // Every glyph is written as a `\uXXXX` escape or a `String.fromCharCode`
 // so this source stays ASCII whatever the write path does with it: U+25C8 is
-// the header diamond, U+2501 is the filled cell, U+2500 the track, and
+// the header diamond, U+2500 is the meter's single cell - fill and track
+// alike, told apart by tone alone so the bar's right edge can never drift
+// row to row the way two different advance widths would - and
 // U+25CB/U+25CE/U+25CF are the breathing mark's rest/swell/live rings. The
 // bar is capped so the longest line stays within the ~40-column sidebar and
 // can never overflow or wrap.
@@ -63,10 +65,25 @@ const MARK_LIVE = String.fromCharCode(0x25cf);
 const MARK_FRAMES: readonly string[] = [MARK_REST, MARK_MID, MARK_LIVE, MARK_MID];
 /** Cells the mark column occupies: the glyph plus one space. */
 const MARK_WIDTH = 2;
-/** U+2501 BOX DRAWINGS HEAVY HORIZONTAL: one filled cell of the progress bar. */
-const FILLED = "\u2501";
-/** U+2500 BOX DRAWINGS LIGHT HORIZONTAL: one track cell behind the fill. */
-const TRACK = "\u2500";
+/**
+ * U+2500 BOX DRAWINGS LIGHT HORIZONTAL: the panel's one and only meter cell.
+ *
+ * Fill and track are the SAME glyph - the fill draws bright (the window's
+ * tone, or the theme's primary text when calm) and the track draws dim
+ * (`subdued`), so the two never differ in advance width and every row's right
+ * edge lands on the same pixel. The light line is the panel's existing
+ * aesthetic; the contrast that the heavy fill used to carry now lives in the
+ * tone alone.
+ */
+const CELL = "\u2500";
+/**
+ * The sweep highlight's tone: the travelling cell over the fill.
+ *
+ * `default` would vanish into a calm fill - the calm fill IS the theme's
+ * primary text - so the highlight is the neutral `info` tint instead, which
+ * stays visible over a bright, warning, or error fill alike.
+ */
+const SWEEP_TONE: StyleColor = "info";
 
 /**
  * Fraction of a window at which the panel switches to the warning role.
@@ -495,25 +512,26 @@ function restingLine(
     trackCells = Math.max(0, cells - reason.length - 1);
   }
   const tail =
-    TRACK.repeat(trackCells) +
+    CELL.repeat(trackCells) +
     (look.showPercent ? ` ${alignCell(DEFAULT_PLACEHOLDER, PANEL_PERCENT_WIDTH, look.align)}` : "");
   segments.push({ text: tail, tone: "subdued" });
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
 }
 
 /**
- * One drawn line: the label, a thin-rule meter, the percent cell, and the
+ * One drawn line: the label, a single-glyph meter, the percent cell, and the
  * dim countdown cell.
  *
  * Columns are fixed-width with one space between them: the label is
  * left-aligned to `labelWidth`, the meter is exactly `barWidth` cells of
- * `FILLED` over `TRACK`, the percent is 4 wide and the reset 6, so the percent
- * and the countdown sit on a shared axis on every row. `align` moves each
- * trailing value inside its own cell without moving the axis.
- * The meter carries one brighter cell (`default`, the theme's primary text
- * colour) sweeping across the filled region only when the caller opts in with
- * `sweep: true` and supplies a live frame; by default the bar is static and
- * changes only when the percentage itself changes. Only the meter and the
+ * `CELL` - the fill bright (the window's tone, or the theme's primary text
+ * when calm) over a `subdued` track - the percent is 4 wide and the reset 6,
+ * so the percent and the countdown sit on a shared axis on every row. `align`
+ * moves each trailing value inside its own cell without moving the axis.
+ * The meter carries one highlight cell (`info`, so it stays visible over a
+ * bright, warning, or error fill) sweeping across the filled region only when
+ * the caller opts in with `sweep: true` and supplies a live frame; by default
+ * the bar is static and changes only when the percentage itself changes. Only the meter and the
  * percent can take the window's tone - the label keeps the line's own colour
  * and the countdown stays dim, so a flagged window reads as this panel with a
  * problem rather than as a different kind of line. A window whose ratio is
@@ -535,13 +553,17 @@ function valueLine(
   const cells = Math.max(1, Math.floor(look.barWidth));
   const filled = Math.max(0, Math.min(cells, Math.round((ratio ?? 0) * cells)));
   const sweep = sweepIndex(frame, filled, look.sweep);
+  // Bright fill, dim track, one glyph throughout: the fill takes the window's
+  // tone - or the theme's primary text when calm - while the track stays
+  // `subdued`, so fill and track can never differ in advance width.
+  const fillTone: StyleColor | undefined = tone ?? "default";
 
   const runs: StatSegment[] = [];
   for (let index = 0; index < filled; index += 1) {
-    appendRun(runs, FILLED, index === sweep ? "default" : tone);
+    appendRun(runs, CELL, index === sweep ? SWEEP_TONE : fillTone);
   }
   for (let index = filled; index < cells; index += 1) {
-    appendRun(runs, TRACK, tone);
+    appendRun(runs, CELL, "subdued");
   }
   if (look.showPercent) {
     const percent = ratio === undefined ? DEFAULT_PLACEHOLDER : `${Math.round(ratio * 100)}%`;
