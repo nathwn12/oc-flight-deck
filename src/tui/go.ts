@@ -39,26 +39,27 @@ type GoUpdate = (mutation: (draft: GoStoreState) => void) => void;
 /**
  * The credential store as the bridge reads it.
  *
- * Deliberately minimal and structural, for the same reason `storage` is typed
- * loosely: `credential.list()` arrived after the pinned `@opencode/plugin`
- * client type, so this shape is what the bridge checks at runtime rather than
- * what it trusts from the installed declaration. A host that predates the
- * method simply fails the `typeof list === "function"` check and the bridge
- * falls through to the env var.
+ * Minimal on purpose, like `storage` above: the bridge needs one capability, so
+ * it names one capability and stays trivially stubbable. It is no longer a
+ * stand-in for a declaration the pin lacked - the pinned `@opencode/plugin`
+ * client (`@opencode/client` 2.0.26) declares `credential.list()`, so the call
+ * below is direct and type-checked. The runtime `typeof list === "function"`
+ * check stays because the host binary is what actually answers: a host whose
+ * client predates the method falls through to the env var instead of throwing.
  */
 interface GoCredentialClient {
   readonly credential?: GoCredentialStore;
 }
 
 /**
- * The store's shape. The index signature is load-bearing: without it the
- * all-optional type is "weak" to TypeScript, and the pinned client's
- * `credential` group - which carries only `update`/`activate`/`remove` - has no
- * property in common with it, so passing the real `context` would not compile.
+ * The one method the bridge calls on the credential group.
+ *
+ * The return stays `unknown` deliberately: the payload arrives over the wire
+ * and is validated entry by entry at runtime, so trusting a declared element
+ * type here would only move the failure into the loop.
  */
 interface GoCredentialStore {
-  readonly list?: () => Promise<unknown>;
-  readonly [key: string]: unknown;
+  readonly list: () => Promise<unknown>;
 }
 
 /** The one host capability the bridge needs, so it stays trivially stubbable. */
@@ -222,9 +223,8 @@ function keyOfValue(value: unknown): string | undefined {
 async function credentialKey(client: GoHost["client"]): Promise<string | undefined> {
   try {
     const store = client?.credential;
-    const list = store?.list;
-    if (store === undefined || typeof list !== "function") return undefined;
-    const entries = await list.call(store);
+    if (store === undefined || typeof store.list !== "function") return undefined;
+    const entries = await store.list();
     if (!Array.isArray(entries)) return undefined;
     let firstMatch: string | undefined;
     for (const entry of entries) {
