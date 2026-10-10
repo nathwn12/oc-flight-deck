@@ -32,7 +32,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { normalizeGoUsage, type GoUsage } from "./go-usage.js";
+import { normalizeGoUsage, type GoUsage, type GoWindow } from "./go-usage.js";
 
 /**
  * Why the bridge has no usage to show.
@@ -246,11 +246,115 @@ function openStore(storage: NonNullable<GoHost["storage"]>): { store: GoStore; u
   return { store: store as GoStore, update: update as GoUpdate };
 }
 
+/**
+ * Canonical window order, matching ./go-usage.ts, so a stored value reads back
+ * in the same order the fetch path wrote it.
+ */
+const GO_WINDOW_ORDER: readonly GoWindow["id"][] = ["5h", "1w", "1m"];
+
+/** A finite number, or `undefined` when the value is not one. Never throws. */
+function asStoredNumber(value: unknown): number | undefined {
+  try {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Validate one stored window AS a {@link GoUsage} entry, not a raw payload.
+ *
+ * The store already holds normalised windows (`{ id, ratio, ... }`), so the
+ * raw-payload normaliser must not run here: it only understands `percent` /
+ * `used` / `limit`, and a window carrying only `ratio` would fall through
+ * `buildWindow` and be dropped, leaving the panel on `pending` despite a good
+ * poll. Only the `5h`/`1w`/`1m` ids survive; a present `ratio` must be finite
+ * (clamped to `[0, 1]`); `resetAtMs`/`status`/`used`/`limit` are preserved when
+ * readable. Never throws.
+ */
+function asStoredWindow(entry: unknown, seen: Set<GoWindow["id"]>): GoWindow | undefined {
+  try {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const record = entry as Record<string, unknown>;
+    let id: unknown;
+    let ratioRaw: unknown;
+    let usedRaw: unknown;
+    let limitRaw: unknown;
+    let resetRaw: unknown;
+    let statusRaw: unknown;
+    try {
+      id = record["id"];
+    } catch {
+      return undefined;
+    }
+    if (id !== "5h" && id !== "1w" && id !== "1m") return undefined;
+    if (seen.has(id)) return undefined;
+    try {
+      ratioRaw = record["ratio"];
+    } catch {
+      return undefined;
+    }
+    let ratio: number | undefined;
+    if (ratioRaw !== undefined) {
+      const finite = asStoredNumber(ratioRaw);
+      if (finite === undefined) return undefined;
+      ratio = Math.min(1, Math.max(0, finite));
+    }
+    let used: number | undefined;
+    let limit: number | undefined;
+    let resetAtMs: number | undefined;
+    let status: string | undefined;
+    try {
+      usedRaw = record["used"];
+      limitRaw = record["limit"];
+      resetRaw = record["resetAtMs"];
+      statusRaw = record["status"];
+    } catch {
+      return undefined;
+    }
+    used = asStoredNumber(usedRaw);
+    limit = asStoredNumber(limitRaw);
+    resetAtMs = asStoredNumber(resetRaw);
+    try {
+      if (typeof statusRaw === "string" && statusRaw.trim().length > 0) status = statusRaw.trim();
+    } catch {
+      status = undefined;
+    }
+    if (used === undefined && limit === undefined && ratio === undefined) return undefined;
+    seen.add(id);
+    const result: { -readonly [K in keyof GoWindow]: GoWindow[K] } = { id };
+    if (used !== undefined) result.used = used;
+    if (limit !== undefined) result.limit = limit;
+    if (ratio !== undefined) result.ratio = ratio;
+    if (resetAtMs !== undefined) result.resetAtMs = resetAtMs;
+    if (status !== undefined) result.status = status;
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
 function readUsage(store: GoStore | undefined): GoUsage | undefined {
   try {
     const value = store?.value;
     if (value === null || value === undefined) return undefined;
-    return normalizeGoUsage(value);
+    if (typeof value !== "object" || Array.isArray(value)) return undefined;
+    let windowsRaw: unknown;
+    try {
+      windowsRaw = (value as Record<string, unknown>)["windows"];
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(windowsRaw)) return undefined;
+    const windows: GoWindow[] = [];
+    const seen = new Set<GoWindow["id"]>();
+    for (const entry of windowsRaw) {
+      const window = asStoredWindow(entry, seen);
+      if (window !== undefined) windows.push(window);
+    }
+    if (windows.length === 0) return undefined;
+    windows.sort((a, b) => GO_WINDOW_ORDER.indexOf(a.id) - GO_WINDOW_ORDER.indexOf(b.id));
+    return { windows };
   } catch {
     return undefined;
   }
