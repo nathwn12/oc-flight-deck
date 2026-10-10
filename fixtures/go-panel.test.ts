@@ -684,4 +684,46 @@ describe("go panel lines", () => {
       expect(line.text.length).toBeLessThanOrEqual(WIDTH_BUDGET);
     }
   });
+
+  test("aligns each trailing value inside its own fixed-width cell", () => {
+    // 11% over a 1d4h reset: the percent pads 1 in its 4 cells, the reset
+    // pads 2 in its 6. The axis never moves - only the value does.
+    const usage: GoUsage = { windows: [{ id: "5h", ratio: 0.11, resetAtMs: NOW + 28 * 3_600_000 }] };
+    const stem = `${firstMark()}${labelCell("rolling")}${bar(1)}`;
+    const right = `${stem}  11%   1d4h`;
+    const left = `${stem} 11%  1d4h  `;
+    const center = `${stem} 11%   1d4h `;
+    expect(goPanelLines(usage, NOW, { align: "right" })[0]?.text).toBe(right);
+    expect(goPanelLines(usage, NOW, { align: "left" })[0]?.text).toBe(left);
+    expect(goPanelLines(usage, NOW, { align: "center" })[0]?.text).toBe(center);
+    // Absent is right: the digits stay put as values change length.
+    expect(goPanelLines(usage, NOW)[0]?.text).toBe(right);
+    // Same length either way: the cells stay fixed-width.
+    expect(left.length).toBe(right.length);
+    expect(center.length).toBe(right.length);
+
+    // A single digit in the same column: padding 2 splits 1-and-1 when centred.
+    const single = `${firstMark()}${labelCell("rolling")}${bar(1)}`;
+    expect(goPanelLines({ windows: [{ id: "5h", ratio: 0.05 }] }, NOW, { align: "right" })[0]?.text).toBe(
+      `${single}   5%`,
+    );
+    expect(goPanelLines({ windows: [{ id: "5h", ratio: 0.05 }] }, NOW, { align: "left" })[0]?.text).toBe(
+      `${single} 5%  `,
+    );
+    expect(goPanelLines({ windows: [{ id: "5h", ratio: 0.05 }] }, NOW, { align: "center" })[0]?.text).toBe(
+      `${single}  5% `,
+    );
+
+    // The resting line aligns its placeholder the same way: padding 3 puts
+    // the odd cell right when centred.
+    const rest = `${firstMark()}${labelCell("rolling")}${track()}`;
+    expect(goPanelLines(undefined, NOW, { align: "right" })[0]?.text).toBe(`${rest}    ${DASH}`);
+    expect(goPanelLines(undefined, NOW, { align: "left" })[0]?.text).toBe(`${rest} ${DASH}   `);
+    expect(goPanelLines(undefined, NOW, { align: "center" })[0]?.text).toBe(`${rest}  ${DASH}  `);
+
+    // A malformed align is today's behaviour: pinned right, never a throw.
+    for (const align of ["RIGHT", "middle", "", 0, null]) {
+      expect(goPanelLines(usage, NOW, { align })[0]?.text).toBe(right);
+    }
+  });
 });

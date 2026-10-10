@@ -95,7 +95,7 @@
       // static meter). An object turns it on with a custom look - absent keys
       // fall back to those defaults:
       //
-      //   "go": { "header": false, "barWidth": 10, "labelWidth": 6, "percent": true, "reset": true, "sweep": false, "labels": { "rolling": "rolling", "weekly": "weekly", "monthly": "monthly" }, "blink": true, "blinkMs": 700 }
+      //   "go": { "header": false, "barWidth": 10, "labelWidth": 6, "percent": true, "reset": true, "align": "right", "sweep": false, "labels": { "rolling": "rolling", "weekly": "weekly", "monthly": "monthly" }, "blink": true, "blinkMs": 700 }
       //
       // `header` draws the dim OPENCODE GO line above the meters; `sweep`
       // lets a bright cell travel the fill (off by default: the bar moves

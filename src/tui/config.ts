@@ -72,6 +72,16 @@ export interface GoPanelLook {
   /** Draw the right-aligned reset countdown column. Default `true`. */
   readonly reset: boolean;
   /**
+   * Where a value sits inside its own fixed-width trailing cell.
+   * Default `"right"`.
+   *
+   * The percent (4) and reset (6) cell widths stay fixed; this moves the
+   * value within them. `"right"` pins the value to the cell's right edge, so
+   * the digits stay put as values change length; `"left"` hugs the bar and
+   * `"center"` splits the padding. Both trailing cells use the same setting.
+   */
+  readonly align: "left" | "right" | "center";
+  /**
    * Let a bright cell sweep the fill while the ticker runs. Default `false`:
    * the bar is static and changes only when the percentage itself changes.
    */
@@ -101,6 +111,7 @@ export const DEFAULT_GO_PANEL_LOOK: GoPanelLook = {
   labelWidth: 6,
   percent: true,
   reset: true,
+  align: "right",
   sweep: false,
   labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
   blink: true,
@@ -124,7 +135,7 @@ interface SidebarFooterConfig {
    *
    * `true` enables it with the default look (no header, static meter, both
    * columns); an object enables it with a custom look (`header`, `barWidth`,
-   * `labelWidth`, `percent`, `reset`, `sweep`, `labels`, `blink`, `blinkMs`,
+   * `labelWidth`, `percent`, `reset`, `align`, `sweep`, `labels`, `blink`, `blinkMs`,
    * each falling back to its default). Independent of `lines`, and it claims
    * the footer slot on its own so the panel can sit under the rail with no
    * fixed text. Turning it on starts the same account-wide poll the `go` row
@@ -552,6 +563,20 @@ function readGoLabels(value: unknown, issues: string[]): GoPanelLook["labels"] {
   };
 }
 
+/**
+ * Where a trailing value sits inside its fixed-width cell.
+ *
+ * Only the three exact strings count: anything else present is malformed, so
+ * the default comes back loudly. An absent key falls back silently, like
+ * every other optional knob.
+ */
+function readGoAlign(value: unknown, issues: string[]): GoPanelLook["align"] {
+  if (value === undefined) return DEFAULT_GO_PANEL_LOOK.align;
+  if (value === "left" || value === "right" || value === "center") return value;
+  issues.push('sidebar.footer.go.align must be "left", "right" or "center"; using "right"');
+  return DEFAULT_GO_PANEL_LOOK.align;
+}
+
 function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
   if (value === undefined) return DEFAULT_CONFIG.sidebar.footer.go;
   if (typeof value === "boolean") return value;
@@ -579,6 +604,7 @@ function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
     ),
     percent: readBoolean(value["percent"], DEFAULT_GO_PANEL_LOOK.percent, "sidebar.footer.go.percent", issues),
     reset: readBoolean(value["reset"], DEFAULT_GO_PANEL_LOOK.reset, "sidebar.footer.go.reset", issues),
+    align: readGoAlign(value["align"], issues),
     sweep: readBoolean(value["sweep"], DEFAULT_GO_PANEL_LOOK.sweep, "sidebar.footer.go.sweep", issues),
     labels: readGoLabels(value["labels"], issues),
     blink: readBoolean(value["blink"], DEFAULT_GO_PANEL_LOOK.blink, "sidebar.footer.go.blink", issues),

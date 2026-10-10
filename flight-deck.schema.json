@@ -50,7 +50,7 @@
             },
             "go": {
               "default": false,
-              "description": "Draw the live Go usage panel under the footer's fixed lines: three fixed-width lines - rolling (5h), weekly (1w), monthly (1m) - each with a bar, a right-aligned percent and a right-aligned reset countdown, read from the active opencode-go credential in OpenCode's own credential store (there is no env var). true enables with the default look (no header, 10-cell bar, labels at least 6 wide, both columns, breathing mark on, static meter); an object with header, barWidth, labelWidth, percent, reset, sweep, labels, blink and blinkMs enables with a custom look. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty. The panel renders first inside the footer slot, directly above the host's own location row.",
+              "description": "Draw the live Go usage panel under the footer's fixed lines: three fixed-width lines - rolling (5h), weekly (1w), monthly (1m) - each with a bar, a right-aligned percent and a right-aligned reset countdown, read from the active opencode-go credential in OpenCode's own credential store (there is no env var). true enables with the default look (no header, 10-cell bar, labels at least 6 wide, both columns, breathing mark on, static meter); an object with header, barWidth, labelWidth, percent, reset, align, sweep, labels, blink and blinkMs enables with a custom look. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty. The panel renders first inside the footer slot, directly above the host's own location row.",
               "anyOf": [
                 { "type": "boolean" },
                 {
@@ -85,6 +85,12 @@
                       "type": "boolean",
                       "default": true,
                       "description": "Draw the right-aligned reset countdown column. Turn it off to hide the time to relief."
+                    },
+                    "align": {
+                      "type": "string",
+                      "enum": ["left", "right", "center"],
+                      "default": "right",
+                      "description": "Where a trailing value sits inside its own fixed-width cell. The percent (4) and reset (6) widths stay fixed; right pins the value to the cell's right edge so digits stay put as values change length, left hugs the bar, center splits the padding. Both trailing cells use the same setting."
                     },
                     "sweep": {
                       "type": "boolean",

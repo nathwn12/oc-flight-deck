@@ -257,9 +257,9 @@ describe("flight deck plugin", () => {
     // enough to claim the slot, so the empty default list no longer means "no
     // footer at all".
     //
-    // The bridge reads OPENCODE_GO_API_KEY on every poll, so it is unset here:
-    // a key present in the developer's environment must never turn a test into
-    // a real request. Unset, the poll stores null and touches nothing.
+    // No credential store in the stub context, so the poll stores null and
+    // touches nothing. The env var is cleared defensively: a key present in
+    // the developer's environment must never turn a test into a real request.
     const savedKey = process.env.OPENCODE_GO_API_KEY;
     delete process.env.OPENCODE_GO_API_KEY;
     try {
