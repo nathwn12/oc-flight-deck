@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { goPanelLines } from "../src/tui/go-panel.js";
+import { formatCompactRemaining, goPanelLines } from "../src/tui/go-panel.js";
 import type { GoUsage } from "../src/tui/go-usage.js";
 import { DEFAULT_BAR_WIDTH } from "../src/tui/format.js";
 import { DEFAULT_LABEL_WIDTH, DEFAULT_PLACEHOLDER } from "../src/tui/stat-fields.js";
@@ -14,6 +14,25 @@ const EMPTY = "\u2591";
 /** The exact bar `fuelBar` draws, built here so the expectation is explicit. */
 function bar(filled: number, width: number = DEFAULT_BAR_WIDTH): string {
   return `${FULL.repeat(filled)}${EMPTY.repeat(width - filled)}`;
+}
+
+/** The empty track the resting placeholder keeps. */
+function track(width: number = DEFAULT_BAR_WIDTH): string {
+  return EMPTY.repeat(width);
+}
+
+/**
+ * The filled-cell index of the panel's bright sweep cell on the first line, or
+ * `-1` when there is none. Counts `FULL` cells before the run toned `default`.
+ */
+function brightCell(usage: GoUsage, frame?: number): number {
+  const segments = goPanelLines(usage, NOW, undefined, frame)[0]?.segments ?? [];
+  let index = 0;
+  for (const segment of segments) {
+    if (segment.tone === "default") return index;
+    for (const char of segment.text) if (char === FULL) index += 1;
+  }
+  return -1;
 }
 
 /** The one instant every test reads its countdowns against. */
@@ -115,13 +134,14 @@ describe("go panel lines", () => {
     const lines = goPanelLines(undefined, NOW);
     expect(lines).toHaveLength(3);
     expect(lines.map((line) => line.text)).toEqual([
-      `Rolling   ${DASH}`,
-      `Weekly    ${DASH}`,
-      `Monthly   ${DASH}`,
+      `Rolling   ${track()} ${DASH}`,
+      `Weekly    ${track()} ${DASH}`,
+      `Monthly   ${track()} ${DASH}`,
     ]);
     // The resting value is explicitly subdued: it stays dim even when the row
-    // style is set bright, because it is not a reading.
-    expect(lines[0]?.segments?.[1]).toEqual({ text: DASH, tone: "subdued" });
+    // style is set bright, because it is not a reading. The empty track is kept
+    // so the panel's shape never jumps between waiting and reading.
+    expect(lines[0]?.segments?.[1]).toEqual({ text: `${track()} ${DASH}`, tone: "subdued" });
     expect(lines[0]?.segments?.[0]).toEqual({ text: "Rolling   " });
 
     // An empty window list is the same resting panel.
@@ -155,7 +175,7 @@ describe("go panel lines", () => {
     expect(goPanelLines(usage, NOW, { labelWidth: 6, barWidth: 4 })[0]?.text).toBe(
       `Rolling ${bar(2, 4)} 50%`,
     );
-    expect(goPanelLines(undefined, NOW, { labelWidth: 6 })[2]?.text).toBe(`Monthly ${DASH}`);
+    expect(goPanelLines(undefined, NOW, { labelWidth: 6 })[2]?.text).toBe(`Monthly ${track()} ${DASH}`);
 
     // Anything unreadable is the rail's own default, never a broken line.
     const defaults = `Rolling   ${bar(2)} 20%`;
@@ -197,9 +217,99 @@ describe("go panel lines", () => {
     };
     expect(() => goPanelLines(throwing as unknown as GoUsage, NOW)).not.toThrow();
     expect(goPanelLines(throwing as unknown as GoUsage, NOW).map((line) => line.text)).toEqual([
-      `Rolling   ${DASH}`,
-      `Weekly    ${DASH}`,
-      `Monthly   ${DASH}`,
+      `Rolling   ${track()} ${DASH}`,
+      `Weekly    ${track()} ${DASH}`,
+      `Monthly   ${track()} ${DASH}`,
     ]);
+  });
+
+  test("fills the bar in proportion to the ratio, rounded to whole cells", () => {
+    const text = (ratio: number) => goPanelLines({ windows: [{ id: "5h", ratio }] }, NOW)[0]?.text;
+    expect(text(0)).toBe(`Rolling   ${bar(0)} 0%`);
+    expect(text(0.04)).toBe(`Rolling   ${bar(0)} 4%`);
+    expect(text(0.05)).toBe(`Rolling   ${bar(1)} 5%`);
+    expect(text(0.5)).toBe(`Rolling   ${bar(5)} 50%`);
+    expect(text(0.99)).toBe(`Rolling   ${bar(10)} 99%`);
+    expect(text(1)).toBe(`Rolling   ${bar(10)} 100%`);
+  });
+
+  test("takes the warning role at 60% and the error role at 90%", () => {
+    const tones = (ratio: number) =>
+      (goPanelLines({ windows: [{ id: "5h", ratio }] }, NOW)[0]?.segments ?? []).map((segment) => segment.tone);
+
+    // 60% is the warning band; below it the row keeps its own colour.
+    expect(tones(0.6).some((tone) => tone === "warning")).toBe(true);
+    expect(tones(0.6).some((tone) => tone === "error")).toBe(false);
+    expect(tones(0.59).every((tone) => tone === undefined)).toBe(true);
+
+    // 90% is the error band (./go-usage.js's GO_ERROR_RATIO), not warning.
+    expect(tones(0.9).some((tone) => tone === "error")).toBe(true);
+    expect(tones(0.9).some((tone) => tone === "warning")).toBe(false);
+  });
+
+  test("formats the countdown as one or two compact units", () => {
+    expect(formatCompactRemaining(45_000)).toBe("45s");
+    expect(formatCompactRemaining(90_000)).toBe("2m");
+    expect(formatCompactRemaining(2 * 3_600_000)).toBe("2h");
+    expect(formatCompactRemaining(4 * 3_600_000 + 44 * 60_000)).toBe("4h44m");
+    expect(formatCompactRemaining(26 * 3_600_000)).toBe("1d2h");
+    expect(formatCompactRemaining(86_400_000)).toBe("1d");
+    expect(formatCompactRemaining(30 * 86_400_000 + 23 * 3_600_000)).toBe("30d23h");
+
+    // And it reaches the line with the row's own separator.
+    const line = goPanelLines(
+      { windows: [{ id: "5h", ratio: 0.1, resetAtMs: NOW + 4 * 3_600_000 + 44 * 60_000 }] },
+      NOW,
+    )[0];
+    expect(line?.text).toBe(`Rolling   ${bar(1)} 10% ${DOT} 4h44m`);
+  });
+
+  test("sweeps one bright cell across the filled region, and only with a fill", () => {
+    const usage: GoUsage = { windows: [{ id: "5h", ratio: 0.5 }] }; // filled 5 of 10
+
+    expect(brightCell(usage, 0)).toBe(0);
+    expect(brightCell(usage, 1)).toBe(1);
+    expect(brightCell(usage, 4)).toBe(4);
+    expect(brightCell(usage, 5)).toBe(0); // wraps inside the fill
+
+    // No frame (no ticker) and a 0% fill are both static, never a bright cell.
+    expect(brightCell(usage)).toBe(-1);
+    expect(brightCell({ windows: [{ id: "5h", ratio: 0 }] }, 3)).toBe(-1);
+
+    // A malformed frame is treated as no animation, not a throw.
+    expect(brightCell(usage, Number.NaN)).toBe(-1);
+    expect(brightCell(usage, -1)).toBe(-1);
+
+    // The text is unchanged by the sweep: only the colour of one cell moves.
+    expect(goPanelLines(usage, NOW, undefined, 3)[0]?.text).toBe(`Rolling   ${bar(5)} 50%`);
+  });
+
+  test("keeps the empty track at the rail's width in the placeholder", () => {
+    const data = goPanelLines({ windows: [{ id: "5h", ratio: 0.5 }] }, NOW, { barWidth: 14 })[0];
+    const rest = goPanelLines(undefined, NOW, { barWidth: 14 })[0];
+    // The bar column is the same width whether or not there is a reading, so
+    // the panel's shape never jumps.
+    expect(rest?.text.slice(0, 10 + 14)).toBe(`Rolling   ${track(14)}`);
+    // 0.5 fills half the (wider) bar: 7 of 14 cells.
+    expect(data?.text.slice(0, 10 + 14)).toBe(`Rolling   ${bar(7, 14)}`);
+    expect(rest?.text).toBe(`Rolling   ${track(14)} ${DASH}`);
+  });
+
+  test("renders a short, dim reason tag on the first line only when there is no data", () => {
+    const lines = goPanelLines(undefined, NOW, undefined, undefined, "no-client");
+    expect(lines[0]?.text).toBe(`Rolling   ${track()} ${DASH}  no-client`);
+    expect(lines[0]?.segments?.[2]).toEqual({ text: "  no-client", tone: "subdued" });
+    // Tagged once: the other two lines stay plain.
+    expect(lines[1]?.text).toBe(`Weekly    ${track()} ${DASH}`);
+    expect(lines[2]?.text).toBe(`Monthly   ${track()} ${DASH}`);
+
+    // A reason is meaningless once a window rendered...
+    expect(
+      goPanelLines({ windows: [{ id: "5h", ratio: 0.2 }] }, NOW, undefined, undefined, "http")[0]?.text,
+    ).toBe(`Rolling   ${bar(2)} 20%`);
+    // ...and a hostile tag is dropped rather than drawn.
+    expect(goPanelLines(undefined, NOW, undefined, undefined, "not a reason!")[0]?.text).toBe(
+      `Rolling   ${track()} ${DASH}`,
+    );
   });
 });

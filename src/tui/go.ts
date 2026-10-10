@@ -16,21 +16,52 @@
 // host's Solid and the plugin's are separate module instances, so only the
 // host-owned `context.storage.memory` store can wake the host render.
 //
-// The bridge never throws. Any failure — no store, no key, refused request,
-// non-OK status, malformed JSON — stores `null`, which the getter reads as
+// The bridge never throws. Any failure - no store, no key, refused request,
+// non-OK status, malformed JSON - stores `null`, which the getter reads as
 // `undefined` so the persist layer renders the placeholder. A missing key is
 // explicitly not an error: it is the row's documented "no key" dash path.
+//
+// A blank panel must never be silent about WHY it is blank, so the store also
+// carries a {@link GoNoDataReason} beside the null value: the bridge records
+// which stage failed (see the type) and exposes it as `reason`. The two are
+// written together, so a reader can never see a null value with a stale reason.
 
 import { normalizeGoUsage, type GoUsage } from "./go-usage.js";
+
+/**
+ * Why the bridge has no usage to show.
+ *
+ * Additive to `value`: a reader that only wants the usage is unchanged, while
+ * a surface that has to explain a blank panel reads this alongside it. The set
+ * is closed so a renderer can trust it, and each value names the failed stage,
+ * not a symptom:
+ *
+ *   * `"no-client"` - the host's credential client was absent, or it answered
+ *     with something that was not a usable list (a throw or a non-array). The
+ *     key lookup never had a chance to run.
+ *   * `"no-key"`    - the credential client answered, but held no usable
+ *     `opencode-go` key entry, and no `OPENCODE_GO_API_KEY` fallback was set.
+ *   * `"http"`      - a key was resolved and the usage request threw or came
+ *     back non-OK.
+ *   * `"parse"`     - the request succeeded but the body did not normalize into
+ *     any known window shape.
+ */
+export type GoNoDataReason = "no-client" | "no-key" | "http" | "parse";
 
 /** The value kept in the host's memory store. Null means "no data". */
 interface GoStoreState {
   value: GoUsage | null;
+  /**
+   * Why `value` is null, or null when there is a value (or the reason is not
+   * yet known). Written atomically with `value` so the two never disagree.
+   */
+  reason: GoNoDataReason | null;
 }
 
 /** The store the host hands back: read-only to us, reactive to the host. */
 interface GoStore {
   readonly value?: unknown;
+  readonly reason?: unknown;
 }
 
 /** The mutation function the host hands back. */
@@ -94,6 +125,12 @@ interface GoBridge {
    * `undefined` means no data, so the persist layer renders the placeholder.
    */
   readonly usage: GoUsage | undefined;
+  /**
+   * Why {@link usage} is `undefined`, or `undefined` when there IS a value (or
+   * the reason is not yet known). Read it inside the same render as `usage` so
+   * the host registers the dependency and a blank panel can name its cause.
+   */
+  readonly reason: GoNoDataReason | undefined;
   /** Stops the timer. Safe to call more than once. */
   dispose(): void;
 }
@@ -147,7 +184,7 @@ async function defaultFetchJson(url: string, init: RequestInit): Promise<unknown
 function openStore(storage: NonNullable<GoHost["storage"]>): { store: GoStore; update: GoUpdate } | undefined {
   let opened: unknown;
   try {
-    opened = storage.memory(GO_KEY, { initial: { value: null } });
+    opened = storage.memory(GO_KEY, { initial: { value: null, reason: null } });
   } catch {
     return undefined;
   }
@@ -170,10 +207,39 @@ function readUsage(store: GoStore | undefined): GoUsage | undefined {
   }
 }
 
-function writeValue(opened: { store: GoStore; update: GoUpdate }, value: GoUsage | null): boolean {
+/** The closed set of reasons, so a corrupt store value can never leak through. */
+const GO_NO_DATA_REASONS: readonly GoNoDataReason[] = ["no-client", "no-key", "http", "parse"];
+
+/**
+ * Why the store has no value, or `undefined` when it has one or the reason is
+ * unreadable. Validated against the closed set for the same reason the frame
+ * and usage are: the store is reached across a version boundary and may be
+ * written by a hot-reloaded sibling.
+ */
+function readReason(store: GoStore | undefined): GoNoDataReason | undefined {
+  try {
+    const reason = store?.reason;
+    if (typeof reason !== "string") return undefined;
+    return (GO_NO_DATA_REASONS as readonly string[]).includes(reason) ? (reason as GoNoDataReason) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write the value and its reason as one mutation, so a reader can never observe
+ * a null value paired with a stale reason. A non-null value always clears the
+ * reason; a null value carries the reason that produced it.
+ */
+function writeValue(
+  opened: { store: GoStore; update: GoUpdate },
+  value: GoUsage | null,
+  reason: GoNoDataReason,
+): boolean {
   try {
     opened.update((draft) => {
       draft.value = value;
+      draft.reason = value === null ? reason : null;
     });
     return true;
   } catch {
@@ -213,19 +279,24 @@ function keyOfValue(value: unknown): string | undefined {
 }
 
 /**
- * The Zen Go key held in the host's own credential store, or `undefined`.
+ * The Zen Go key held in the host's own credential store, plus whether that
+ * store was usable at all.
  *
- * Never throws and never logs: a host whose client predates `credential.list`,
- * a rejected call, a malformed payload, or no `opencode-go` `key` entry all
- * collapse to `undefined` so the caller can fall through to the env var. Among
- * matching entries the `active` one wins; otherwise the first usable one.
+ * Never throws and never logs. `unavailable` is true when the credential client
+ * was absent, its `list` was not a function, the call threw, or it answered
+ * with a non-array - in every one of those cases the lookup never had a fair
+ * chance, which is the `"no-client"` reason. `unavailable` false with no `key`
+ * means the store answered and genuinely held no usable entry (`"no-key"`).
+ * Among matching entries the `active` one wins; otherwise the first usable one.
  */
-async function credentialKey(client: GoHost["client"]): Promise<string | undefined> {
+async function credentialKey(
+  client: GoHost["client"],
+): Promise<{ key?: string; unavailable: boolean }> {
   try {
     const store = client?.credential;
-    if (store === undefined || typeof store.list !== "function") return undefined;
+    if (store === undefined || typeof store.list !== "function") return { unavailable: true };
     const entries = await store.list();
-    if (!Array.isArray(entries)) return undefined;
+    if (!Array.isArray(entries)) return { unavailable: true };
     let firstMatch: string | undefined;
     for (const entry of entries) {
       if (entry === null || typeof entry !== "object") continue;
@@ -233,12 +304,12 @@ async function credentialKey(client: GoHost["client"]): Promise<string | undefin
       if (record["integrationID"] !== GO_INTEGRATION_ID) continue;
       const key = keyOfValue(record["value"]);
       if (key === undefined) continue;
-      if (record["active"] === true) return key;
+      if (record["active"] === true) return { key, unavailable: false };
       if (firstMatch === undefined) firstMatch = key;
     }
-    return firstMatch;
+    return firstMatch === undefined ? { unavailable: false } : { key: firstMatch, unavailable: false };
   } catch {
-    return undefined;
+    return { unavailable: true };
   }
 }
 
@@ -284,26 +355,32 @@ export function startGoBridge(
   const client = host.client;
 
   // The key source, in order: an injected override (`key`, then `resolveKey`),
-  // the host's credential store, then the env var. Never throws; an empty
-  // result is the row's "no key" path, not an error.
-  const readKey = async (): Promise<string | undefined> => {
+  // the host's credential store, then the env var. Never throws. When nothing
+  // yields a key the result names WHY, so the blank panel is not silent: a
+  // usable store that held no entry is `"no-key"`, a store that could not be
+  // asked at all is `"no-client"`.
+  const readKey = async (): Promise<{ key?: string; reason?: GoNoDataReason }> => {
     if (keyFn !== undefined) {
       try {
-        return keyFn();
+        const key = keyFn();
+        return typeof key === "string" && key.length > 0 ? { key } : { reason: "no-key" };
       } catch {
-        return undefined;
+        return { reason: "no-key" };
       }
     }
     if (asyncKeyFn !== undefined) {
       try {
-        return await asyncKeyFn();
+        const key = await asyncKeyFn();
+        return typeof key === "string" && key.length > 0 ? { key } : { reason: "no-key" };
       } catch {
-        return undefined;
+        return { reason: "no-key" };
       }
     }
     const stored = await credentialKey(client);
-    if (typeof stored === "string" && stored.length > 0) return stored;
-    return process.env[GO_KEY_ENV];
+    if (typeof stored.key === "string" && stored.key.length > 0) return { key: stored.key };
+    const env = process.env[GO_KEY_ENV];
+    if (typeof env === "string" && env.length > 0) return { key: env };
+    return { reason: stored.unavailable ? "no-client" : "no-key" };
   };
 
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -330,8 +407,11 @@ export function startGoBridge(
     const stillCurrent = () => myGeneration === generation && mySeq === latestSeq && !disposed;
 
     let key: string | undefined;
+    let keyReason: GoNoDataReason = "no-key";
     try {
-      key = await readKey();
+      const resolved = await readKey();
+      key = resolved.key;
+      if (resolved.reason !== undefined) keyReason = resolved.reason;
     } catch {
       key = undefined;
     }
@@ -339,7 +419,7 @@ export function startGoBridge(
     // make no request, so a keyless install never touches the endpoint.
     if (typeof key !== "string" || key.length === 0) {
       if (!stillCurrent()) return;
-      if (!writeValue(opened, null)) stopTimer();
+      if (!writeValue(opened, null, keyReason)) stopTimer();
       return;
     }
 
@@ -353,7 +433,7 @@ export function startGoBridge(
       // Refused, timed out, non-OK status, or a transport failure: no data,
       // not an error.
       if (!stillCurrent()) return;
-      if (!writeValue(opened, null)) stopTimer();
+      if (!writeValue(opened, null, "http")) stopTimer();
       return;
     }
     if (!stillCurrent()) return;
@@ -363,7 +443,9 @@ export function startGoBridge(
     } catch {
       normalized = null;
     }
-    if (!writeValue(opened, normalized)) stopTimer();
+    // A body that normalized to nothing is the `"parse"` reason; a real value
+    // clears the reason inside `writeValue`.
+    if (!writeValue(opened, normalized, "parse")) stopTimer();
   };
 
   timer = setInterval(() => {
@@ -375,6 +457,9 @@ export function startGoBridge(
   return {
     get usage() {
       return readUsage(opened.store);
+    },
+    get reason() {
+      return readReason(opened.store);
     },
     dispose() {
       disposed = true;

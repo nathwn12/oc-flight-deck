@@ -202,9 +202,12 @@ export default Plugin.define({
     // the host's own events. It is skipped entirely when nothing on the rail
     // animates, and `refresh: 0` opts out regardless. The tick has to live in the
     // host's reactive graph rather than ours, or it re-renders nothing at all.
+    // The footer's Go panel animates too (its sweep rides this frame), so its
+    // being enabled is reason enough for a ticker on its own.
     const animated =
       config.sidebar.enabled &&
-      config.sidebar.rows.some((name) => ANIMATED_FIELDS.some((field) => field === name));
+      (config.sidebar.footer.go ||
+        config.sidebar.rows.some((name) => ANIMATED_FIELDS.some((field) => field === name)));
     let spinnerNeeded = false;
     const ticker = startTicker(context, animated ? config.refresh : 0, () => spinnerNeeded);
 
@@ -386,8 +389,13 @@ export default Plugin.define({
             // surface asked for it, so both reads are safe to skip.
             void ticker?.frame;
             const goUsage = goBridge?.usage;
+            // A blank panel must name its cause. `goBridge` absent means
+            // `startGoBridge` found no usable host store - distinct from a
+            // bridge that ran but had nothing to report, which carries its own
+            // reason. Only meaningful when the panel is actually drawn.
+            const goReason = goBridge === undefined ? "no-bridge" : goBridge.reason;
             const panel = config.sidebar.footer.go
-              ? goPanelLines(goUsage, Date.now(), goPanelLayout)
+              ? goPanelLines(goUsage, Date.now(), goPanelLayout, ticker?.frame ?? 0, goReason)
               : [];
             return (
               <box flexDirection="column">
