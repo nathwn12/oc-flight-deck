@@ -238,10 +238,13 @@ function readReason(reason: unknown): string | undefined {
  * One resting line: the label, the empty track, and the placeholder - plus a
  * dim reason tag when the caller knows why there is no data.
  *
- * The track is kept even with no data, so the panel's shape never jumps between
- * "waiting" and "reading": the bar column is always there. The placeholder and
- * the reason are toned `subdued` explicitly so a resting line stays dim even
- * when `style.rows.go` is set bright - neither is a value.
+ * The tag sits IMMEDIATELY after the label, before the track, and the track is
+ * shortened by the tag's width so the line never grows past the bar column and
+ * the tag can never be clipped off the sidebar's edge. The track is kept even
+ * with no data, so the panel's shape never jumps between "waiting" and
+ * "reading": the bar column is always there. The placeholder and the reason are
+ * toned `subdued` explicitly so a resting line stays dim even when
+ * `style.rows.go` is set bright - neither is a value.
  */
 function restingLine(
   label: string,
@@ -250,11 +253,15 @@ function restingLine(
   reason: string | undefined,
 ): RailLine {
   const cells = Math.max(1, Math.floor(barWidth));
-  const segments: StatSegment[] = [
-    { text: labelPrefix(label, labelWidth) },
-    { text: `${TRACK.repeat(cells)} ${DEFAULT_PLACEHOLDER}`, tone: "subdued" },
-  ];
-  if (reason !== undefined) segments.push({ text: `  ${reason}`, tone: "subdued" });
+  const segments: StatSegment[] = [{ text: labelPrefix(label, labelWidth) }];
+  let trackCells = cells;
+  if (reason !== undefined) {
+    segments.push({ text: `${reason} `, tone: "subdued" });
+    trackCells = Math.max(0, cells - reason.length - 1);
+  }
+  const tail =
+    trackCells > 0 ? `${TRACK.repeat(trackCells)} ${DEFAULT_PLACEHOLDER}` : DEFAULT_PLACEHOLDER;
+  segments.push({ text: tail, tone: "subdued" });
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
 }
 
