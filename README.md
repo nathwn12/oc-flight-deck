@@ -55,7 +55,7 @@ tps        18 tok/s
 
 Every row is read from the open session at render time — except `caution`, which watches a clock rather than events (a hang emits none); `elapsed`, which is seeded once from the session's own recorded assistant turn spans and then accumulates the busy windows this run observes, rather than a value the session reports; and the opt-in `guard` row, which is polled from the local guard RPC.
 
-The panel's only fixed text — `▸ FLIGHT DECK` over a separator — is **opt-in**. It renders in the sidebar footer slot, a separate host region **below** the rows: the top of the rail starts directly with the live rows. Since 0.8.1 the footer is empty by default, so a fresh install draws the live rows and nothing else; set `sidebar.footer.lines` to the pair to re-enable it (see ⚙️ Configure). The footer is independent of `sidebar.rows` and `sidebar.maxLines`.
+The panel's only fixed text - `▸ FLIGHT DECK` over a separator - is **opt-in**. It renders in the sidebar footer slot, a separate host region **below** the rows: the top of the rail starts directly with the live rows. The live Go panel claims the start of that same slot, directly above the host's own location row, which stays the last line. Since 0.8.1 the footer is empty by default, so a fresh install draws the live rows and nothing else; set `sidebar.footer.lines` to the pair to re-enable it (see ⚙️ Configure). The footer is independent of `sidebar.rows` and `sidebar.maxLines`.
 
 | Row | What it shows |
 |---|---|
@@ -82,7 +82,7 @@ The panel's only fixed text — `▸ FLIGHT DECK` over a separator — is **opt-
 
 `project` matches on the host's **project id**, not on a directory, so a worktree counts as part of the same project. A host that reports no project id leaves nothing to match on, and the row then totals every session that host knows about.
 
-The rows marked **off by default** — `caution`, `branch`, `total`, `spark`, `reasoning`, `turns`, `guard`, `go`, and `ses` — are available but not in the default rail: add any of them to `sidebar.rows`. `caution` also needs `caution.enabled: true`; `go` needs `OPENCODE_GO_API_KEY` in the environment; `ses` needs the host's mouse enabled to click-copy.
+The rows marked **off by default** — `caution`, `branch`, `total`, `spark`, `reasoning`, `turns`, `guard`, `go`, and `ses` — are available but not in the default rail: add any of them to `sidebar.rows`. `caution` also needs `caution.enabled: true`; `go` needs the active `opencode-go` credential in OpenCode's credential store; `ses` needs the host's mouse enabled to click-copy.
 
 Every field named in `sidebar.rows` renders exactly one row, in order. With `sidebar.persist` (the default), a row with no data yet shows the `sidebar.placeholder` value (default `—`) in the same label column as a live row — so the rail keeps a stable shape instead of growing rows as the session produces data. Set `"persist": false` to restore omission: rows with no data are left out entirely.
 
@@ -137,7 +137,7 @@ The file is optional, and a missing file is normal and silent: with no file at a
 
 It is independent of `sidebar.lines`: setting your own top lines does not turn the footer on, and an explicitly empty `"lines": []` inside `sidebar.footer` keeps the slot off entirely. The footer never counts against `sidebar.maxLines`.
 
-`sidebar.footer.go` adds a **live Go usage panel** to that same footer slot: three fixed-width lines - `ROLL` (`5h`), `WEEK` (`1w`), `MONTH` (`1m`) - each with a bar, a right-aligned percent, and a right-aligned reset countdown. Every row shares one column grid (label 6, meter 14, percent 4, reset 6, one space between columns), so the percent and the countdown sit on a shared axis and the bar never wanders. The bar uses the same glyphs as `context`, and a window at 90% or more - or reporting a non-`ok` status - turns its bar and number red, exactly like the `go` row. There is no header by default; the panel is three lines. It is **off by default**; turning it on claims the footer slot even when `lines` is empty, and it reads `OPENCODE_GO_API_KEY` through the same account-wide poll the `go` row uses, so one poll serves both surfaces. Until the first poll lands it draws three dim resting lines rather than nothing. The meter is static by default: it changes only when the percentage itself changes.
+`sidebar.footer.go` adds a **live Go usage panel** to that same footer slot: three fixed-width lines - `rolling` (`5h`), `weekly` (`1w`), `monthly` (`1m`) - each with a bar, a right-aligned percent, and a right-aligned reset countdown. Every row shares one column grid (mark 2, label minimum 6, meter 10, percent 4, reset 6, one space between columns), so the percent and the countdown sit on a shared axis and the bar never wanders. A slow breathing mark leads the first line - rest, swell, live, swell, one step per `blinkMs` - while the meter itself stays static. The bar uses the same glyphs as `context`, and a window at 90% or more - or reporting a non-`ok` status - turns its bar and number red, exactly like the `go` row. There is no header by default; the panel is three lines. It is **off by default**; turning it on claims the start of the footer slot even when `lines` is empty, directly above the host's location row, and it reads the active `opencode-go` credential from OpenCode's own credential store through the same account-wide poll the `go` row uses, so one poll serves both surfaces. Until the first poll lands it draws three dim resting lines rather than nothing. The meter is static by default: it changes only when the percentage itself changes.
 
 ```jsonc
 // inside "sidebar":
@@ -148,10 +148,10 @@ The look is configurable from the same key: `true` is the default look, and an o
 
 ```jsonc
 // inside "sidebar":
-"footer": { "go": { "header": false, "barWidth": 14, "labelWidth": 6, "percent": true, "reset": true, "sweep": false } }
+"footer": { "go": { "header": false, "barWidth": 10, "labelWidth": 6, "percent": true, "reset": true, "sweep": false, "labels": { "rolling": "rolling", "weekly": "weekly", "monthly": "monthly" }, "blink": true, "blinkMs": 700 } }
 ```
 
-`header` draws the dim `◈ OPENCODE GO` line above the meters; `barWidth` (1-40, default 14) and `labelWidth` (5-24, default 6) size the meter and label columns while the longest line stays within the sidebar; `percent` and `reset` toggle their columns; `sweep` lets a bright cell travel the fill (off by default).
+`header` draws the dim `◈ OPENCODE GO` line above the meters; `barWidth` (1-40, default 10) and `labelWidth` (5-24, default 6) size the meter and label columns while the longest line stays within the sidebar; `percent` and `reset` toggle their columns; `sweep` lets a bright cell travel the fill (off by default). `labels` renames the three meters per window (`rolling`, `weekly`, `monthly`, each at most 24 characters); the label column auto-widens past `labelWidth` to hold the longest rename, so `labelWidth` is a minimum. `blink` (default true) draws the slow breathing mark at the start of the first line - two cells, gone entirely when off; `blinkMs` (200-5000, default 700) sets the milliseconds per breath step, indexed from the wall clock so the breath ignores the ticker period.
 
 Optional styling lives under `style`: `style.lines` controls the fixed branding/separator lines (the opt-in footer pair when you set `sidebar.footer.lines`, or whatever `sidebar.lines` you set), `style.rows."*"` sets every live row, and `style.rows.cost` (or another row name) overrides one field while inheriting omitted values from the wildcard. Colors are theme roles - `default`, `subdued`, `warning`, `error`, `success`, `info` - and attributes are OpenTUI descriptors: `bold`, `dim`, `italic`, `underline`, `blink`, `inverse`, `hidden`, `strikethrough`. Defaults keep the existing theme-native look; no ANSI escapes or raw colors are needed. Invalid colors, attributes, and row names are reported and safely ignored.
 

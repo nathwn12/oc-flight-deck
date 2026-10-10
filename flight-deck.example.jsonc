@@ -79,25 +79,30 @@
     "footer": {
       "lines": [],
 
-      // The live Go usage panel: three fixed-width lines - ROLL (5h), WEEK
-      // (1w), MONTH (1m) - each with a bar, a right-aligned percent, and a
-      // right-aligned reset countdown. Reads Zen Go usage from
-      // OPENCODE_GO_API_KEY (the same account-wide poll the "go" row uses,
-      // one poll for both surfaces). A window at 90% or more - or reporting
-      // a non-ok status - turns its bar and number red. Off by default;
-      // turning it on claims this footer slot even with no fixed lines
-      // above, and draws three dim resting lines until the first poll lands.
+      // The live Go usage panel: three fixed-width lines - rolling (5h),
+      // weekly (1w), monthly (1m) - each with a bar, a right-aligned percent,
+      // and a right-aligned reset countdown. Reads the active `opencode-go`
+      // credential from OpenCode's own credential store (the same
+      // account-wide poll the "go" row uses, one poll for both surfaces). A
+      // window at 90% or more - or reporting a non-ok status - turns its bar
+      // and number red. Off by default; turning it on claims the start of
+      // this footer slot - directly above the host's location row - even with
+      // no fixed lines above, and draws three dim resting lines until the
+      // first poll lands.
       //
       // `false` is off; `true` is on with the default look (no header,
-      // 14-cell bar, 6-wide labels, both columns, static meter). An object
-      // turns it on with a custom look - absent keys fall back to those
-      // defaults:
+      // 10-cell bar, labels at least 6 wide, both columns, breathing mark on,
+      // static meter). An object turns it on with a custom look - absent keys
+      // fall back to those defaults:
       //
-      //   "go": { "header": false, "barWidth": 14, "labelWidth": 6, "percent": true, "reset": true, "sweep": false }
+      //   "go": { "header": false, "barWidth": 10, "labelWidth": 6, "percent": true, "reset": true, "sweep": false, "labels": { "rolling": "rolling", "weekly": "weekly", "monthly": "monthly" }, "blink": true, "blinkMs": 700 }
       //
       // `header` draws the dim OPENCODE GO line above the meters; `sweep`
       // lets a bright cell travel the fill (off by default: the bar moves
-      // only when the percentage itself moves).
+      // only when the percentage itself moves). `labels` renames the meters;
+      // the column auto-widens past `labelWidth` to hold the longest rename.
+      // `blink` draws the slow breathing mark on the first line (on by
+      // default); `blinkMs` (200-5000) sets the milliseconds per breath step.
       "go": false
     },
 
@@ -141,7 +146,8 @@
     //              findings, or ok. Available, off by default.
     //   go         Zen Go account usage for the 5h / 1w / 1m windows: a dial and
     //              a percent each, turning red as a window approaches its limit.
-    //              Reads OPENCODE_GO_API_KEY. Available, off by default.
+    //              Reads the active opencode-go credential from OpenCode's own
+    //              credential store. Available, off by default.
     //   ses        the full session id (the rail wraps it). A mouse click on the
     //              row copies the full id to the terminal clipboard. Off by
     //              default; needs the host's mouse enabled.
@@ -162,7 +168,7 @@
       "perms",
       "elapsed",
       "tps"
-      // ,"go"        — Zen Go account usage (needs OPENCODE_GO_API_KEY)
+      // ,"go"        Zen Go account usage (needs the active opencode-go credential)
       // ,"caution"   — the annunciator
       // ,"branch"    — current git branch
       // ,"ses"       - current session id (full, wrapped); click to copy the full id

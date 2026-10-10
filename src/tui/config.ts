@@ -58,9 +58,14 @@ interface SidebarConfig {
 export interface GoPanelLook {
   /** Draw the dim `◈ OPENCODE GO` header above the three meters. Default `false`. */
   readonly header: boolean;
-  /** Cells in the panel meter. Default `14`. */
+  /** Cells in the panel meter. Default `10`. */
   readonly barWidth: number;
-  /** Width of the panel label column (`ROLL`/`WEEK`/`MONTH`). Default `6`. */
+  /**
+   * Minimum width of the panel label column. Default `6`.
+   *
+   * A minimum, not a fixed width: the panel auto-widens past it to hold the
+   * longest rendered rename, so a rename can never overflow or wrap.
+   */
   readonly labelWidth: number;
   /** Draw the right-aligned percent column. Default `true`. */
   readonly percent: boolean;
@@ -71,16 +76,35 @@ export interface GoPanelLook {
    * the bar is static and changes only when the percentage itself changes.
    */
   readonly sweep: boolean;
+  /**
+   * The three meter labels by window: `rolling` (5h), `weekly` (1w),
+   * `monthly` (1m). Default the lowercase wire names.
+   */
+  readonly labels: {
+    readonly rolling: string;
+    readonly weekly: string;
+    readonly monthly: string;
+  };
+  /**
+   * Draw the slow breathing mark at the start of the first meter line.
+   * Default `true`: only the mark breathes, the meter stays static.
+   */
+  readonly blink: boolean;
+  /** Milliseconds per breath step. Default `700`, honoured from 200 to 5000. */
+  readonly blinkMs: number;
 }
 
 /** The panel look `true` enables: no header, static meter, both columns on. */
 export const DEFAULT_GO_PANEL_LOOK: GoPanelLook = {
   header: false,
-  barWidth: 14,
+  barWidth: 10,
   labelWidth: 6,
   percent: true,
   reset: true,
   sweep: false,
+  labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
+  blink: true,
+  blinkMs: 700,
 };
 
 interface SidebarFooterConfig {
@@ -94,17 +118,18 @@ interface SidebarFooterConfig {
    */
   readonly lines: readonly string[];
   /**
-   * The live Go usage panel: three fixed-width lines - ROLL (5h), WEEK (1w),
-   * MONTH (1m) - each with a bar, a right-aligned percent, and a right-aligned
-   * reset countdown. Off by default.
+   * The live Go usage panel: three fixed-width lines - rolling (5h),
+   * weekly (1w), monthly (1m) - each with a bar, a right-aligned percent, and
+   * a right-aligned reset countdown. Off by default.
    *
    * `true` enables it with the default look (no header, static meter, both
    * columns); an object enables it with a custom look (`header`, `barWidth`,
-   * `labelWidth`, `percent`, `reset`, `sweep`, each falling back to its
-   * default). Independent of `lines`, and it claims the footer slot on its own
-   * so the panel can sit under the rail with no fixed text. Turning it on
-   * starts the same account-wide poll the `go` row uses (one key, one quota),
-   * reads `OPENCODE_GO_API_KEY`, and draws a resting placeholder until the
+   * `labelWidth`, `percent`, `reset`, `sweep`, `labels`, `blink`, `blinkMs`,
+   * each falling back to its default). Independent of `lines`, and it claims
+   * the footer slot on its own so the panel can sit under the rail with no
+   * fixed text. Turning it on starts the same account-wide poll the `go` row
+   * uses (one key, one quota), reads the active `opencode-go` credential from
+   * OpenCode's own credential store, and draws a resting placeholder until the
    * first poll lands - never a blank slot.
    */
   readonly go: boolean | GoPanelLook;
@@ -491,6 +516,42 @@ function readSidebarFooterLines(value: unknown, issues: string[]): readonly stri
  * and unknown keys are ignored forward-compatibly. Anything else falls back
  * to `false`, loudly, like every other bad option. Never throws.
  */
+/** Longest rename the panel honours per label; longer would eat the sidebar. */
+const GO_LABEL_MAX_LENGTH = 24;
+
+/** One rename: a non-empty string within the sidebar's label budget. */
+function readGoLabel(value: unknown, fallback: string, path: string, issues: string[]): string {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string") {
+    issues.push(`${path} must be a string; using the default`);
+    return fallback;
+  }
+  const text = value.trim();
+  if (text.length === 0) {
+    issues.push(`${path} must not be empty; using the default`);
+    return fallback;
+  }
+  if (text.length > GO_LABEL_MAX_LENGTH) {
+    issues.push(`${path} was longer than ${GO_LABEL_MAX_LENGTH} characters; using the default`);
+    return fallback;
+  }
+  return text;
+}
+
+/** The three renames: each key optional, each falling back per-key. */
+function readGoLabels(value: unknown, issues: string[]): GoPanelLook["labels"] {
+  if (value === undefined) return DEFAULT_GO_PANEL_LOOK.labels;
+  if (!isRecord(value)) {
+    issues.push("sidebar.footer.go.labels must be an object; using the defaults");
+    return DEFAULT_GO_PANEL_LOOK.labels;
+  }
+  return {
+    rolling: readGoLabel(value["rolling"], DEFAULT_GO_PANEL_LOOK.labels.rolling, "sidebar.footer.go.labels.rolling", issues),
+    weekly: readGoLabel(value["weekly"], DEFAULT_GO_PANEL_LOOK.labels.weekly, "sidebar.footer.go.labels.weekly", issues),
+    monthly: readGoLabel(value["monthly"], DEFAULT_GO_PANEL_LOOK.labels.monthly, "sidebar.footer.go.labels.monthly", issues),
+  };
+}
+
 function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
   if (value === undefined) return DEFAULT_CONFIG.sidebar.footer.go;
   if (typeof value === "boolean") return value;
@@ -519,6 +580,16 @@ function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
     percent: readBoolean(value["percent"], DEFAULT_GO_PANEL_LOOK.percent, "sidebar.footer.go.percent", issues),
     reset: readBoolean(value["reset"], DEFAULT_GO_PANEL_LOOK.reset, "sidebar.footer.go.reset", issues),
     sweep: readBoolean(value["sweep"], DEFAULT_GO_PANEL_LOOK.sweep, "sidebar.footer.go.sweep", issues),
+    labels: readGoLabels(value["labels"], issues),
+    blink: readBoolean(value["blink"], DEFAULT_GO_PANEL_LOOK.blink, "sidebar.footer.go.blink", issues),
+    blinkMs: readNumber(
+      value["blinkMs"],
+      DEFAULT_GO_PANEL_LOOK.blinkMs,
+      "sidebar.footer.go.blinkMs",
+      issues,
+      200,
+      5000,
+    ),
   };
 }
 

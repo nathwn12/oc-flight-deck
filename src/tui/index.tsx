@@ -379,12 +379,19 @@ export default Plugin.define({
         context.ui.slot({
           // The sidebar footer: a separate host slot below the rows. The
           // lines are empty by default since 0.8.1, so this registration is
-          // purely opt-in — set `sidebar.footer.lines` (the documented
+          // purely opt-in - set `sidebar.footer.lines` (the documented
           // `▸ FLIGHT DECK` pair, or your own) to claim the slot. It draws
           // outside the `maxLines` budget and stays when `sidebar.lines` is
           // customized. The fixed lines are static; the Go panel below is live,
           // so this render subscribes to the tick and to the go store.
-          append: "sidebar.footer",
+          //
+          // `prepend` puts our claim FIRST inside the footer's boundary, so
+          // the panel sits directly ABOVE the host's own location row (the
+          // `~` path line): the host's row stays the absolute last line.
+          // Per the slot docs, `prepend`/`append` are first/last inside the
+          // target's boundary, and several claims at one anchor coexist in
+          // plugin enable order.
+          prepend: "sidebar.footer",
           render: () => {
             // Read the tick and the go store INSIDE the render, the same way
             // the rail subscribes to the session snapshot: the countdown is

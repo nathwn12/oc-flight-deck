@@ -271,9 +271,9 @@ test("renders the Go usage panel in the footer slot when sidebar.footer.go is se
   // panel is the resting placeholder: three labelled lines with no header by
   // default, never blank.
   expect(frame).not.toContain("OPENCODE GO");
-  expect(frame).toContain("ROLL");
-  expect(frame).toContain("WEEK");
-  expect(frame).toContain("MONTH");
+  expect(frame).toContain("rolling");
+  expect(frame).toContain("weekly");
+  expect(frame).toContain("monthly");
   expect(frame).toContain("\u2014");
 });
 
@@ -289,7 +289,7 @@ test("renders the Go panel header only when the look opts in", async () => {
   expect(sidebarFooter).toBeDefined();
   const frame = await frameOf(sidebarFooter!.render, 40, 4);
   expect(frame).toContain("OPENCODE GO");
-  expect(frame).toContain("ROLL");
+  expect(frame).toContain("rolling");
 });
 
 test("draws the fixed footer lines above the Go panel", async () => {
@@ -304,8 +304,8 @@ test("draws the fixed footer lines above the Go panel", async () => {
   const frame = await frameOf(sidebarFooter!.render, 40, 7);
   // Fixed lines first, then the panel: one slot, two opt-in surfaces.
   expect(frame).toContain("FLIGHT DECK");
-  expect(frame).toContain("ROLL");
-  expect(frame.indexOf("FLIGHT DECK")).toBeLessThan(frame.indexOf("ROLL"));
+  expect(frame).toContain("rolling");
+  expect(frame.indexOf("FLIGHT DECK")).toBeLessThan(frame.indexOf("rolling"));
 });
 
 test("totals subagent sessions and reads context from the last request", async () => {
