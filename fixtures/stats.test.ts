@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
-import { clip, DEFAULT_PLACEHOLDER, formatCost, formatCount, formatDuration, fuelBar, sessionThroughput, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanThroughput, unionSpanTotals } from "../src/tui/stats.js";
-import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals, unionOutputTotals } from "../src/tui/throughput.js";
+import { clip, formatCost, formatCount, formatDuration, fuelBar, isStatField, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanTotals } from "../src/tui/stats.js";
+import { canonicalField } from "../src/tui/stat-fields.js";
+import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -199,21 +200,6 @@ describe("flight deck live rows", () => {
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
   });
 
-  test("computes overall session throughput, floored at one second", () => {
-    // Nothing to divide: absent, zero or negative on either side.
-    expect(sessionThroughput(0, 10_000)).toBeUndefined();
-    expect(sessionThroughput(-5, 10_000)).toBeUndefined();
-    expect(sessionThroughput(undefined, 10_000)).toBeUndefined();
-    expect(sessionThroughput(600, 0)).toBeUndefined();
-    expect(sessionThroughput(600, -1)).toBeUndefined();
-    expect(sessionThroughput(600, undefined)).toBeUndefined();
-    // A sub-second session is floored at 1000ms, so a sliver of time cannot
-    // flash an absurd rate: 10 tokens over 200ms reads as 10 tok/s, not 50.
-    expect(sessionThroughput(10, 200)).toBe(10);
-    // The ordinary case: 600 tokens over two seconds.
-    expect(sessionThroughput(600, 2_000)).toBe(300);
-  });
-
   test("hides the tps row rather than printing a zero rate", () => {
     expect(statLine("tps", { tps: 0 })).toBeUndefined();
     expect(statLine("tps", { tps: Number.NaN })).toBeUndefined();
@@ -386,14 +372,14 @@ describe("the go usage row", () => {
     expect(line).toBe("go        ● 95 · 1h ● 95");
   });
 
-  test("draws a real zero and falls back to the placeholder with no data", () => {
+  test("draws a real zero and falls back to the skeleton with no data", () => {
     // The empty circle doubles as the sane-zero: a fresh window reads `○ 0`,
     // never the persist layer's dash.
     expect(statLine("go", { go: { windows: [{ id: "5h", ratio: 0 }] } })).toBe("go        ○ 0");
-    // No go data at all is no row from `statLine`, and the placeholder when the
-    // rail is persistent — the same shape every other row uses.
+    // No go data at all is no row from `statLine`, and the zero skeleton when
+    // the rail is persistent — three calm dials, never the old dash.
     expect(statLine("go", {})).toBeUndefined();
-    expect(statRows(["go"], {}, { persist: true })).toEqual(["go        —"]);
+    expect(statRows(["go"], {}, { persist: true })).toEqual(["go        ○ 0 ○ 0 ○ 0"]);
   });
 });
 // Boundaries are where a short formatter goes wrong: the unit has to change
@@ -460,84 +446,70 @@ function shuffle<T>(items: readonly T[], seed: number): T[] {
   return out;
 }
 
-// The tps row measures work actually done: output plus reasoning tokens divided
-// by the union of the assistant turns' own streaming spans. Idle between turns
-// and the tool settlement after one are never in the denominator, so an idle
-// session keeps the figure it settled on instead of decaying or hiding. These
-// pin the union arithmetic and the mandatory defences: dedup, clamp, pre-sort,
-// and the one-second floor.
+// The union helpers measure work actually done: generation tokens (output plus
+// reasoning) summed over distinct turns, and the union of the assistant turns'
+// own streaming spans. Idle between turns is never in the denominator. These
+// pin the union arithmetic and the mandatory defences: dedup, clamp, pre-sort
+// and merge.
 describe("active-work throughput", () => {
   const NOW = 1_800_000_000_000;
 
-  test("resolves a turn span from the timestamp rungs, in the caller's end order", () => {
-    // The end rung is the caller's choice. `tps` reads `streamed` first - the
-    // moment decoding stopped is the numerator clock, and `completed` settles
-    // the turn after its tools ran. The `elapsed` seed reads `completed` first -
-    // the clock stays busy until that settlement.
-    expect(turnSpan(1_000, 5_000, 4_000, NOW, "streamed")).toEqual({ start: 1_000, end: 4_000 });
-    expect(turnSpan(1_000, 5_000, 4_000, NOW, "completed")).toEqual({ start: 1_000, end: 5_000 });
+  test("resolves a turn span from the timestamp rungs, ending at streamed", () => {
+    // The end rung is fixed: `streamed` is the moment decoding stopped, the
+    // numerator clock. `completed` settles the turn after its tools ran and is
+    // only the fallback when `streamed` was never recorded.
+    expect(turnSpan(1_000, 5_000, 4_000, NOW)).toEqual({ start: 1_000, end: 4_000 });
     // Whichever rung is missing, the other is the fallback.
-    expect(turnSpan(1_000, 5_000, undefined, NOW, "streamed")).toEqual({ start: 1_000, end: 5_000 });
-    expect(turnSpan(1_000, undefined, 4_000, NOW, "completed")).toEqual({ start: 1_000, end: 4_000 });
+    expect(turnSpan(1_000, 5_000, undefined, NOW)).toEqual({ start: 1_000, end: 5_000 });
     // Neither rung: the turn is in flight and ends at the caller's now.
-    expect(turnSpan(1_000, undefined, undefined, NOW, "streamed")).toEqual({ start: 1_000, end: NOW });
-    expect(turnSpan(1_000, undefined, undefined, NOW, "completed")).toEqual({ start: 1_000, end: NOW });
+    expect(turnSpan(1_000, undefined, undefined, NOW)).toEqual({ start: 1_000, end: NOW });
     // No usable start: the turn is skipped, never guessed at.
-    expect(turnSpan(undefined, 5_000, 4_000, NOW, "streamed")).toBeUndefined();
-    expect(turnSpan("nope", 5_000, 4_000, NOW, "completed")).toBeUndefined();
+    expect(turnSpan(undefined, 5_000, 4_000, NOW)).toBeUndefined();
+    expect(turnSpan("nope", 5_000, 4_000, NOW)).toBeUndefined();
     // A clock that cannot even say "now" leaves the in-flight end unresolvable.
-    expect(turnSpan(1_000, undefined, undefined, Number.NaN, "streamed")).toBeUndefined();
+    expect(turnSpan(1_000, undefined, undefined, Number.NaN)).toBeUndefined();
   });
 
   test("clamps a backwards clock to a zero-length span, never negative", () => {
     // `end < start` is skew: the span is zero-length rather than negative, so
     // it can never subtract time from the union.
-    expect(turnSpan(5_000, 1_000, undefined, NOW, "streamed")).toEqual({ start: 5_000, end: 5_000 });
+    expect(turnSpan(5_000, 1_000, undefined, NOW)).toEqual({ start: 5_000, end: 5_000 });
     expect(unionSpanTotals([{ key: "a", tokens: 10, start: 5_000, end: 1_000 }])).toEqual({
       tokens: 10,
       unionMs: 0,
     });
-    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: 5_000, end: 1_000 }])).toBeUndefined();
   });
 
-  test("returns undefined when there is nothing to divide", () => {
+  test("returns zero tokens and zero time when there is nothing to sum", () => {
     expect(unionSpanTotals([])).toEqual({ tokens: 0, unionMs: 0 });
-    expect(unionSpanThroughput([])).toBeUndefined();
-    // No positive output, or no usable span, is no rate at all.
-    expect(unionSpanThroughput([{ key: "a", tokens: 0, start: 0, end: 10_000 }])).toBeUndefined();
-    expect(unionSpanThroughput([{ key: "a", start: 0, end: 10_000 }])).toBeUndefined();
-    expect(unionSpanThroughput([{ key: "a", tokens: -5, start: 0, end: 10_000 }])).toBeUndefined();
-    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: "x", end: 10_000 }])).toBeUndefined();
-    // A zero-token turn adds nothing to the numerator, but its span still
-    // counts: dropping it would inflate the rate the official TUI never does.
     expect(unionSpanTotals([{ key: "a", tokens: 0, start: 0, end: 5_000 }])).toEqual({
       tokens: 0,
       unionMs: 5_000,
     });
   });
 
-  test("divides tokens by the union of the spans, merging overlap and touch", () => {
+  test("merges overlap and touch into one union, leaving gaps out", () => {
     // Overlapping turns: 100 tokens over a 2 s union, not 3 s.
     expect(
-      unionSpanThroughput([
+      unionSpanTotals([
         { key: "a", tokens: 60, start: 0, end: 1_000 },
         { key: "b", tokens: 40, start: 500, end: 2_000 },
       ]),
-    ).toBe(50);
+    ).toEqual({ tokens: 100, unionMs: 2_000 });
     // Touching turns merge too: 200 tokens over 2 s.
     expect(
-      unionSpanThroughput([
+      unionSpanTotals([
         { key: "a", tokens: 100, start: 0, end: 1_000 },
         { key: "b", tokens: 100, start: 1_000, end: 2_000 },
       ]),
-    ).toBe(100);
+    ).toEqual({ tokens: 200, unionMs: 2_000 });
     // A gap between turns is idle and is not counted: 200 tokens over 2 s.
     expect(
-      unionSpanThroughput([
+      unionSpanTotals([
         { key: "a", tokens: 100, start: 0, end: 1_000 },
         { key: "b", tokens: 100, start: 60_000, end: 61_000 },
       ]),
-    ).toBe(100);
+    ).toEqual({ tokens: 200, unionMs: 2_000 });
   });
 
   test("adds reasoning to the numerator alongside output", () => {
@@ -547,48 +519,31 @@ describe("active-work throughput", () => {
       tokens: 100,
       unionMs: 1_000,
     });
-    expect(unionSpanThroughput([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toBe(100);
-    // Reasoning alone still divides: a turn that only thought has a rate.
-    expect(unionSpanThroughput([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toBe(60);
-    // Neither count is no rate at all, though the span itself still stands.
-    expect(unionSpanThroughput([{ key: "a", tokens: 0, reasoning: 0, start: 0, end: 2_000 }])).toBeUndefined();
+    // Reasoning alone still sums: a turn that only thought has a numerator.
+    expect(unionSpanTotals([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toEqual({
+      tokens: 120,
+      unionMs: 2_000,
+    });
     expect(unionSpanTotals([{ key: "a", reasoning: 0, start: 0, end: 2_000 }])).toEqual({
       tokens: 0,
       unionMs: 2_000,
     });
   });
 
-  test("does not let a long idle gap lower the figure", () => {
-    const close = [
-      { key: "a", tokens: 300, start: 0, end: 1_000 },
-      { key: "b", tokens: 300, start: 2_000, end: 3_000 },
-    ];
-    const farApart = [
-      { key: "a", tokens: 300, start: 0, end: 1_000 },
-      { key: "b", tokens: 300, start: 3_600_000, end: 3_601_000 },
-    ];
-    // Same tokens, same active time: an idle hour between them changes nothing.
-    expect(unionSpanThroughput(farApart)).toBe(unionSpanThroughput(close));
-    expect(unionSpanThroughput(farApart)).toBe(300);
-  });
-
   test("counts a stamped turn that produced no tokens in the denominator", () => {
     // The official TUI's rule: a step with a streamed rung counts in the
     // denominator even when it produced nothing. 100 tokens over the two 2 s
-    // turns reads 25; dropping the empty turn's span would have read 50.
+    // turns sum to 100 over 4 s; dropping the empty turn's span would leave 2 s.
     const spans = [
       { key: "producing", tokens: 100, start: 0, end: 2_000 },
       { key: "empty", tokens: 0, start: 2_000, end: 4_000 },
     ];
     expect(unionSpanTotals(spans)).toEqual({ tokens: 100, unionMs: 4_000 });
-    expect(unionSpanThroughput(spans)).toBe(25);
-    expect(unionSpanThroughput(spans)).not.toBe(50);
   });
 
   test("counts an identical duplicate once on both sides", () => {
     const turn = { key: "id:msg_1", tokens: 120, start: 0, end: 1_000 };
     expect(unionSpanTotals([turn, turn, turn])).toEqual({ tokens: 120, unionMs: 1_000 });
-    expect(unionSpanThroughput([turn, turn, turn])).toBe(120);
   });
 
   test("dedups by identity, so a conflicting repeat cannot widen the span", () => {
@@ -602,31 +557,12 @@ describe("active-work throughput", () => {
     ).toEqual({ tokens: 60, unionMs: 1_000 });
   });
 
-  test("keeps the first record for the numerator too, so an empty-first duplicate yields no rate", () => {
-    // The span rule already makes the first record win; the numerator follows
-    // the same polarity. A replay that lists the empty twin first therefore
-    // keeps zero tokens and the row hides, rather than reading the later twin's
-    // 120 tokens.
-    expect(
-      unionSpanThroughput([
-        { key: "id:msg_1", tokens: 0, start: 0, end: 1_000 },
-        { key: "id:msg_1", tokens: 120, start: 0, end: 1_000 },
-      ]),
-    ).toBeUndefined();
-  });
-
   test("builds the dedup key from the id, else the record tuple", () => {
     expect(turnKey("msg_1", 1, 2, 3)).toBe("id:msg_1");
     // No id: the fields that define the record, so a re-sent copy matches.
     expect(turnKey(undefined, 1, 2, 3)).toBe(turnKey(undefined, 1, 2, 3));
     expect(turnKey(undefined, 1, 2, 3)).not.toBe(turnKey(undefined, 1, 2, 4));
     expect(turnKey(undefined, 1, 2, 3)).not.toBe(turnKey(undefined, 9, 2, 3));
-  });
-
-  test("floors a sliver of time at one second", () => {
-    // Half a second of work would otherwise read as double the rate.
-    expect(unionSpanThroughput([{ key: "a", tokens: 10, start: 0, end: 500 }])).toBe(10);
-    expect(unionSpanThroughput([{ key: "a", tokens: 600, start: 0, end: 2_000 }])).toBe(300);
   });
 
   test("gives the same answer whatever order the turns arrive in", () => {
@@ -636,9 +572,10 @@ describe("active-work throughput", () => {
       { key: "c", tokens: 90, start: 7_000, end: 12_000 },
     ];
     // b is 3 s; a and c overlap into one 7 s stretch; 190 tokens over 10 s.
-    expect(unionSpanThroughput(spans)).toBe(19);
-    expect(unionSpanThroughput([...spans].reverse())).toBe(19);
-    expect(unionSpanThroughput(shuffle(spans, 7))).toBe(19);
+    const expected = { tokens: 190, unionMs: 10_000 };
+    expect(unionSpanTotals(spans)).toEqual(expected);
+    expect(unionSpanTotals([...spans].reverse())).toEqual(expected);
+    expect(unionSpanTotals(shuffle(spans, 7))).toEqual(expected);
   });
 
   test("property: the union stays inside the time actually available", () => {
@@ -664,18 +601,17 @@ describe("active-work throughput", () => {
       // Reordering the input cannot change either side.
       const shuffled = shuffle(spans, seed);
       expect(unionSpanTotals(shuffled)).toEqual(forward);
-      expect(unionSpanThroughput(shuffled)).toBe(unionSpanThroughput(spans));
     }
   });
 });
 
-// The live `tps` row is a NEAR-INSTANTANEOUS output rate, not an average: the
-// delta of output tokens between successive polls over the delta of generating
-// time (streaming-span union, or the busy-gated active clock - both exclude
-// idle by construction), smoothed with an EWMA (alpha 0.3) and repainted only
-// on a move of >= 1 tok/s or >= 10%. Reasoning is out of the numerator (it has
-// its own row); the row hides until ~2 s of generating time and ~10 tokens are
-// on record; a non-busy poll freezes on the last figure; rendering is whole
+// The live `tps` row is a NEAR-INSTANTANEOUS generation rate, not an average:
+// the delta of generation tokens (output plus reasoning) between successive
+// polls over the delta of generating time (the streaming-span union, which
+// excludes idle by construction), smoothed with an EWMA (alpha 0.3) and
+// repainted only on a move of >= 1 tok/s or >= 10%. The first poll only sets
+// the baselines and reads as zero; a poll whose generating time did not
+// advance reads as zero with the smoother untouched; rendering is whole
 // tokens/second, never fractional.
 describe("instantaneous tps", () => {
   test("divides deltas, never idle-inclusive totals", () => {
@@ -709,25 +645,6 @@ describe("instantaneous tps", () => {
     expect(tpsNeedsRepaint(10, 10.5)).toBe(false);
   });
 
-  test("counts output only, so reasoning never inflates the rate", () => {
-    expect(unionOutputTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
-      tokens: 60,
-      unionMs: 1_000,
-    });
-    // Reasoning alone is time with no output yet: no numerator, no rate.
-    expect(unionOutputTotals([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toEqual({
-      tokens: 0,
-      unionMs: 2_000,
-    });
-    // Dedup and merge match the union's own rules.
-    expect(
-      unionOutputTotals([
-        { key: "id:msg_1", tokens: 60, start: 0, end: 1_000 },
-        { key: "id:msg_1", tokens: 60, start: 0, end: 9_000 },
-      ]),
-    ).toEqual({ tokens: 60, unionMs: 1_000 });
-  });
-
   test("the TPS union counts generation, so reasoning reads as speed", () => {
     expect(unionGenerationTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
       tokens: 100,
@@ -755,7 +672,7 @@ describe("instantaneous tps", () => {
     const created = 1_000;
     const now = created + 10_000;
     const polls = [10, 20, 30].map((output) => {
-      const span = turnSpan(created, undefined, undefined, now, "streamed")!;
+      const span = turnSpan(created, undefined, undefined, now)!;
       return { key: turnKey(undefined, created, undefined, output), tokens: output, ...span };
     });
     // Stable identity: every poll keys the same, whatever the output count.
@@ -763,9 +680,9 @@ describe("instantaneous tps", () => {
     expect(polls[2]?.key).toBe(polls[0]?.key);
     // Every snapshot seen together (re-sent history beside the live record)
     // counts once: never above the single latest-poll baseline.
-    const baseline = unionOutputTotals([polls[2]!]);
-    expect(unionOutputTotals(polls).tokens).toBeLessThanOrEqual(baseline.tokens);
-    expect(unionOutputTotals(polls).unionMs).toBe(baseline.unionMs);
+    const baseline = unionGenerationTotals([polls[2]!]);
+    expect(unionGenerationTotals(polls).tokens).toBeLessThanOrEqual(baseline.tokens);
+    expect(unionGenerationTotals(polls).unionMs).toBe(baseline.unionMs);
   });
 
   test("a settled id-less turn still keys on its final output count", () => {
@@ -778,51 +695,48 @@ describe("instantaneous tps", () => {
     expect(turnKey(undefined, 1, undefined, 200, 2)).not.toBe(turnKey(undefined, 1, undefined, 300, 2));
   });
 
-  test("hides until the minimum sample is on record", () => {
-    // Plenty of tokens but only a sliver of time: hidden.
-    expect(createInstantTps()(500, 500, true)).toBeUndefined();
-    // Plenty of time but a trickle of tokens: hidden.
-    expect(createInstantTps()(5, 10_000, true)).toBeUndefined();
-    // Both on record: the cumulative active average seeds the figure.
-    expect(createInstantTps()(500, 2_000, true)).toBe(250);
+  test("reads zero on first sight, never a seeded cumulative average", () => {
+    // No rate is known yet on the first poll — not even the lifetime average,
+    // which would flash a whole session's history as if it were live. A
+    // session deep into its life (500 tokens over 2 s would seed 250) still
+    // reads as zero until the next poll brings a delta to divide.
+    expect(createInstantTps()(500, 500)).toBe(0);
+    expect(createInstantTps()(5, 10_000)).toBe(0);
+    expect(createInstantTps()(500, 2_000)).toBe(0);
   });
 
-  test("tracks per-poll deltas once seeded", () => {
+  test("tracks per-poll deltas once baselines are set", () => {
     const tps = createInstantTps();
-    expect(tps(200, 2_000, true)).toBe(100);
-    // 100 new tokens over 1 new second: instant 100, already at 100, holds.
-    expect(tps(300, 3_000, true)).toBe(100);
+    expect(tps(200, 2_000)).toBe(0);
+    // 100 new tokens over 1 new second: instant 100, the first smoothed rate,
+    // which always paints.
+    expect(tps(300, 3_000)).toBe(100);
     // 400 new tokens over 1 new second: instant 400, EWMA bends 100 toward it
     // (100 + 0.3 * 300 = 190), which clears hysteresis and repaints.
-    expect(tps(700, 4_000, true)).toBeCloseTo(190, 10);
+    expect(tps(700, 4_000)).toBeCloseTo(190, 10);
   });
 
-  test("freezes on idle without diluting the next delta", () => {
+  test("reads zero while generating time does not advance, then resumes held", () => {
     const tps = createInstantTps();
-    expect(tps(200, 2_000, true)).toBe(100);
-    // Idle polls hold the last figure and touch nothing: the baselines stay
-    // where work stopped, so the idle stretch contributes to neither side.
-    expect(tps(200, 2_000, false)).toBe(100);
-    expect(tps(999_999, 999_999_999, false)).toBe(100);
-    // Work resumes: the delta spans only the new second, not the idle gap.
-    expect(tps(300, 3_000, true)).toBe(100);
-  });
-
-  test("holds through a poll with no new generating time", () => {
-    const tps = createInstantTps();
-    expect(tps(200, 2_000, true)).toBe(100);
-    // Busy, but the clock has not advanced: no sample, hold - never divide by
-    // zero new time.
-    expect(tps(200, 2_000, true)).toBe(100);
+    expect(tps(200, 2_000)).toBe(0);
+    expect(tps(300, 3_000)).toBe(100);
+    // The clock has not advanced: the session is not generating right now, so
+    // the rate is zero — never a division by zero new time.
+    expect(tps(300, 3_000)).toBe(0);
+    // Work resumes: the delta spans only the new second, and the smoother
+    // resumes from the held 100 rather than from zero — instant 100 bends
+    // nothing, so the held figure stands.
+    expect(tps(400, 4_000)).toBe(100);
   });
 
   test("rebaselines a backwards counter instead of dividing it", () => {
     const tps = createInstantTps();
-    expect(tps(200, 2_000, true)).toBe(100);
-    expect(tps(50, 1_000, true)).toBe(100);
+    expect(tps(200, 2_000)).toBe(0);
+    expect(tps(300, 3_000)).toBe(100);
+    expect(tps(50, 1_000)).toBe(0);
     // The new baselines stand with a fresh smoother: the next honest delta
     // (100 tokens over 1 s) seeds 100 again, not a blend with the old era.
-    expect(tps(150, 2_000, true)).toBe(100);
+    expect(tps(150, 2_000)).toBe(100);
   });
 });
 // `unionSpanMs` is the token-blind twin of `unionSpanTotals`, used to seed
@@ -900,14 +814,41 @@ describe("elapsed span union (tokens ignored)", () => {
 // id runs past the roughly thirty-odd-column rail. The ellipsis `clip` appends
 // is what tells the reader this is a preview of a longer value. The full id
 // stays on the source and is what the row's click gesture copies, so the
-// display and the copy are deliberately different strings.
+// display and the copy are deliberately different strings. The row's label is
+// `session` (the config key stays `ses`, with `session` accepted as an alias),
+// and at a narrow `labelWidth` the preview budget shrinks by the label's column
+// overflow so the row never grows because of the rename.
 describe("the session-id row", () => {
   const FULL_ID = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
+
+  test("labels the row session, padded to the label width", () => {
+    // The default label column is 10: `session` (7) plus three spaces.
+    expect(statLine("ses", { sessionId: "ses_abcdefghijklmnopqrstuvwxyz" }, {})).toBe(
+      "session   ses_abcdefghijklm…",
+    );
+  });
+
+  test("accepts session as an alias for the ses key, byte for byte", () => {
+    // The alias lives outside `STAT_FIELDS` (the config vocabulary) but passes
+    // `isStatField` and canonicalizes at renderer entry.
+    expect(isStatField("session")).toBe(true);
+    expect(isStatField("ses")).toBe(true);
+    expect(canonicalField("session")).toBe("ses");
+    expect(canonicalField("ses")).toBe("ses");
+    expect(canonicalField("cost")).toBe("cost");
+    const source = { sessionId: "ses_abcdefghijklmnopqrstuvwxyz" };
+    expect(statLine("session", source, {})).toBe(statLine("ses", source, {}));
+    expect(statLine("session", source, {})).toBe("session   ses_abcdefghijklm…");
+    expect(statRows(["session"], source, {})).toEqual(statRows(["ses"], source, {}));
+    expect(statRows(["session"], {}, { persist: true })).toEqual(statRows(["ses"], {}, { persist: true }));
+    // Neither spelling is segment-aware, so both agree on having no segments.
+    expect(statSegments("session", source, {})).toBe(statSegments("ses", source, {}));
+  });
 
   test("prunes a long id to a preview that fits the value column", () => {
     // A real 30-character id: `clip(id, 18)` keeps 17 characters plus its
     // ellipsis, so the value is 18 cells and the row cannot bleed.
-    expect(statLine("ses", { sessionId: FULL_ID })).toBe(`ses       ${FULL_ID.slice(0, 17)}…`);
+    expect(statLine("ses", { sessionId: FULL_ID })).toBe(`session   ${FULL_ID.slice(0, 17)}…`);
   });
 
   test("the rendered row stays inside the label column plus an 18-cell value", () => {
@@ -924,24 +865,24 @@ describe("the session-id row", () => {
   test("a short id is drawn whole, since it already fits", () => {
     // `clip` is width-aware, not a fixed slice: an id within the budget is
     // unchanged and gains no ellipsis.
-    expect(statLine("ses", { sessionId: "ses_abcd" })).toBe("ses       ses_abcd");
+    expect(statLine("ses", { sessionId: "ses_abcd" })).toBe("session   ses_abcd");
   });
 
   test("omits the row when the id is absent or not a string", () => {
     expect(statLine("ses", {})).toBeUndefined();
     expect(statLine("ses", { sessionId: 42 })).toBeUndefined();
-    // Persistence still supplies the placeholder for a known field, and an
+    // Persistence still supplies the zero skeleton for a known field, and an
     // unknown name is still skipped when persistent.
-    expect(statRows(["ses"], {}, { persist: true })).toEqual([`ses       ${DEFAULT_PLACEHOLDER}`]);
+    expect(statRows(["ses"], {}, { persist: true })).toEqual(["session   none"]);
     expect(statRows(["ses", "nope"], { sessionId: "ses_abcd" }, { persist: true })).toEqual([
-      "ses       ses_abcd",
+      "session   ses_abcd",
     ]);
   });
 
   test("flattens a control character in the id before it is drawn", () => {
     // A newline in the middle of the id: `plain` replaces it, so the row can
     // never become two lines.
-    expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("ses       ses_ab cd1234");
+    expect(statLine("ses", { sessionId: "ses_ab\ncd1234" })).toBe("session   ses_ab cd1234");
   });
 });
 

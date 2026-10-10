@@ -13,17 +13,17 @@ const populatedSource = {
 };
 
 const baselineRail = [
-  "status    —",
+  "status    ○ idle",
   "agent     orchestrator",
   "model     gpt-5 · high",
   "cost      $0.250",
-  "project   —",
+  "project   $0.000",
   "tokens    1k in · 340 out",
   "cache     88% hit · 9k read",
-  "context   —",
-  "perms     —",
-  "elapsed   —",
-  "tps       —",
+  "context   ░░░░░░░░░░ ~0%",
+  "perms     0 waiting",
+  "elapsed   0s",
+  "tps       0 tok/s",
 ];
 
 describe("configurable rail styling", () => {

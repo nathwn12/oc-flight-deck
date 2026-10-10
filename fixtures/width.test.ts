@@ -97,6 +97,30 @@ describe("the rail fits", () => {
     }
   });
 
+  test("the renamed ses row never grows past its pre-rename envelope", () => {
+    const id = "ses_abcdefghijklmnopqrstuvwxyz";
+    // The label grew from `ses` (3) to `session` (7): the budget shrinks by
+    // the real prefix growth measured through `labelPrefix` — 2 cells at
+    // width 6 (budget 16), 1 cell at width 7 (budget 17), none at 8+ — so the
+    // renamed row's total cell width equals the pre-rename row's at every
+    // width (24 at 6, 25 at 7, 26 at 8, 28 at 10).
+    const cases: ReadonlyArray<readonly [number, string, number]> = [
+      [6, "session ses_abcdefghijk…", 24],
+      [7, "session ses_abcdefghijkl…", 25],
+      [8, "session ses_abcdefghijklm…", 26],
+      [10, "session   ses_abcdefghijklm…", 28],
+    ];
+    for (const [labelWidth, expected, width] of cases) {
+      const line = statLine("ses", { sessionId: id }, { labelWidth });
+      expect(line).toBe(expected);
+      expect(line!.length).toBe(width);
+    }
+    // At the width the rail actually runs (8) the renamed row is exactly as
+    // wide as the old `ses` row was: the longer label fits the column it pads.
+    const wide = statLine("ses", { sessionId: id }, { labelWidth: 8 });
+    expect(wide!.length).toBe("ses     ses_abcdefghijklm…".length);
+  });
+
   test("the spark row is as wide as sparkWidth asks for, and still fits", () => {
     const source = { ...FULL, spark: Array.from({ length: 32 }, (_, index) => index + 1) };
     for (const sparkWidth of [2, 12, 16, 24]) {
@@ -215,9 +239,10 @@ describe("the caution row aligns in cells", () => {
     caution: { ...DEFAULT_CONFIG.caution, enabled: true },
   };
 
-  /** The three states the row can draw, with the mark each one carries. */
+  /** The states that draw a row, with the mark each one carries. Silence draws
+   * no row at all: the annunciator has no skeleton and takes no placeholder,
+   * so there is nothing to measure until it has something to say. */
   const STATES = [
-    { name: "silent", glyph: "", source: {} as StatSource },
     {
       name: "watch",
       glyph: WATCH_GLYPH,
@@ -252,8 +277,8 @@ describe("the caution row aligns in cells", () => {
       return stringWidth(line!.slice(0, LABEL_WIDTH + glyph.length));
     });
     // Logged so a green run carries the measured columns, not just a verdict.
-    console.log("caution row cell offsets (silent, watch, caution):", offsets);
-    expect(offsets).toEqual([10, 11, 11]);
+    console.log("caution row cell offsets (watch, caution):", offsets);
+    expect(offsets).toEqual([11, 11]);
   });
 
   test("every severity mark is exactly one cell wide", () => {
@@ -265,7 +290,7 @@ describe("the caution row aligns in cells", () => {
   });
 
   test("the mark rides a coloured run and the words keep the row's colour", () => {
-    const [, watch, caution] = STATES;
+    const [watch, caution] = STATES;
     const line = railLines(RAIL, caution!.source).find((row) => row.field === "caution");
     expect(line).toBeDefined();
     // One source of truth: the plain text is the exact join of the segments.

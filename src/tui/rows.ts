@@ -15,7 +15,10 @@ import {
   DEFAULT_LABEL_WIDTH,
   DEFAULT_PLACEHOLDER,
   DEFAULT_SPARK_WIDTH,
+  canonicalField,
+  fieldLabel,
   isStatField,
+  skeletonValue,
   type LayoutHint,
   type StatSource,
 } from "./stat-fields.js";
@@ -24,13 +27,15 @@ import {
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /**
- * Value-column budget for the `ses` row's preview, in cells.
+ * Value-column design budget for the `ses` row's preview, in cells.
  *
  * Same width the `perms` row clips its resource to, because that is the column
  * this roughly thirty-odd-column rail was designed to fit: the label column
  * plus a value of this length stays inside the panel. A full 30-character
  * session id is always shortened at this budget and gets the ellipsis appended
- * - the row reads as a preview of a longer value, never as the value.
+ * - the row reads as a preview of a longer value, never as the value. The
+ * `ses` case adapts this budget down by the label's column overflow, so the
+ * effective budget at a narrow `labelWidth` is smaller than this number.
  */
 const SES_PREVIEW_WIDTH = 18;
 
@@ -245,7 +250,11 @@ function cautionValueSegments(source: StatSource): StatSegment[] | undefined {
  *
  * Returning `undefined` rather than a placeholder is deliberate: a rail that
  * shows `branch   unknown` before the repo loads looks broken, while a rail
- * that simply grows a row when the data arrives looks alive.
+ * that simply grows a row when the data arrives looks alive. Persistence lives
+ * in `statRows`, which draws `skeletonValue` for a data-less known field.
+ *
+ * The field is canonicalized at entry (`session` renders as `ses`), and the
+ * label is resolved through `fieldLabel`, so the `ses` row draws `session`.
  */
 export function statLine(
   field: string,
@@ -263,9 +272,12 @@ export function statLine(
   // column, so a label longer than `labelWidth` was glued straight onto its
   // value: at labelWidth 8 the `reasoning` row rendered as "reasoning153k".
   // The label is nine characters, which made this reachable from a config file.
-  const row = (label: string, value: string): string => formatRow(label, value, labelWidth);
+  //
+  // The label is resolved here rather than at each call site, so the `ses`
+  // case keeps saying `row("ses", …)` while drawing `session`.
+  const row = (label: string, value: string): string => formatRow(fieldLabel(label), value, labelWidth);
 
-  switch (field) {
+  switch (canonicalField(field)) {
     case "caution": {
       // Rendered only when the caller found something to say, which is what
       // keeps a healthy session visually identical to one without the
@@ -470,10 +482,21 @@ export function statLine(
       // full id still lives on `source.sessionId`, which is what the row's click
       // gesture copies - the display and the copy are separate values.
       //
-      // Budget `SES_PREVIEW_WIDTH` (18), matching the `perms` row's clip width:
-      // that is the column this rail was designed to fit, so a preview of that
-      // length sits inside it beside the label.
-      return id === undefined ? undefined : row("ses", clip(id, SES_PREVIEW_WIDTH));
+      // The label grew from `ses` to `session`, overflowing narrow columns, so
+      // the preview budget shrinks by exactly that overflow measured through
+      // `labelPrefix` itself: at labelWidth 6 the prefix grows 6 -> 8 so the
+      // budget is 16, at 7 it grows 7 -> 8 so the budget is 17, at 8+ there is
+      // no overflow and the row keeps the full `SES_PREVIEW_WIDTH` (18). The
+      // renamed row's total cell width then equals the pre-rename row's at
+      // every label width (24 at 6, 25 at 7, 26 at 8, 28 at 10). Floored at 8
+      // so the preview cannot collapse to nothing; `clip` still marks it as
+      // a preview with the ellipsis.
+      const budget = Math.max(
+        8,
+        SES_PREVIEW_WIDTH -
+          Math.max(0, labelPrefix(fieldLabel("ses"), labelWidth).length - labelPrefix("ses", labelWidth).length),
+      );
+      return id === undefined ? undefined : row("ses", clip(id, budget));
     }
     case "go": {
       // The plain string is the exact join of the coloured segments, so the
@@ -501,23 +524,28 @@ export function statSegments(
   source: StatSource,
   layout: LayoutHint = {},
 ): readonly StatSegment[] | undefined {
-  if (field === "caution") {
+  // Canonicalized like `statLine`, and the label resolved the same way, so the
+  // two views of one row agree character-for-character.
+  const name = canonicalField(field);
+  if (name === "caution") {
     const value = cautionValueSegments(source);
     if (value === undefined) return undefined;
-    return [{ text: labelPrefix("caution", layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
+    return [{ text: labelPrefix(fieldLabel("caution"), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
   }
-  if (field !== "go") return undefined;
+  if (name !== "go") return undefined;
   const value = goValueSegments(source, layout);
   if (value === undefined) return undefined;
-  return [{ text: labelPrefix("go", layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
+  return [{ text: labelPrefix(fieldLabel("go"), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
 }
 
 /** Render every named field, in the given order.
  *
  * By default only fields with data render; with `layout.persist` every known
- * field renders exactly one row, using `layout.placeholder` (default `"—"`)
- * for the value when the host has nothing to show yet. `statLine` keeps
- * returning `string | undefined` — persistence lives here, not there.
+ * field renders exactly one row, using `skeletonValue` (a live-shaped zero)
+ * for the value when the host has nothing to show yet and falling back to
+ * `layout.placeholder` (default `"—"`) for the fields with no skeleton.
+ * `statLine` keeps returning `string | undefined` — persistence lives here,
+ * not there.
  */
 export function statRows(
   fields: readonly string[],
@@ -533,15 +561,20 @@ export function statRows(
   const labelWidth = hint.labelWidth ?? DEFAULT_LABEL_WIDTH;
   const rows: string[] = [];
   for (const field of fields) {
-    const line = statLine(field, source, hint);
+    // Canonicalized once, so the alias and the key take the same path below.
+    const name = canonicalField(field);
+    const line = statLine(name, source, hint);
     if (line !== undefined) {
       rows.push(line);
       continue;
     }
     // Unknown names stay skipped even when persistent: a typo must stay a
     // reported-and-skipped row, not a placeholder that looks intentional.
-    if (!persist || !isStatField(field)) continue;
-    rows.push(formatRow(field, placeholder, labelWidth));
+    // `caution` stays skipped too: the annunciator has no skeleton and takes
+    // no placeholder — with nothing to say there is no row, and its silence
+    // is the design.
+    if (!persist || !isStatField(name) || name === "caution") continue;
+    rows.push(formatRow(fieldLabel(name), skeletonValue(name, hint) ?? placeholder, labelWidth));
   }
   return rows;
 }

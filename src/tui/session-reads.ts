@@ -8,9 +8,9 @@
 // Coercion of untrusted values happens through ./coerce.js.
 
 import type { Plugin } from "@opencode/plugin/tui";
-import { createActiveElapsed } from "./active-elapsed.js";
+import { createActiveTime } from "./session-elapsed.js";
 import { asCount, asRecord, asText, type SessionLike } from "./coerce.js";
-import { turnKey, turnSpan, unionSpanMs, type ThroughputSpan } from "./stats.js";
+import { turnKey, type ThroughputSpan } from "./stats.js";
 
 /**
  * The location the rail reads shell records and VCS from: the host's current
@@ -25,7 +25,7 @@ export function locationOf(context: Plugin.Context) {
   }
 }
 
-export function createSessionReads(context: Plugin.Context, maxBankedMs?: number) {
+export function createSessionReads(context: Plugin.Context) {
   /** How many trailing messages are inspected for tool parts. */
   const RECENT_MESSAGES = 4;
 
@@ -55,7 +55,14 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
   };
 
   // Subagent sessions are separate sessions, and the parent's `cost` does not
-  // include them, so a bare `cost` row understates a swarm. Sum the family.
+  // include them, so a bare `cost` row understates a swarm. Sum the family —
+  // and the same scope for `tokens`: the money row already shows the family,
+  // so the token rows beside it must share it, or one row's swarm is another
+  // row's session. The parent's own tokens come from its session record (its
+  // own cost arrives via `ownCost`, already in the caller's hand), every
+  // child's from theirs: `input`, `output`, `reasoning`, and both `cache`
+  // rungs, so a caller that uses this INSTEAD of the session's own record
+  // gets the full family figure.
   const treeTotals = (sessionID: string, ownCost: unknown) => {
     if (!isFamilyRoot(sessionID)) return undefined;
 
@@ -66,6 +73,24 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
       return undefined;
     }
     if (ids.length <= 1) return undefined;
+
+    let own: SessionLike | undefined;
+    try {
+      own = context.data.session.get(sessionID) as SessionLike | undefined;
+    } catch {
+      own = undefined;
+    }
+    const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+    const addTokens = (source: SessionLike | undefined): void => {
+      const record = asRecord(source?.tokens);
+      tokens.input += asCount(record?.["input"]) ?? 0;
+      tokens.output += asCount(record?.["output"]) ?? 0;
+      tokens.reasoning += asCount(record?.["reasoning"]) ?? 0;
+      const cache = asRecord(record?.["cache"]);
+      tokens.cache.read += asCount(cache?.["read"]) ?? 0;
+      tokens.cache.write += asCount(cache?.["write"]) ?? 0;
+    };
+    addTokens(own);
 
     let cost = asCount(ownCost) ?? 0;
     let count = 0;
@@ -81,8 +106,9 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
       if (child === undefined) continue;
       count += 1;
       cost += asCount(child.cost) ?? 0;
+      addTokens(child);
     }
-    return count === 0 ? undefined : { cost, count };
+    return count === 0 ? undefined : { cost, count, tokens };
   };
 
   // A message's own totals are per-request, so the last assistant message's
@@ -226,53 +252,39 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
     return status === undefined ? undefined : false;
   };
 
-  // Accumulated active wall time: the clock runs only while `busy()` says the
-  // session, its family, or its shells is working, and freezes otherwise. The
-  // `now` parameter keeps the transition observation deterministic for tests.
-  //
-  // The seed gives that same clock the session's already-recorded work so a
-  // restart does not reset the row to `—`. It scans exactly the scope `busy()`
-  // consults — the displayed session plus every id `family()` returns — and
-  // takes the merged union of those assistant turns' spans, tokens ignored: a
-  // zero-output turn still took wall time. The scan is memoised one result per
-  // session id, and every read degrades to zero rather than throwing, so an
-  // The scan is memoised one result per session id, and every read degrades to zero rather than throwing, so an
-  // absent family or an unstamped host leaves today's behaviour untouched. The
-  // memo holds at most `MAX_SEEDS` entries: without eviction a TUI lifetime of
-  // session-hopping grows it forever, and an evicted revisit simply re-scans
-  // the host's own timestamps, so nothing is lost.
-  const MAX_SEEDS = 50;
-  const seeds = new Map<string, number>();
-  const rememberSeed = (sessionID: string, seed: number): void => {
-    if (seeds.has(sessionID)) seeds.delete(sessionID);
-    else if (seeds.size >= MAX_SEEDS) {
-      for (const oldest of seeds.keys()) {
-        seeds.delete(oldest);
-        break;
+  // Active time over the session's whole lifetime, derived from the host's own
+  // timestamps rather than accumulated in this process: the figure is the
+  // merged union of the assistant turns' spans across exactly the scope
+  // `busy()` consults — the displayed session plus every id `family()`
+  // returns — with an uncompleted turn ending at `now` while the scope is
+  // genuinely working, and collapsing to its last recorded stamp when nothing
+  // is working. So a restart recomputes the same figure instead of resetting,
+  // a climbing turn keeps climbing while it is in flight, a settled scope
+  // freezes, and a stalled or abandoned turn bills no idle time. Tokens are
+  // ignored: a zero-output turn still took wall time. One `now` for the whole
+  // scan, so every in-flight turn ends at the same instant and the union
+  // cannot be skewed by the reads drifting apart. Every read degrades to
+  // empty rather than throwing, so an absent family or an unstamped host hides
+  // the row instead of breaking the rail. Monotonicity, caching and the
+  // per-session bound live in ./session-elapsed.js; this is only the host read.
+  const spansOf = (sessionID: string, now: number): readonly ThroughputSpan[] => {
+    try {
+      // Whether the scope is genuinely working, read once for the whole scan:
+      // every uncompleted turn in it shares the same end rule, and the scope
+      // is exactly what `busy()` already consults. A read that throws counts
+      // as not busy.
+      let live = false;
+      try {
+        live = busy(sessionID) === true;
+      } catch {
+        live = false;
       }
-    }
-    seeds.set(sessionID, seed);
-  };
-  const seedElapsed = (sessionID: string): number => {
-    const cached = seeds.get(sessionID);
-    if (cached !== undefined) {
-      seeds.delete(sessionID);
-      seeds.set(sessionID, cached);
-      return cached;
-    }
-
-    // One `now` for the whole scan, so every in-flight turn ends at the same
-    // instant and the union cannot be skewed by the reads drifting apart.
-    const now = Date.now();
-    const ids = new Set<string>([sessionID]);
-    try {
-      for (const id of context.data.session.family(sessionID) ?? []) ids.add(id);
-    } catch {
-      // No family on this host: the session's own turns still stand.
-    }
-
-    let seed = 0;
-    try {
+      const ids = new Set<string>([sessionID]);
+      try {
+        for (const id of context.data.session.family(sessionID) ?? []) ids.add(id);
+      } catch {
+        // No family on this host: the session's own turns still stand.
+      }
       const spans: ThroughputSpan[] = [];
       for (const id of ids) {
         for (const entry of messagesOf(id)) {
@@ -280,33 +292,48 @@ export function createSessionReads(context: Plugin.Context, maxBankedMs?: number
           if (message?.["type"] !== "assistant") continue;
           const stamp = asRecord(message["time"]);
           const created = asCount(stamp?.["created"]);
+          if (created === undefined) continue;
           const completed = asCount(stamp?.["completed"]);
           const streamed = asCount(stamp?.["streamed"]);
-          // `elapsed` ends a settled turn at `completed`: the clock stays busy
-          // through the turn's tool settlement, which `streamed` would drop.
-          const span = turnSpan(created, completed, streamed, now, "completed");
-          if (span === undefined) continue;
+          // A completed turn ends at `completed`, covering its tool
+          // settlement. An uncompleted one ends at `now` while the scope is
+          // genuinely working, and collapses to its last recorded stamp
+          // (`streamed`, else its own start) when nothing is working — so a
+          // host that never writes `completed` cannot bill idle either.
+          const end = completed ?? (live ? now : (streamed ?? created));
+          if (!Number.isFinite(end)) continue;
           const output = asRecord(message["tokens"])?.["output"];
-          spans.push({ key: turnKey(message["id"], created, completed, output, streamed), ...span });
+          spans.push({
+            key: turnKey(message["id"], created, completed, output, streamed),
+            start: created,
+            end: Math.max(created, end),
+          });
         }
       }
-      seed = unionSpanMs(spans);
+      return spans;
     } catch {
-      // A throwing read never reaches the rail: it degrades to today's zero.
-      seed = 0;
+      // A throwing read never reaches the rail: it degrades to no spans.
+      return [];
     }
-
-    rememberSeed(sessionID, seed);
-    return seed;
   };
 
-  const activeElapsed = createActiveElapsed(busy, { maxBankedMs, seedOf: seedElapsed });
+  // Whether the host still knows a session. The elapsed clock's sweep consults
+  // this before dropping an entry, so only a forgotten session loses its
+  // high-water mark; a throwing or absent record counts as forgotten.
+  const knows = (sessionID: string): boolean => {
+    try {
+      return context.data.session.get(sessionID) !== undefined;
+    } catch {
+      return false;
+    }
+  };
+
+  const activeTime = createActiveTime({ spansOf, knows });
   const sessionElapsed = (sessionID: string, now: number = Date.now()): number | undefined =>
-    activeElapsed(sessionID, now);
+    activeTime(sessionID, now);
 
   return {
     messagesOf,
-    isFamilyRoot,
     treeTotals,
     contextUsage,
     sessionElapsed,

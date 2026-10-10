@@ -8,7 +8,7 @@
 // Everything is optional. Missing or invalid values fall back to the sane
 // defaults below, so the rail always renders and a typo can never break the TUI.
 
-import { DEFAULT_PLACEHOLDER, isStatField, STAT_FIELDS } from "./stats.js";
+import { DEFAULT_PLACEHOLDER, canonicalField, isStatField, STAT_FIELDS } from "./stats.js";
 import type { CautionThresholds } from "./caution.js";
 import type { DurationStyle } from "./format.js";
 import {
@@ -624,6 +624,10 @@ function readFooterGo(value: unknown, issues: string[]): boolean | GoPanelLook {
  *
  * An unknown name is reported rather than silently dropped: otherwise a typo in
  * `sidebar.rows` looks identical to the host simply not having the data yet.
+ * The `session` alias folds back to its canonical key `ses` silently, so the
+ * list never carries two spellings of one row and every downstream consumer
+ * (the `wants()` set, `railLines`' `field`, the `ses` click-copy and wrap mode)
+ * keeps working unchanged.
  */
 function readRows(value: unknown, issues: string[], maxLines: number): readonly string[] {
   if (value === undefined) return DEFAULT_SIDEBAR_ROWS;
@@ -650,7 +654,7 @@ function readRows(value: unknown, issues: string[], maxLines: number): readonly 
       issues.push(`${path} is not a known field (${STAT_FIELDS.join(", ")}); skipping it`);
       return;
     }
-    rows.push(name);
+    rows.push(canonicalField(name));
   });
 
   if (rows.length === 0) {
@@ -895,7 +899,8 @@ function readLineStyle(value: unknown, fallback: LineStyle, path: string, issues
  *
  * A per-row key must name a known field. That check is what keeps a typo
  * (`style.rows.costly`) from silently styling nothing: unknown names are
- * reported and skipped, exactly like `sidebar.rows`.
+ * reported and skipped, exactly like `sidebar.rows`. The `session` alias
+ * folds back to `ses`, so `style.rows.session` styles the `ses` row.
  */
 function readStyle(section: Record<string, unknown>, issues: string[]): StyleConfig {
   const rawRows = section["rows"];
@@ -922,7 +927,7 @@ function readStyle(section: Record<string, unknown>, issues: string[]): StyleCon
       issues.push(`${path} is not a known field (${STAT_FIELDS.join(", ")}); skipping it`);
       continue;
     }
-    overrides[name] = readLineStyle(entry, wildcard, path, issues);
+    overrides[canonicalField(name)] = readLineStyle(entry, wildcard, path, issues);
   }
 
   return { lines, rows: { wildcard, overrides } };

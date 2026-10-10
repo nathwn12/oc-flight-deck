@@ -117,30 +117,40 @@
     //   agent      which agent is running (orchestrator, build, plan, ...)
     //   model      model id, plus the variant when there is one
     //   branch     current git branch. Off by default — costs a VCS call
-    //   cost       this conversation, plus its subagents when any ran; with
-    //              `total` on the rail, the session figure alone
+    //   cost       this conversation, plus every subagent session in its tree
+    //              (the host links those by parentID); with `total` on the
+    //              rail, the session figure alone. It cannot see spend from an
+    //              independently spawned top-level session: the rollup follows
+    //              the host's parentID link only (family()), a session spawned
+    //              as an independent top-level session carries no parentID,
+    //              and the host returned no metadata field for the sessions
+    //              probed during this work — so there is no automatic creator
+    //              link today. The `project` row is the surface that covers
+    //              every session in the project, spawned included
     //   total      the family total and subagent count on a row of its own
     //   project    every session in this project, not just the one on screen
-    //   tokens     this session's input and output tokens
-    //   cache      cache hit rate, then cache reads
+    //   tokens     input and output, in the same family scope as `cost`: this
+    //              conversation plus its subagent sessions when any exist,
+    //              the session alone when there are none
+    //   cache      cache hit rate, then cache reads, in the same family scope
+    //              as `cost`
     //   context    a gauge of how full the context window is
     //   perms      what is waiting for approval, not just how many
-    //   elapsed    active time: the clock runs only while this session — or a
-    //              subagent in its tree, or one of its shells — is working, and
-    //              freezes when everything settles. Seeded once from the
-    //              assistant turn spans the host already recorded, so it
-    //              survives a restart instead of resetting; work observed live
-    //              after that keeps counting in memory
-    //   tps        average speed while streaming: output plus reasoning tokens
-    //              divided by the time the provider was actively streaming
-    //              (streamed minus created), subagents included. Idle between
-    //              turns and the tool settlement after one are never counted,
-    //              so the figure freezes when everything settles rather than
-    //              decaying or hiding; a turn still in flight counts up to now.
-    //              On a host with no per-message timestamps it falls back to
-    //              the lifetime average, which includes idle and can sag
+    //   elapsed    active time recomputed from the assistant-turn spans the host
+    //              itself recorded for this session and its subagents — a turn
+    //              still in flight ends at "now". A restart comes back with the
+    //              same value instead of resetting, it cannot step backwards
+    //              while the host still reports those turns, and it is NOT
+    //              wall-clock since the session began
+    //   tps        live speed, directly per-session — subagents excluded: the
+    //              session's own generation tokens (output + reasoning) over
+    //              its own generating time. Shows `0 tok/s` whenever the
+    //              session is not generating (idle, between turns, or before
+    //              the first sample), and never seeds itself from a lifetime
+    //              average. Not configurable
     //   spark      recent turn sizes as a sparkline
-    //   reasoning  reasoning tokens, when the model emits them
+    //   reasoning  reasoning tokens, when the model emits them, in the same
+    //              family scope as `cost`
     //   turns      how many prompts you have sent this session
     //   guard      harness status from oc-harness-guard: breaches, orphans,
     //              findings, or ok. Available, off by default.
@@ -148,14 +158,23 @@
     //              a percent each, turning red as a window approaches its limit.
     //              Reads the active opencode-go credential from OpenCode's own
     //              credential store. Available, off by default.
-    //   ses        the full session id (the rail wraps it). A mouse click on the
-    //              row copies the full id to the terminal clipboard. Off by
-    //              default; needs the host's mouse enabled.
+    //   ses        the open session id as a clipped preview, labelled `session`
+    //              on the rail (never the full id). A mouse click on the row
+    //              copies the full id to the terminal clipboard. May be named
+    //              `session` here — it is normalized to `ses`. The preview
+    //              budget is 18 cells, reduced by however much the `session`
+    //              label overflows `layout.labelWidth` below, floored at 8
+    //              cells (at the default width 10 the budget is the full 18;
+    //              at 6 it is 17), so the row's total width is unchanged by
+    //              the rename at every `layout.labelWidth`. Off by default; needs the host's mouse.
     //
     // Every named row renders persistently, so the rail keeps a stable shape:
-    // a row with no data yet shows the placeholder below, in the same label
-    // column as a live row. The fixed lines and live rows share the maxLines
-    // budget below, and anything past it is dropped.
+    // a row with no data yet draws a real-looking zero — `$0.000` for money
+    // rows, `0 in · 0 out` for tokens, `0 tok/s` for tps — in the same label
+    // column as a live row, never a placeholder symbol. (`caution` is the one
+    // exception: the annunciator stays silent until it has something to say.)
+    // The fixed lines and live rows share the maxLines budget below, and
+    // anything past it is dropped.
     "rows": [
       "status",
       "agent",
@@ -171,15 +190,19 @@
       // ,"go"        Zen Go account usage (needs the active opencode-go credential)
       // ,"caution"   — the annunciator
       // ,"branch"    — current git branch
-      // ,"ses"       - current session id (full, wrapped); click to copy the full id
+      // ,"ses"       - session id preview (labelled `session`); click to copy the full id
     ],
 
-    // Every named row renders persistently: with no data yet it shows the
-    // placeholder below, in the same label column as a live row. Set to false
-    // to omit rows with no data instead.
+    // Every named row renders persistently: with no data yet it draws its
+    // zero skeleton (a real-looking zero, never a placeholder symbol), in the
+    // same label column as a live row. Set to false to omit rows with no data
+    // instead.
     "persist": true,
 
-    // Value shown for a persistent row with no data yet. Any non-empty string.
+    // Fallback for a persistent row with no data that has no skeleton. Any
+    // non-empty string. Every shipped field has a skeleton, so this dash is
+    // unreachable in practice — it only covers a field with nothing to draw
+    // a zero from.
     "placeholder": "—",
 
     // Maximum total height, including fixed lines and live rows. Defaults to 24.

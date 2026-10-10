@@ -13,25 +13,20 @@
 export { clip, formatCost, formatCount, formatDuration, fuelBar, sparkline } from "./format.js";
 export { statLine, statRows, statSegments } from "./rows.js";
 export type { StatSegment } from "./rows.js";
-export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, isStatField } from "./stat-fields.js";
+export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, canonicalField, fieldLabel, isStatField, skeletonValue } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
 export {
   createInstantTps,
   instantTpsRate,
-  sessionThroughput,
   smoothTpsRate,
   TPS_EWMA_ALPHA,
-  TPS_MIN_GEN_MS,
-  TPS_MIN_TOKENS,
   TPS_REPAINT_ABS,
   TPS_REPAINT_RATIO,
   tpsNeedsRepaint,
   turnKey,
   turnSpan,
   unionGenerationTotals,
-  unionOutputTotals,
   unionSpanMs,
-  unionSpanThroughput,
   unionSpanTotals,
 } from "./throughput.js";
-export type { SpanEndPreference, SpanTotals, ThroughputSpan } from "./throughput.js";
+export type { SpanTotals, ThroughputSpan } from "./throughput.js";

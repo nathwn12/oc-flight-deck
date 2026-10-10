@@ -146,13 +146,9 @@ export default Plugin.define({
       );
     };
 
-    // Bound a bankable window to a few ticks: `min(60s, max(5s, 4 * refreshMs))`,
-    // so a suspended process or a sparse-event gap cannot be billed as work.
-    const maxBankedMs = Math.min(60_000, Math.max(5_000, 4 * config.refresh));
-    const reads = createSessionReads(context, maxBankedMs);
+    const reads = createSessionReads(context);
     const {
       messagesOf,
-      isFamilyRoot,
       treeTotals,
       contextUsage,
       sessionElapsed,
@@ -178,8 +174,7 @@ export default Plugin.define({
         thresholds: cautionThreshold,
       });
 
-    const { sessionTps } = createTpsReader(context, isFamilyRoot, {
-      busyOf: busy,
+    const { sessionTps } = createTpsReader(context, {
       elapsedMsOf: (id, now) => sessionElapsed(id, now),
     });
 
@@ -287,11 +282,21 @@ export default Plugin.define({
         ? messagesOf(sessionID).filter((entry) => asRecord(entry)?.["type"] === "user").length
         : undefined;
 
+      // The money row already shows the family, so the token rows beside it
+      // share its scope: when the tree is on record its rolled-up tokens
+      // replace the session's own, and the cost/total rows read `tree` itself.
+      // The tree is derived only when a row that needs it is on the rail.
+      const tree =
+        wants("cost") || wants("total") || wants("tokens") || wants("cache") || wants("reasoning")
+          ? treeTotals(sessionID, session?.cost)
+          : undefined;
+
       return {
         ...session,
+        tokens: tree?.tokens ?? session?.tokens,
         caution: wants("caution") ? announce(sessionID) : undefined,
         branch: wants("branch") ? branchOf(location) : undefined,
-        tree: wants("cost") || wants("total") ? treeTotals(sessionID, session?.cost) : undefined,
+        tree,
         context: wants("context") ? contextUsage(sessionID, session?.model) : undefined,
         project: wants("project") ? projectTotals(sessionID) : undefined,
         status: wants("status") ? statusOf(sessionID) : undefined,
