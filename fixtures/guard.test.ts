@@ -150,9 +150,9 @@ describe("guard row tokens", () => {
     }
   });
 
-  test("persists like every other row", () => {
-    expect(statRows(["guard"], {}, { persist: true })).toEqual(["guard     —"]);
-    expect(statRows(["guard"], {}, { persist: true, placeholder: "n/a" })).toEqual(["guard     n/a"]);
+  test("persists with its skeleton, never the placeholder", () => {
+    expect(statRows(["guard"], {}, { persist: true })).toEqual(["guard     unknown"]);
+    expect(statRows(["guard"], {}, { persist: true, placeholder: "n/a" })).toEqual(["guard     unknown"]);
     expect(statRows(["guard"], {})).toEqual([]);
     expect(statRows(["guard"], { guard: HEALTHY }, { persist: true })).toEqual(["guard     ok"]);
   });

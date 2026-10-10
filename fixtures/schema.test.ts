@@ -140,7 +140,7 @@ describe("the schema describes the real config", () => {
     expect(rowStyle.properties.attributes.items.enum).toEqual(
       props["style"]!.properties.lines.properties.attributes.items.enum,
     );
-    expect(props["style"]!.properties.rows.propertyNames.enum).toEqual(["*", ...STAT_FIELDS]);
+    expect(props["style"]!.properties.rows.propertyNames.enum).toEqual(["*", ...STAT_FIELDS, "session"]);
     for (const option of [
       props["style"]!.properties.lines.properties.color,
       props["style"]!.properties.lines.properties.attributes,
@@ -151,8 +151,8 @@ describe("the schema describes the real config", () => {
     }
   });
 
-  test("the rows enum is the real list of fields", () => {
-    expect(props["sidebar"]!.properties.rows.items.enum).toEqual([...STAT_FIELDS]);
+  test("the rows enum is the real list of fields, plus the documented alias", () => {
+    expect(props["sidebar"]!.properties.rows.items.enum).toEqual([...STAT_FIELDS, "session"]);
   });
 
   test("every option carries a description, because that is the point", () => {

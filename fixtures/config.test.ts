@@ -17,13 +17,13 @@ describe("flight deck config", () => {
     expect(resolution.issues).toEqual([]);
     expect(resolution.config).toEqual(DEFAULT_CONFIG);
     // Literal defaults, so a silent edit to the constants is still caught.
-    // With no session data, every selected row renders its placeholder.
+    // With no session data, every selected row renders its zero skeleton.
     expect(resolution.config.sidebar.persist).toBe(true);
     expect(resolution.config.sidebar.placeholder).toBe("—");
     expect(sidebarLines(resolution.config)).toHaveLength(
       DEFAULT_SIDEBAR_LINES.length + resolution.config.sidebar.rows.length,
     );
-    expect(sidebarLines(resolution.config)).toContain("cache     —");
+    expect(sidebarLines(resolution.config)).toContain("cache     0 read");
     // And omission is still one flag away.
     const omitted = {
       ...resolution.config,
@@ -118,6 +118,21 @@ describe("flight deck config", () => {
     expect(bad.config.sidebar.rows).toEqual(["cost"]);
     expect(bad.issues.join(" ")).toContain("sidebar.rows[1]");
     expect(bad.issues.join(" ")).toContain("not a known field");
+  });
+
+  test("folds the session alias back to ses, in rows and style overrides", () => {
+    // The alias is accepted silently: no issue recorded, and the list carries
+    // the canonical key so every downstream consumer keeps working unchanged.
+    const alias = resolveConfig({ sidebar: { rows: ["session"] } });
+    expect(alias.issues).toEqual([]);
+    expect(alias.config.sidebar.rows).toEqual(["ses"]);
+
+    // Same normalization for per-row style keys: `style.rows.session` styles
+    // the `ses` row, and leaves no `session` key behind.
+    const styled = resolveConfig({ style: { rows: { session: { color: "warning" } } } });
+    expect(styled.issues).toEqual([]);
+    expect(styled.config.style.rows.overrides.ses).toMatchObject({ color: "warning" });
+    expect(styled.config.style.rows.overrides.session).toBeUndefined();
   });
 
   test("falls back to the default rows when none are usable", () => {
@@ -599,9 +614,11 @@ describe("the shipped default rail", () => {
       "caution   ● shell running 8m41s",
     );
 
-    // Named but with the annunciator off and nothing to say, it is a placeholder.
+    // Named but with the annunciator off and nothing to say, it stays silent:
+    // the annunciator has no skeleton and takes no placeholder, so there is
+    // no row under persist — its silence is the design.
     const rows = resolveConfig({ sidebar: { rows: ["caution"] } }).config;
-    expect(sidebarLines(rows, {})).toContain("caution   —");
+    expect(sidebarLines(rows, {})).toEqual([]);
 
     // Enabled AND on the rail: the annunciator actually draws its text, so the
     // opt-in is a real path and not just a flag that changes nothing.

@@ -5,39 +5,15 @@
 // Pure: no clock, no I/O, no rendering. Untrusted sample fields are coerced
 // through ./coerce.js so a garbage value is skipped rather than guessed at.
 //
-// Three rates live here. `sessionThroughput` is the whole-lifetime average, kept
-// as the metric of last resort for a host that exposes no per-message
-// timestamps. `unionSpanThroughput` is the active-work average: output plus
-// reasoning tokens divided by the union of the assistant turns' own streaming
-// spans, so idle and tool-settlement time is never in the denominator and the
+// Two pieces live here. The union helpers sum generation tokens (output plus
+// reasoning, the same pair the official TUI divides) and merge the assistant
+// turns' own streaming spans, so idle time is never in the denominator and the
 // figure freezes once everything settles. `createInstantTps` is the live row's
 // tracker: generation-token per-poll deltas over generating-time deltas, smoothed
 // with an EWMA and repainted through hysteresis, so the rail shows what the
 // decoder is doing now instead of everything the session ever did.
 
 import { asCount, asText } from "./coerce.js";
-
-/**
- * Overall session throughput: output plus reasoning tokens over the session's
- * lifetime.
- *
- * `tokens` is the same numerator the active-work average divides — a session
- * record's `tokens` is a `TokenUsage.Info`, so its `reasoning` rung is present
- * and belongs on this path too. Counting output alone would under-report a
- * thinking-heavy model and disagree with the row's stated definition.
- *
- * Unlike the active-work average, this is the whole conversation's average, so
- * it includes every subagent and every pause. A just-started session is floored
- * at one second so it cannot divide by a sliver of time and flash an absurd
- * rate. Returns `undefined` when there is nothing to divide.
- */
-export function sessionThroughput(tokens: unknown, elapsedMs: unknown): number | undefined {
-  const total = asCount(tokens);
-  const elapsed = asCount(elapsedMs);
-  if (total === undefined || total <= 0) return undefined;
-  if (elapsed === undefined || elapsed <= 0) return undefined;
-  return total / (Math.max(elapsed, 1_000) / 1_000);
-}
 
 /**
  * One assistant turn's contribution to the active-work average.
@@ -56,24 +32,15 @@ export interface ThroughputSpan {
 }
 
 /**
- * Which recorded stamp ends an assistant turn's span when more than one is
- * present. The choice is the caller's, not the helper's: the two consumers want
- * different clocks off the same record.
- *
- * `"streamed"` ends at `time.streamed`, the moment the provider stopped
- * decoding - the official TUI's numerator clock, used by `tps`.
- * `"completed"` ends at `time.completed`, once the turn's tools have settled -
- * the busy clock, used by the `elapsed` seed.
- */
-export type SpanEndPreference = "streamed" | "completed";
-
-/**
  * Resolve one assistant turn's span from its timestamp rungs.
  *
- * `start` is `time.created`. `end` is the stamp `preference` names first when
- * both are recorded, else the other rung, else the caller's `nowMs` for a turn
- * still in flight. So `"streamed"` reads `streamed`, then `completed`;
- * `"completed"` reads `completed`, then `streamed`. A clock that steps backwards
+ * `start` is `time.created`. `end` is `time.streamed` — the moment the
+ * provider stopped decoding, the official TUI's numerator clock — then
+ * `time.completed`, else the caller's `nowMs` for a turn still in flight.
+ * (The elapsed clock used to prefer `completed` here so a turn's tool
+ * settlement stayed in its tally; it now resolves that end itself in
+ * ./session-reads.js, leaving this helper with the single decoding clock
+ * both remaining callers want.) A clock that steps backwards
  * is clamped to a zero-length span rather than a negative one, so skew can never
  * subtract time from the union. Returns `undefined` when there is no usable
  * start - the turn is skipped, never guessed at.
@@ -83,14 +50,10 @@ export function turnSpan(
   completed: unknown,
   streamed: unknown,
   nowMs: unknown,
-  preference: SpanEndPreference,
 ): { readonly start: number; readonly end: number } | undefined {
   const start = asCount(created);
   if (start === undefined) return undefined;
-  const ended =
-    preference === "streamed"
-      ? asCount(streamed) ?? asCount(completed) ?? asCount(nowMs)
-      : asCount(completed) ?? asCount(streamed) ?? asCount(nowMs);
+  const ended = asCount(streamed) ?? asCount(completed) ?? asCount(nowMs);
   if (ended === undefined) return undefined;
   return { start, end: Math.max(start, ended) };
 }
@@ -229,37 +192,12 @@ export function unionSpanMs(spans: readonly ThroughputSpan[]): number {
 }
 
 /**
- * Active-work throughput: output and reasoning tokens of the scope divided by
- * the union of its streaming turn spans. Idle time between turns and the
- * settlement after a turn are not in the denominator, so the figure stops moving
- * once everything settles instead of decaying or hiding. A turn still in flight
- * ends at the caller's `now`, so the value keeps climbing while work happens.
- *
- * Floored at one second, the same floor the lifetime average uses, so a sliver
- * of time cannot flash an absurd rate. Returns `undefined` when there is
- * nothing to divide — no positive tokens, or no span with positive length.
- */
-export function unionSpanThroughput(spans: readonly ThroughputSpan[]): number | undefined {
-  const { tokens, unionMs } = unionSpanTotals(spans);
-  if (tokens <= 0 || unionMs <= 0) return undefined;
-  return tokens / (Math.max(unionMs, 1_000) / 1_000);
-}
-
-/**
  * Smoothing weight for the instantaneous TPS rate: each new per-poll sample
  * moves the displayed figure 30% of the way toward it. Heavy enough to stop
  * the row flickering on every poll, light enough that a real speedup shows
  * within a few polls rather than sagging behind a lifetime average.
  */
 export const TPS_EWMA_ALPHA = 0.3;
-
-/**
- * Minimum generating time (ms) and output tokens before the TPS row draws
- * anything. Below either, a per-poll rate is one lucky sample over a sliver
- * of time - the exact "cheaty" flash the row used to print.
- */
-export const TPS_MIN_GEN_MS = 2_000;
-export const TPS_MIN_TOKENS = 10;
 
 /**
  * Hysteresis for the TPS repaint: the held figure moves only when the new
@@ -314,9 +252,7 @@ export function tpsNeedsRepaint(displayed: number | undefined, smoothed: number)
  * reasoning, the same pair the official TUI divides.
  *
  * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`.
- * Only the live TPS path uses this. `unionOutputTotals` below stays as the
- * output-only twin, and `unionSpanTotals` (which feeds the other rows) is
- * unchanged.
+ * Only the live TPS path uses this.
  */
 export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTotals {
   const seen = new Set<string>();
@@ -342,49 +278,23 @@ export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTot
 }
 
 /**
- * Output tokens and generating time: the output-only twin of
- * `unionGenerationTotals`.
- *
- * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`, but
- * the numerator counts OUTPUT tokens only. The live TPS path no longer uses
- * this - it divides generation tokens (`unionGenerationTotals`) - so a
- * thinking-heavy turn reads as speed on that row rather than as time spent
- * with no output yet.
- */
-export function unionOutputTotals(spans: readonly ThroughputSpan[]): SpanTotals {
-  const seen = new Set<string>();
-  const accepted: Array<{ start: number; end: number }> = [];
-  let tokens = 0;
-
-  for (const span of spans) {
-    const key = asText(span.key);
-    if (key === undefined || seen.has(key)) continue;
-
-    const start = asCount(span.start);
-    const end = asCount(span.end);
-    if (start === undefined || end === undefined) continue;
-    const output = asCount(span.tokens);
-
-    seen.add(key);
-    accepted.push({ start, end: Math.max(start, end) });
-    tokens += output ?? 0;
-  }
-
-  return { tokens, unionMs: mergedSpanMs(accepted) };
-}
-
-/**
  * Near-instantaneous generation rate for one displayed session scope.
  *
  * The caller feeds each poll's cumulative generation tokens and cumulative
- * generating milliseconds (streaming-span union, or the busy-gated active
- * clock - both exclude idle by construction) plus whether the scope is busy,
- * and gets back the figure to draw, or `undefined` while there is nothing
- * honest to show yet. Deltas between successive polls are the rate; the
- * EWMA smooths it; hysteresis holds the paint; the minimum sample hides the
- * row until ~2 s of generating time and ~10 tokens are on record; and a
- * non-busy poll freezes on the last figure without touching the baselines, so
- * idle can never dilute the rate - it only holds it.
+ * generating milliseconds (the streaming-span union, which excludes idle by
+ * construction) and gets back the figure to draw. The rule is per-session and
+ * honest about idle: the first sample only sets the baselines and reads as
+ * zero — no rate is known yet, and a session deep into its life must not flash
+ * its lifetime average as if it were live. A poll whose generating time did
+ * not advance means the session is not generating right now: it reads as zero
+ * with the smoother untouched, so the next poll that does add generating time
+ * resumes from the held smoothed figure rather than from zero. A backwards
+ * counter rebaselines (baselines and smoother alike, since the pre-reset
+ * average belongs to another era) and reads as zero. Otherwise the
+ * instantaneous rate is the delta of generation tokens over the delta of
+ * generating milliseconds, smoothed by the EWMA and held through the
+ * hysteresis. Deltas between successive polls are the rate, so a pause can
+ * never sag the figure — it reads as zero while it lasts.
  */
 export function createInstantTps(alpha: number = TPS_EWMA_ALPHA) {
   let prevTokens: number | undefined;
@@ -392,29 +302,19 @@ export function createInstantTps(alpha: number = TPS_EWMA_ALPHA) {
   let smoothed: number | undefined;
   let displayed: number | undefined;
 
-  return function sample(
-    totalTokens: unknown,
-    totalGenMs: unknown,
-    busy: unknown,
-  ): number | undefined {
-    // Not busy means frozen: hold the last figure, baselines untouched, so
-    // the idle stretch contributes nothing to either side of the next delta.
-    if (busy === false) return displayed;
-
+  return function sample(totalTokens: unknown, totalGenMs: unknown): number | undefined {
     const tokens = asCount(totalTokens);
     const genMs = asCount(totalGenMs);
     if (tokens === undefined || genMs === undefined) return displayed;
 
-    // First sight sets the baselines. The cumulative active average seeds the
-    // smoother, but only once the minimum sample is on record - before that
-    // the row hides rather than flashing a one-sample rate.
+    // First sight sets the baselines. No rate is known yet — not even the
+    // cumulative lifetime average, which would flash a whole session's history
+    // as if it were live — so the row reads as zero until the next poll
+    // brings a delta to divide.
     if (prevTokens === undefined || prevGenMs === undefined) {
       prevTokens = tokens;
       prevGenMs = genMs;
-      if (tokens < TPS_MIN_TOKENS || genMs < TPS_MIN_GEN_MS) return displayed;
-      smoothed = tokens / (genMs / 1_000);
-      if (tpsNeedsRepaint(displayed, smoothed)) displayed = smoothed;
-      return displayed;
+      return 0;
     }
 
     const deltaTokens = tokens - prevTokens;
@@ -426,15 +326,16 @@ export function createInstantTps(alpha: number = TPS_EWMA_ALPHA) {
       prevTokens = tokens;
       prevGenMs = genMs;
       smoothed = undefined;
-      return displayed;
+      return 0;
     }
     prevTokens = tokens;
     prevGenMs = genMs;
 
-    if (tokens < TPS_MIN_TOKENS || genMs < TPS_MIN_GEN_MS) return displayed;
-    // No new generating time: nothing was produced *in time*, so there is no
-    // sample - hold, rather than dividing zero new tokens by zero new time.
-    if (deltaMs <= 0) return displayed;
+    // No new generating time: the session is not generating right now, so the
+    // rate is zero — and the smoother is left untouched, so the next poll that
+    // does add generating time resumes from the held smoothed figure rather
+    // than from zero.
+    if (deltaMs <= 0) return 0;
     const instant = deltaTokens / (deltaMs / 1_000);
     smoothed = smoothTpsRate(smoothed, instant, alpha);
     if (tpsNeedsRepaint(displayed, smoothed)) displayed = smoothed;

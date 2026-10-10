@@ -145,21 +145,21 @@
         },
         "rows": {
           "type": "array",
-          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses"] },
+          "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses", "session"] },
           "default": ["status", "agent", "model", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
-          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, using `sidebar.placeholder` until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows an 18-wide clipped preview of the session id; a mouse click on that row copies the full id to the terminal clipboard."
+          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, drawing its zero skeleton until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows a clipped preview of the session id under the `session` label - budget 18 cells, reduced by however much the label overflows `layout.labelWidth`, floored at 8 - and a mouse click on that row copies the full id to the terminal clipboard. `session` is accepted as an alias for `ses` and is normalized to it."
         },
         "persist": {
           "type": "boolean",
           "default": true,
-          "description": "Render every field named in `sidebar.rows` as a persistent row, using `sidebar.placeholder` when the host has no data yet. True keeps the rail a stable shape that fills in as the session produces data; false restores the old behavior of omitting rows with no data."
+          "description": "Render every field named in `sidebar.rows` as a persistent row, drawing its zero skeleton when the host has no data yet (`$0.000` for money rows, `0 in · 0 out` for tokens, `0 tok/s` for tps, and so on — `caution` is the one row that never draws a skeleton and stays silent until it has something to announce). True keeps the rail a stable shape that fills in as the session produces data; false restores the old behavior of omitting rows with no data."
         },
         "placeholder": {
           "type": "string",
           "minLength": 1,
           "default": "—",
-          "description": "Value shown for a persistent row with no data yet. Used only when `sidebar.persist` is true. Must be a non-empty string; anything else falls back to the default em dash."
+          "description": "Fallback value for a persistent row with no data that has no skeleton. Used only when `sidebar.persist` is true. Must be a non-empty string; anything else falls back to the default em dash. Every shipped field has a skeleton, so this dash is unreachable in practice."
         },
         "maxLines": {
           "type": "integer",
@@ -361,10 +361,10 @@
             }
           },
           "propertyNames": {
-            "enum": ["*", "caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses"]
+            "enum": ["*", "caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses", "session"]
           },
           "default": { "*": { "color": "subdued", "attributes": [] } },
-          "description": "Style all live rows under `*`, then optionally override any known row name such as `cost`. A row can change one field and inherit the other from `*`; unknown row names are reported and ignored."
+          "description": "Style all live rows under `*`, then optionally override any known row name such as `cost`. A row can change one field and inherit the other from `*`; unknown row names are reported and ignored. `session` is accepted as an alias for `ses` and is normalized to it."
         }
       }
     }

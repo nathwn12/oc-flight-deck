@@ -1,196 +1,148 @@
-// `elapsed` is accumulated active wall time, not wall-clock since the session
-// was created. A session left open overnight must not read as a night's work:
-// the clock runs only while the displayed session, its agent family, or one of
-// its owned shells is busy, and freezes the moment everything settles. These
-// tests drive that clock with a controlled `now` and a scripted busy predicate,
-// so every transition is deterministic.
+// `elapsed` is the active time over the session scope's whole lifetime,
+// derived from the host's own assistant-turn timestamps rather than
+// accumulated in this process. A session left open overnight must not read as
+// a night's work: the figure is the merged union of the scope's turn spans,
+// so a restart recomputes the same figure instead of resetting, a turn in
+// flight climbs while it runs, and a settled scope freezes. A per-session
+// high-water mark keeps the row monotonic across compactions and failed
+// reads. These tests drive the figure with a controlled `now`, so every
+// transition is deterministic.
 
 import { describe, expect, test } from "bun:test";
-import { createActiveElapsed } from "../src/tui/active-elapsed.js";
+import { createActiveTime } from "../src/tui/session-elapsed.js";
 import { createSessionReads } from "../src/tui/session-reads.js";
 
-describe("active elapsed clock", () => {
-  test("stays at zero while nothing has ever run", () => {
-    const clock = createActiveElapsed(() => false);
+describe("active time derivation", () => {
+  test("reads nothing to show yet as undefined", () => {
+    const clock = createActiveTime({ spansOf: () => [] });
     expect(clock("s", 0)).toBeUndefined();
     expect(clock("s", 30_000)).toBeUndefined();
     expect(clock("s", 600_000)).toBeUndefined();
   });
 
-  test("freezes while idle and resumes cumulatively while busy", () => {
-    let busy = false;
-    const clock = createActiveElapsed(() => busy);
-
-    // Idle at start: the first two seconds are not work and must not bank.
-    expect(clock("s", 0)).toBeUndefined();
-    expect(clock("s", 2_000)).toBeUndefined();
-
-    // Busy begins somewhere before the next observation.
-    busy = true;
-    expect(clock("s", 2_000)).toBeUndefined();
-    expect(clock("s", 3_000)).toBe(1_000);
-
-    // Idle again: the seven-second gap must not count.
-    busy = false;
-    expect(clock("s", 10_000)).toBe(1_000);
-    expect(clock("s", 30_000)).toBe(1_000);
-
-    // Resuming continues from the banked second, not from zero.
-    busy = true;
-    expect(clock("s", 31_000)).toBe(1_000);
-    expect(clock("s", 32_500)).toBe(2_500);
-  });
-
-  test("treats an unknown busy state as frozen", () => {
-    // The host has not said either way; inventing motion is worse than silence.
-    const clock = createActiveElapsed(() => undefined);
-    expect(clock("s", 0)).toBeUndefined();
-    expect(clock("s", 120_000)).toBeUndefined();
-  });
-
-  test("treats a throwing busy read as frozen", () => {
-    const clock = createActiveElapsed(() => {
-      throw new Error("no host");
-    });
-    expect(clock("s", 0)).toBeUndefined();
-    expect(clock("s", 120_000)).toBeUndefined();
-  });
-
-  test("keeps unrelated sessions independent", () => {
-    const working = new Set(["busy"]);
-    const clock = createActiveElapsed((id) => working.has(id));
-
-    // Two reads in a row while only `busy` is on screen bank its one second.
-    expect(clock("busy", 0)).toBeUndefined();
-    expect(clock("busy", 1_000)).toBe(1_000);
-
-    // `idle` is not busy, so it banks nothing for itself...
-    expect(clock("idle", 1_000)).toBeUndefined();
-    expect(clock("idle", 9_000)).toBeUndefined();
-
-    // ...and because it was on screen in between, `busy`'s next read
-    // rebaselines rather than banking the away window: its tally stays at the
-    // value banked while it was on screen.
-    expect(clock("busy", 9_000)).toBe(1_000);
-
-    // However long `busy` then runs, a later look at `idle` still banks
-    // nothing for it, while `busy` resumed from its fresh baseline.
-    expect(clock("busy", 20_000)).toBe(12_000);
-    expect(clock("idle", 20_000)).toBeUndefined();
-  });
-
-  test("does not rewind when the clock stalls or steps back", () => {
-    const clock = createActiveElapsed(() => true);
-    expect(clock("s", 1_000)).toBeUndefined();
-    expect(clock("s", 2_000)).toBe(1_000);
-    // A non-monotonic host clock must never subtract banked time.
-    const banked = clock("s", 1_500);
-    expect(banked).toBe(1_000);
-    expect(clock("s", 1_500)).toBe(banked as number);
-    expect(clock("s", 2_000)).toBeGreaterThanOrEqual(banked as number);
-  });
-
-  test("does not bank a gap while a different session was on screen", () => {
-    // The clock sees one session at a time. Reading B in between means A's gap
-    // was never observed, however long the tally would otherwise bill it. The
-    // cap is deliberately generous so only the session boundary can stop it.
-    const working = new Set(["a"]);
-    const clock = createActiveElapsed((id) => working.has(id), { maxBankedMs: 3_600_000 });
-
-    expect(clock("a", 0)).toBeUndefined();
-    expect(clock("a", 1_000)).toBe(1_000);
-
-    expect(clock("b", 1_000)).toBeUndefined();
-    // A was busy at both ends, but the away window must not be banked; only a
-    // fresh baseline is taken when A comes back on screen.
-    expect(clock("a", 100_000)).toBe(1_000);
-    // Normal accumulation resumes from that baseline.
-    expect(clock("a", 101_000)).toBe(2_000);
-  });
-
-  test("does not bank an unobserved gap beyond the cap", () => {
-    // A suspended process is busy at both ends of a window it never saw. The
-    // cap treats that window as unobserved: undercount, never over-count.
-    const clock = createActiveElapsed(() => true, { maxBankedMs: 5_000 });
-
-    expect(clock("s", 0)).toBeUndefined();
-    expect(clock("s", 1_000)).toBe(1_000);
-    // Ten minutes of sleep: far beyond the cap, so nothing is banked.
-    expect(clock("s", 601_000)).toBe(1_000);
-    // A normal in-bound read resumes accumulation from the fresh baseline.
-    expect(clock("s", 602_000)).toBe(2_000);
-  });
-
-  test("starts from a seed, then accumulates observed work on top", () => {
-    // The seed is host-recorded work already on record; the accumulator then
-    // adds the busy windows seen this process.
-    const clock = createActiveElapsed(() => true, { seedOf: () => 5_000 });
-    expect(clock("s", 0)).toBe(5_000);
-    expect(clock("s", 1_000)).toBe(6_000);
-    expect(clock("s", 2_500)).toBe(7_500);
-  });
-
-  test("asks for the seed exactly once per session", () => {
-    let calls = 0;
-    const clock = createActiveElapsed(() => true, {
-      seedOf: () => {
-        calls += 1;
-        return 3_000;
+  test("floors a throwing read at undefined rather than reaching the rail", () => {
+    const clock = createActiveTime({
+      spansOf: () => {
+        throw new Error("no host");
       },
     });
-    expect(clock("s", 0)).toBe(3_000);
-    expect(clock("s", 1_000)).toBe(4_000);
-    expect(clock("s", 2_000)).toBe(5_000);
+    expect(clock("s", 0)).toBeUndefined();
+  });
+
+  test("a transient failure never shrinks the high-water", () => {
+    let fail = false;
+    const clock = createActiveTime({
+      spansOf: () => {
+        if (fail) throw new Error("no host");
+        return [{ key: "a", start: 0, end: 4_000 }];
+      },
+    });
+    expect(clock("s", 0)).toBe(4_000);
+    fail = true;
+    // The recompute degrades to empty, so the row holds what it showed.
+    expect(clock("s", 60_000)).toBe(4_000);
+  });
+
+  test("serves a stepped-back clock from the record rather than rescanning", () => {
+    let calls = 0;
+    const clock = createActiveTime({
+      spansOf: () => {
+        calls += 1;
+        return [{ key: "a", start: 0, end: 4_000 }];
+      },
+    });
+    expect(clock("s", 10_000)).toBe(4_000);
+    expect(clock("s", 5_000)).toBe(4_000);
     expect(calls).toBe(1);
   });
 
-  test("floors a non-finite, negative or throwing seed at zero", () => {
-    // A NaN or backwards seed must never poison the tally; a throwing read
-    // must never reach the rail.
-    const nan = createActiveElapsed(() => false, { seedOf: () => Number.NaN });
-    expect(nan("s", 0)).toBeUndefined();
-    const infinite = createActiveElapsed(() => false, { seedOf: () => Number.POSITIVE_INFINITY });
-    expect(infinite("s", 0)).toBeUndefined();
-    const negative = createActiveElapsed(() => false, { seedOf: () => -50 });
-    expect(negative("s", 0)).toBeUndefined();
-    const throwing = createActiveElapsed(() => false, {
-      seedOf: () => {
-        throw new Error("no host");
+  test("caches the union for a second and recomputes after", () => {
+    let calls = 0;
+    const clock = createActiveTime({
+      spansOf: () => {
+        calls += 1;
+        return [{ key: "a", start: 0, end: 4_000 }];
       },
     });
-    expect(throwing("s", 0)).toBeUndefined();
+    expect(clock("s", 0)).toBe(4_000);
+    // Within the display resolution the cached union is served, not rescanned.
+    expect(clock("s", 500)).toBe(4_000);
+    expect(calls).toBe(1);
+    expect(clock("s", 1_500)).toBe(4_000);
+    expect(calls).toBe(2);
   });
 
-  test("a seeded tally still freezes on idle, unknown and throwing busy", () => {
-    const seed = () => 4_000;
-    const idle = createActiveElapsed(() => false, { seedOf: seed });
-    expect(idle("s", 0)).toBe(4_000);
-    expect(idle("s", 90_000)).toBe(4_000);
-
-    const unknown = createActiveElapsed(() => undefined, { seedOf: seed });
-    expect(unknown("s", 0)).toBe(4_000);
-    expect(unknown("s", 90_000)).toBe(4_000);
-
-    const throwing = createActiveElapsed(
-      () => {
-        throw new Error("no host");
+  test("a live session's mark survives crowding past the bound", () => {
+    const seen = new Map<string, number>([["a", 4_000]]);
+    const clock = createActiveTime(
+      {
+        spansOf: (id) => {
+          const end = seen.get(id) ?? 0;
+          return end === 0 ? [] : [{ key: `${id}:m1`, start: 0, end }];
+        },
       },
-      { seedOf: seed },
+      { maxSessions: 2 },
     );
-    expect(throwing("s", 0)).toBe(4_000);
-    expect(throwing("s", 90_000)).toBe(4_000);
+    expect(clock("a", 0)).toBe(4_000);
+    clock("b", 0);
+    clock("c", 0);
+    // No recency cut ever evicts a live session: with no `knows` read every
+    // session counts as known, so the sweep drops nothing and "a" holds its
+    // high-water even though the host record has since shrunk.
+    seen.set("a", 900);
+    expect(clock("a", 10_000)).toBe(4_000);
+  });
+
+  test("the sweep drops only sessions the host no longer knows", () => {
+    const seen = new Map<string, number>([
+      ["gone", 4_000],
+      ["a", 4_000],
+    ]);
+    const clock = createActiveTime(
+      {
+        spansOf: (id) => {
+          const end = seen.get(id) ?? 0;
+          return end === 0 ? [] : [{ key: `${id}:m1`, start: 0, end }];
+        },
+        knows: (id) => id !== "gone",
+      },
+      { maxSessions: 2 },
+    );
+    expect(clock("gone", 0)).toBe(4_000);
+    expect(clock("a", 0)).toBe(4_000);
+    // Past the bound the sweep drops "gone" — the host forgot it — and keeps
+    // "a". The revisit re-derives "gone" from the host's current record
+    // instead of holding its stale mark, while "a" holds.
+    clock("b", 0);
+    seen.set("gone", 900);
+    expect(clock("gone", 10_000)).toBe(900);
+    expect(clock("a", 10_000)).toBe(4_000);
+  });
+
+  test("a live session's mark survives a 256-entry sweep", () => {
+    // The defect's repro: the mark used to share the cache's LRU eviction, so
+    // fifty other sessions threw it away and the row stepped backwards.
+    let end = 10_000;
+    const clock = createActiveTime({
+      spansOf: () => [{ key: "x", start: 0, end }],
+    });
+    expect(clock("a", 10_000)).toBe(10_000);
+    end = 1_000;
+    for (let index = 0; index < 300; index += 1) clock(`b${index}`, 11_000);
+    // Three hundred other sessions tripped the sweep, but the host still knows
+    // "a": the shrunken recompute cannot move the held mark.
+    expect(clock("a", 12_000)).toBe(10_000);
   });
 });
 
-// The clock reads its verdict from `busy()`, so these pin the coupling: a
-// running subagent or shell is activity for the root, but a sibling or an
-// unrelated session is not, and two simultaneous activities still count once.
+// The figure reads its spans through `createSessionReads`, so these pin the
+// coupling: the scope is the displayed session plus its family, `completed`
+// ends a settled turn, and an unstamped host hides the row.
 describe("session elapsed integration", () => {
   function stubContext(
-    statuses: Record<string, string | undefined>,
     families: Record<string, readonly string[]> = {},
-    shells: readonly unknown[] = [],
     messages: Record<string, readonly unknown[]> = {},
+    status: string = "idle",
   ) {
     const directory = "C:\\workspace";
     const context = {
@@ -199,19 +151,19 @@ describe("session elapsed integration", () => {
         location: { default: () => ({ directory }), model: { list: () => [] } },
         session: {
           get: (id: string) => ({ id, time: { created: 0 } }),
-          status: (id: string) => statuses[id],
+          status: () => status,
           family: (id: string) => families[id] ?? [id],
           message: { list: (id: string) => messages[id] ?? [] },
           permission: { list: () => [] },
         },
-        shell: { list: () => shells },
+        shell: { list: () => [] },
       },
     };
     return context as unknown as Parameters<typeof createSessionReads>[0];
   }
 
   // A completed assistant turn: a span the host has already stamped, so the
-  // seed is deterministic and does not depend on the test's wall clock.
+  // figure is deterministic and does not depend on the test's wall clock.
   const turn = (id: string, created: number, completed: number, output = 10) => ({
     id,
     type: "assistant",
@@ -219,87 +171,94 @@ describe("session elapsed integration", () => {
     tokens: { output },
   });
 
-  test("counts overlapping session and subagent activity once", () => {
-    const reads = createSessionReads(
-      stubContext({ root: "running", child: "running" }, { root: ["root", "child"] }),
-    );
+  test("a fresh reader over the same host data reproduces the figure", () => {
+    const families = { root: ["root"] };
+    const messages = { root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)] };
 
-    expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    // Both the root and its subagent are running, but time is time: 1s, not 2s.
-    expect(reads.sessionElapsed("root", 1_000)).toBe(1_000);
-    expect(reads.sessionElapsed("root", 2_500)).toBe(2_500);
+    const before = createSessionReads(stubContext(families, messages));
+    const first = before.sessionElapsed("root", 0);
+    expect(first).toBe(7_000);
+
+    // A restart (a brand-new reader) over the same host data comes back with
+    // the work on record instead of `—`.
+    const after = createSessionReads(stubContext(families, messages));
+    expect(after.sessionElapsed("root", 100_000)).toBe(first);
+    expect(after.sessionElapsed("root", 100_000)).toBeGreaterThan(0);
   });
 
-  test("counts an owned running shell as activity", () => {
-    const reads = createSessionReads(
-      stubContext(
-        { root: "idle" },
-        { root: ["root"] },
-        [{ metadata: { sessionID: "root" }, status: "running" }],
-      ),
-    );
+  test("a second read after the list shrinks never reports less", () => {
+    const messages: Record<string, readonly unknown[]> = {
+      root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)],
+    };
+    const reads = createSessionReads(stubContext({ root: ["root"] }, messages));
+    expect(reads.sessionElapsed("root", 0)).toBe(7_000);
 
-    expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 1_000)).toBe(1_000);
+    // A compaction drops the older record: the union recomputes smaller, but
+    // the high-water holds what the row already showed.
+    messages.root = [turn("m2", 6_000, 9_000)];
+    expect(reads.sessionElapsed("root", 60_000)).toBe(7_000);
   });
 
-  test("freezes once the session and its family settle", () => {
-    const statuses: Record<string, string | undefined> = { root: "running" };
-    const reads = createSessionReads(stubContext(statuses, { root: ["root"] }));
+  test("an in-flight turn climbs with now and freezes once completed", () => {
+    const messages: Record<string, readonly unknown[]> = {
+      root: [{ id: "live", type: "assistant", time: { created: 10_000 }, tokens: { output: 5 } }],
+    };
+    // The scope is working, so the uncompleted turn ends at `now` and the
+    // figure climbs.
+    const reads = createSessionReads(stubContext({ root: ["root"] }, messages, "running"));
 
-    expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 2_000)).toBe(2_000);
+    expect(reads.sessionElapsed("root", 12_000)).toBe(2_000);
+    expect(reads.sessionElapsed("root", 15_000)).toBe(5_000);
 
-    statuses.root = "idle";
-    expect(reads.sessionElapsed("root", 9_000)).toBe(2_000);
-    expect(reads.sessionElapsed("root", 40_000)).toBe(2_000);
+    // Settled: the span ends at `completed` and `now` stops mattering.
+    messages.root = [
+      {
+        id: "live",
+        type: "assistant",
+        time: { created: 10_000, completed: 16_000 },
+        tokens: { output: 5 },
+      },
+    ];
+    expect(reads.sessionElapsed("root", 50_000)).toBe(6_000);
+    expect(reads.sessionElapsed("root", 500_000)).toBe(6_000);
   });
 
-  test("bounds the banked window when a cap is supplied", () => {
+  test("a settled scope freezes and an empty one hides", () => {
     const reads = createSessionReads(
-      stubContext({ root: "running" }, { root: ["root"] }),
-      5_000,
-    );
-
-    expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 1_000)).toBe(1_000);
-    // Beyond the cap the window was unobserved, so it banks nothing...
-    expect(reads.sessionElapsed("root", 601_000)).toBe(1_000);
-    // ...and a normal read resumes from the fresh baseline.
-    expect(reads.sessionElapsed("root", 602_000)).toBe(2_000);
-  });
-
-  test("an unrelated session contributes nothing", () => {
-    const reads = createSessionReads(
-      stubContext({ root: "running" }, { root: ["root"], other: ["other"] }),
-    );
-
-    expect(reads.sessionElapsed("other", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 1_000)).toBe(1_000);
-    expect(reads.sessionElapsed("other", 1_000)).toBeUndefined();
-    expect(reads.sessionElapsed("other", 15_000)).toBeUndefined();
-  });
-
-  test("seeds a first idle read from the session's recorded turns", () => {
-    // Two completed turns, four and three seconds, with a two-second idle gap
-    // between them that the union must exclude.
-    const reads = createSessionReads(
-      stubContext({ root: "idle" }, { root: ["root"] }, [], {
-        root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)],
-      }),
+      stubContext({ root: ["root"] }, { root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)] }),
     );
     expect(reads.sessionElapsed("root", 0)).toBe(7_000);
-    // Idle afterwards: the figure freezes on the seeded value.
+    // Idle afterwards: the figure freezes on the recorded work.
     expect(reads.sessionElapsed("root", 500_000)).toBe(7_000);
+
+    // Nothing on record anywhere: the row hides rather than printing zero.
+    const empty = createSessionReads(stubContext({ root: ["root"] }, {}));
+    expect(empty.sessionElapsed("root", 0)).toBeUndefined();
+    expect(empty.sessionElapsed("root", 500_000)).toBeUndefined();
   });
 
-  test("seeds a settled turn at completed, not streamed, when both are stamped", () => {
-    // `tps` ends this record at `streamed` (2 s of decoding); the elapsed clock
-    // must not. It stays busy until the turn's tools settle at `completed`
-    // (5 s), so the seed is 5 s - the tool-settlement time stays in the tally.
+  test("a live session's mark survives a 256-entry sweep through the reader", () => {
+    const messages: Record<string, readonly unknown[]> = {
+      a: [turn("m1", 0, 4_000)],
+    };
+    const reads = createSessionReads(stubContext({ a: ["a"] }, messages));
+    expect(reads.sessionElapsed("a", 0)).toBe(4_000);
+    for (let index = 0; index < 300; index += 1) {
+      reads.sessionElapsed(`s${index}`, 0);
+    }
+    messages.a = [turn("m1", 0, 900)];
+    // The sweep drops only sessions the host forgot: "a" is still known, so
+    // the shrunken record cannot move the held mark (which would read 900 if
+    // an eviction had thrown the mark away with the entry).
+    expect(reads.sessionElapsed("a", 60_000)).toBe(4_000);
+  });
+
+  test("ends a settled turn at completed, not streamed, when both are stamped", () => {
+    // `tps` ends this record at `streamed` (2 s of decoding); the elapsed
+    // figure must not. It covers the turn's tool settlement at `completed`
+    // (5 s), so the figure is 5 s — the settlement time stays in the tally.
     const reads = createSessionReads(
-      stubContext({ root: "idle" }, { root: ["root"] }, [], {
+      stubContext({ root: ["root"] }, {
         root: [
           {
             id: "m1",
@@ -313,96 +272,84 @@ describe("session elapsed integration", () => {
     expect(reads.sessionElapsed("root", 0)).toBe(5_000);
   });
 
-  test("a fresh clock over the same host data reproduces the seeded figure", () => {
+  test("an uncompleted turn with streamed set grows while busy and freezes when idle", () => {
+    // Finished streaming but tools still running: `streamed` is stamped, no
+    // `completed` yet. Created=1000, streamed=6000.
+    const messages: Record<string, readonly unknown[]> = {
+      root: [
+        {
+          id: "m1",
+          type: "assistant",
+          time: { created: 1_000, streamed: 6_000 },
+          tokens: { output: 5 },
+        },
+      ],
+    };
     const families = { root: ["root"] };
-    const messages = { root: [turn("m1", 0, 4_000), turn("m2", 6_000, 9_000)] };
-
-    const before = createSessionReads(stubContext({ root: "idle" }, families, [], messages));
-    const first = before.sessionElapsed("root", 0);
-    expect(first).toBe(7_000);
-
-    // A restart (a brand-new reader) over the same host data comes back with
-    // the work on record instead of `—`.
-    const after = createSessionReads(stubContext({ root: "idle" }, families, [], messages));
-    expect(after.sessionElapsed("root", 100_000)).toBe(first);
-    expect(after.sessionElapsed("root", 100_000)).toBeGreaterThan(0);
+    // The scope is working: the turn ends at `now`, so the settlement window
+    // stays in the tally and the figure keeps growing past `streamed`.
+    const working = createSessionReads(stubContext(families, messages, "running"));
+    expect(working.sessionElapsed("root", 10_000)).toBe(9_000);
+    expect(working.sessionElapsed("root", 12_000)).toBe(11_000);
+    // Nothing working: the same record collapses to its last stamp, so a
+    // stalled turn bills no idle time however far `now` advances.
+    const settled = createSessionReads(stubContext(families, messages));
+    expect(settled.sessionElapsed("root", 10_000)).toBe(5_000);
+    expect(settled.sessionElapsed("root", 12_000)).toBe(5_000);
   });
 
-  test("an in-flight turn seeds once and is never counted twice", () => {
-    const created = Date.now() - 4_000;
+  test("counts zero-output turns: wall time is wall time", () => {
+    // Tokens are ignored by the union: a stamped step that took two seconds
+    // still took two seconds, even with nothing to show for it.
     const reads = createSessionReads(
-      stubContext({ root: "running" }, { root: ["root"] }, [], {
-        root: [{ id: "live", type: "assistant", time: { created }, tokens: { output: 5 } }],
+      stubContext({ root: ["root"] }, {
+        root: [{ id: "m1", type: "assistant", time: { created: 0, completed: 2_000 } }],
       }),
     );
-
-    const seed = reads.sessionElapsed("root", 0);
-    expect(seed).toBeGreaterThan(0);
-    // The post-seed busy windows add on top of the seed; the turn in flight,
-    // already billed into the seed as [created, now], is not billed again.
-    expect(reads.sessionElapsed("root", 1_000)).toBe((seed as number) + 1_000);
-    expect(reads.sessionElapsed("root", 2_500)).toBe((seed as number) + 2_500);
-  });
-
-  test("a seeded tally still banks nothing across a session switch", () => {
-    // Generous cap so only the session boundary can stop the window.
-    const reads = createSessionReads(
-      stubContext({ a: "running", b: "idle" }, { a: ["a"], b: ["b"] }, [], {
-        a: [turn("a1", 0, 2_000)],
-        b: [turn("b1", 0, 1_000)],
-      }),
-      3_600_000,
-    );
-
-    expect(reads.sessionElapsed("a", 0)).toBe(2_000);
-    expect(reads.sessionElapsed("a", 1_000)).toBe(3_000);
-    expect(reads.sessionElapsed("b", 1_000)).toBe(1_000);
-    // A was busy at both ends, but the away window was off-watch: no banking.
-    expect(reads.sessionElapsed("a", 100_000)).toBe(3_000);
-    expect(reads.sessionElapsed("a", 101_000)).toBe(4_000);
-  });
-
-  test("a seeded tally still banks nothing beyond the cap", () => {
-    const reads = createSessionReads(
-      stubContext({ root: "running" }, { root: ["root"] }, [], { root: [turn("m1", 0, 2_000)] }),
-      5_000,
-    );
-
     expect(reads.sessionElapsed("root", 0)).toBe(2_000);
-    expect(reads.sessionElapsed("root", 1_000)).toBe(3_000);
-    // Beyond the cap the window was unobserved, so it banks nothing...
-    expect(reads.sessionElapsed("root", 601_000)).toBe(3_000);
-    // ...and a normal read resumes from the fresh baseline.
-    expect(reads.sessionElapsed("root", 602_000)).toBe(4_000);
   });
 
-  test("seeds from the same family scope busy() consults", () => {
+  test("covers the same family scope busy() consults", () => {
     const families = { root: ["root", "child"], child: ["root", "child"] };
     const messages = {
       root: [turn("r1", 0, 1_000)],
       child: [turn("c1", 2_000, 5_000)],
     };
-    const reads = createSessionReads(stubContext({ root: "idle", child: "idle" }, families, [], messages));
-    // The root's seed is the union across its tree: 1s + 3s.
+    const reads = createSessionReads(stubContext(families, messages));
+    // The root's figure is the union across its tree: 1s + 3s.
     expect(reads.sessionElapsed("root", 0)).toBe(4_000);
-
-    // A child asking `family()` gets the whole tree on this host too, so its
-    // seed uses the same scope `busy()` would consult — not gated on being
-    // the family root.
-    const childReads = createSessionReads(
-      stubContext({ root: "idle", child: "idle" }, families, [], messages),
-    );
-    expect(childReads.sessionElapsed("child", 0)).toBe(4_000);
   });
 
-  test("an unstamped host seeds zero and keeps today's behaviour", () => {
+  test("an unstamped host hides the row", () => {
     const reads = createSessionReads(
-      stubContext({ root: "running" }, { root: ["root"] }, [], {
+      stubContext({ root: ["root"] }, {
         root: [{ id: "m1", type: "assistant", tokens: { output: 10 } }],
       }),
     );
-    // No stamp: no span to seed from, so the row behaves exactly as before.
+    // No stamp: no span to derive from, so there is nothing honest to show.
     expect(reads.sessionElapsed("root", 0)).toBeUndefined();
-    expect(reads.sessionElapsed("root", 1_000)).toBe(1_000);
+    expect(reads.sessionElapsed("root", 500_000)).toBeUndefined();
+  });
+
+  test("a throwing family read degrades to the session's own turns", () => {
+    const directory = "C:\\workspace";
+    const context = {
+      location: { directory },
+      data: {
+        location: { default: () => ({ directory }), model: { list: () => [] } },
+        session: {
+          get: (id: string) => ({ id, time: { created: 0 } }),
+          status: () => "idle",
+          family: () => {
+            throw new Error("no family");
+          },
+          message: { list: () => [turn("m1", 0, 3_000)] },
+          permission: { list: () => [] },
+        },
+        shell: { list: () => [] },
+      },
+    } as unknown as Parameters<typeof createSessionReads>[0];
+    const reads = createSessionReads(context);
+    expect(reads.sessionElapsed("root", 0)).toBe(3_000);
   });
 });

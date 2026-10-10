@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-11
+
+### Added
+
+- `session` is accepted as an alias for the `ses` row in `sidebar.rows` and `style.rows`, normalized to `ses`. The row's rail label is now `session`: an 18-cell clipped preview of the id (never the full id), with the click still copying the full id to the terminal clipboard. The preview budget shrinks by however much the `session` label overflows `layout.labelWidth`, floored at 8 cells, so the row's total width is unchanged by the rename at every `layout.labelWidth` (at the default width 10 the budget is the full 18; at 6 it is 17).
+- Zero skeletons for data-less rows under `sidebar.persist`: a row with no data draws a real-looking zero instead of the `—` placeholder — `$0.000` for `cost`/`total`/`project`, `0 in · 0 out` for `tokens`, `0 read` for `cache`, an empty bar plus `~0%` for `context`, `0 waiting` for `perms`, `0s` for `elapsed`, `0 tok/s` for `tps`, a flat `▁` bar for `spark`, `0` for `reasoning`, `0` for `turns`, `○ 0 ○ 0 ○ 0` for `go`, `○ idle` for `status`, `none` for `agent`/`model`/`ses`, `no branch` for `branch`, `unknown` for `guard`. `caution` is the one row that never draws a skeleton: the annunciator stays silent until there is something to announce. `sidebar.placeholder` is now only the fallback for a field with no skeleton, so the dash is unreachable in practice.
+
+### Changed
+
+- `tokens`, `cache` and `reasoning` read the same family scope as `cost`: this conversation plus its subagent sessions when any exist, the session alone when there are none.
+- `elapsed` is recomputed from the assistant-turn spans the host itself recorded for this session and its subagents, a turn still in flight ending at "now". A restart comes back with the same value instead of resetting, it cannot step backwards while the host still reports those turns, it freezes the instant everything settles, and it is NOT wall-clock since the session began.
+- `tps` is directly per-session — subagents excluded: the displayed session's own generation tokens (output + reasoning) over its own generating time. It shows `0 tok/s` whenever the session is not generating (idle, between turns, or before the first sample), and it never seeds itself from a lifetime average.
+- The `cost` row documents its limit plainly: the rollup follows the host's `parentID` link only (`family()`), so a session spawned as an independent top-level session — a `commander` spawning captains — carries no `parentID`, and the host returned no `metadata` field for the sessions probed during this work, so there is no automatic creator link today. A creator-supplied attribution link is a possible future extension, not a shipped feature. The `project` row is the surface that covers every session in the project, spawned sessions included.
+
+### Fixed
+
+- The `tps` row no longer claims subagents are included: the figure never covered them, and the docs said it did.
+
 ## [0.17.0] - 2026-10-10
 
 ### Added
