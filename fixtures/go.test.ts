@@ -56,6 +56,47 @@ function countingDeps(payload: () => unknown, calls: string[] = []): GoDeps {
   };
 }
 
+/** A credential entry shaped like `GET /api/credential` returns. */
+function entry(integrationID: string, active: boolean, value: unknown) {
+  return { id: `${integrationID}:${String(active)}`, integrationID, label: "test", active, value };
+}
+
+/** The `key`-type value a usable credential carries. */
+const keyValue = (key: string) => ({ type: "key", key });
+
+/** `fakeHost` plus a credential-store client, so the store path is exercised. */
+function fakeHostWithStore(list: (() => Promise<unknown>) | undefined, initialValue: unknown = null) {
+  const { host, state, seen } = fakeHost(initialValue);
+  const withClient: GoHost = {
+    storage: host.storage,
+    client: list === undefined ? undefined : { credential: { list } },
+  };
+  return { host: withClient, state, seen };
+}
+
+/** Run `body` with `OPENCODE_GO_API_KEY` set (or cleared), restoring it after. */
+async function withEnvKey<T>(value: string | undefined, body: () => Promise<T>): Promise<T> {
+  const saved = process.env[GO_KEY_ENV];
+  if (value === undefined) delete process.env[GO_KEY_ENV];
+  else process.env[GO_KEY_ENV] = value;
+  try {
+    return await body();
+  } finally {
+    if (saved === undefined) delete process.env[GO_KEY_ENV];
+    else process.env[GO_KEY_ENV] = saved;
+  }
+}
+
+/** Capture the Authorization header of every request a bridge makes. */
+function authDeps(auth: string[], payload: unknown = FLAT): GoDeps {
+  return {
+    fetchJson: async (_url: string, init: RequestInit) => {
+      auth.push((init.headers as Record<string, string>)["Authorization"] ?? "");
+      return payload;
+    },
+  };
+}
+
 describe("go bridge", () => {
   test("keeps its constants fixed and namespaced", () => {
     expect(GO_KEY).toBe("flight-deck.go");
@@ -235,6 +276,116 @@ describe("go bridge", () => {
     expect(bridge?.usage).toBeUndefined();
     state.value = null;
     expect(bridge?.usage).toBeUndefined();
+    bridge?.dispose();
+  });
+
+  test("resolves the key from the host credential store", async () => {
+    const { host } = fakeHostWithStore(async () => [entry("opencode-go", true, keyValue("store-key"))]);
+    const auth: string[] = [];
+    const bridge = startGoBridge(host, authDeps(auth), 1_000);
+    await sleep(25);
+    expect(auth).toContain("Bearer store-key");
+    expect(bridge?.usage?.windows.length).toBe(3);
+    bridge?.dispose();
+  });
+
+  test("prefers the active entry among matching credentials", async () => {
+    const { host } = fakeHostWithStore(async () => [
+      entry("opencode-go", false, keyValue("inactive-key")),
+      entry("opencode-go", true, keyValue("active-key")),
+    ]);
+    const auth: string[] = [];
+    const bridge = startGoBridge(host, authDeps(auth), 1_000);
+    await sleep(25);
+    expect(auth).toContain("Bearer active-key");
+    expect(auth).not.toContain("Bearer inactive-key");
+    bridge?.dispose();
+  });
+
+  test("ignores a credential whose value is not a key", async () => {
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: 1, methodID: "m" };
+    const { host, state } = fakeHostWithStore(async () => [
+      entry("opencode-go", true, oauth),
+      entry("opencode-go", false, keyValue("later-key")),
+    ]);
+    const auth: string[] = [];
+    const bridge = startGoBridge(host, authDeps(auth), 1_000);
+    await sleep(25);
+    // The non-`key` value is skipped, not selected: the usable entry is used.
+    expect(auth).toContain("Bearer later-key");
+    expect(state.value).not.toBeNull();
+    bridge?.dispose();
+  });
+
+  test("stores null and makes no request when the only credential is not a key", async () => {
+    await withEnvKey(undefined, async () => {
+      const oauth = { type: "oauth", access: "a", refresh: "r", expires: 1, methodID: "m" };
+      const { host, state } = fakeHostWithStore(async () => [entry("opencode-go", true, oauth)]);
+      let fetches = 0;
+      const bridge = startGoBridge(host, { fetchJson: async () => { fetches += 1; return FLAT; } }, 5);
+      await sleep(25);
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      bridge?.dispose();
+    });
+  });
+
+  test("falls back to the env var when the store has no matching key", async () => {
+    await withEnvKey("env-key", async () => {
+      const { host } = fakeHostWithStore(async () => [entry("someone-else", true, keyValue("other-key"))]);
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer env-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("falls back to the env var on a host whose client has no credential.list", async () => {
+    await withEnvKey("env-key", async () => {
+      const { host } = fakeHostWithStore(undefined);
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer env-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("degrades to the env var when credential.list throws", async () => {
+    await withEnvKey("env-key", async () => {
+      const { host } = fakeHostWithStore(async () => {
+        throw new Error("no store");
+      });
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer env-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("stores null and makes no request when neither the store nor the env has a key", async () => {
+    await withEnvKey(undefined, async () => {
+      const { host, state } = fakeHostWithStore(async () => []);
+      let fetches = 0;
+      const bridge = startGoBridge(host, { fetchJson: async () => { fetches += 1; return FLAT; } }, 5);
+      expect(bridge).toBeDefined();
+      await sleep(25);
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      expect(bridge?.usage).toBeUndefined();
+      bridge?.dispose();
+    });
+  });
+
+  test("lets an async resolveKey override win over the store", async () => {
+    const { host } = fakeHostWithStore(async () => [entry("opencode-go", true, keyValue("store-key"))]);
+    const auth: string[] = [];
+    const bridge = startGoBridge(host, { ...authDeps(auth), resolveKey: async () => "override-key" }, 1_000);
+    await sleep(25);
+    expect(auth).toContain("Bearer override-key");
+    expect(auth).not.toContain("Bearer store-key");
     bridge?.dispose();
   });
 });

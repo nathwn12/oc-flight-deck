@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-10-11
+
+### Changed
+
+- The `go` row and the footer Go panel now resolve the Zen Go key from OpenCode's own credential store. On every poll the bridge reads `credential.list()` and uses the `key`-type entry for the `opencode-go` integration, preferring the `active` one. `OPENCODE_GO_API_KEY` becomes an optional fallback, read only when the store holds no usable entry. A host whose client predates `credential.list`, a rejected call, or a malformed payload degrades to the env var and then to the row's "no key" dash without making a request. The key is never logged and never leaves the Authorization header.
+
 ## [0.13.0] - 2026-10-11
 
 ### Added
