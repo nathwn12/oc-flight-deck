@@ -5,11 +5,12 @@ import { DEFAULT_BAR_WIDTH } from "../src/tui/format.js";
 import { DEFAULT_LABEL_WIDTH, DEFAULT_PLACEHOLDER } from "../src/tui/stat-fields.js";
 
 // The panel's glyphs are written as escapes so this file stays ASCII: the em
-// dash is the shipped placeholder, and the bar cells are ./format.js's own.
+// dash is the shipped placeholder, and the bar cells are the panel's own
+// heavy/light rule.
 const DASH = "\u2014";
 const DOT = "\u00B7";
-const FULL = "\u2588";
-const EMPTY = "\u2591";
+const FULL = "\u2501";
+const EMPTY = "\u2500";
 
 /** The exact bar `fuelBar` draws, built here so the expectation is explicit. */
 function bar(filled: number, width: number = DEFAULT_BAR_WIDTH): string {

@@ -1,7 +1,7 @@
 // The live Go usage panel for the sidebar footer slot.
 //
 // Three fixed lines - Rolling (5h), Weekly (1w), Monthly (1m) - drawn in the
-// footer, below the rail's rows. Each line is label, a full/light-shade bar, an
+// footer, below the rail's rows. Each line is label, a heavy/light rule bar, an
 // integer percent and a compact reset countdown, so the footer reads as the
 // same instrument as the one-line `go` row (./rows.ts), one size up.
 //
@@ -14,7 +14,7 @@
 // caller.
 //
 // Every glyph is written as a `\uXXXX` escape so this source stays ASCII
-// whatever the write path does with it: U+2588 is the filled cell, U+2591 the
+// whatever the write path does with it: U+2501 is the filled cell, U+2500 the
 // track. The bar is never allowed to exceed its width, so the panel cannot
 // overflow the sidebar.
 
@@ -33,10 +33,10 @@ const PANEL_WINDOWS: readonly { readonly id: GoWindow["id"]; readonly label: str
   { id: "1m", label: "Monthly" },
 ];
 
-/** U+2588 FULL BLOCK: one filled cell of the progress bar. */
-const FILLED = "\u2588";
-/** U+2591 LIGHT SHADE: one track cell behind the fill. */
-const TRACK = "\u2591";
+/** U+2501 BOX DRAWINGS HEAVY HORIZONTAL: one filled cell of the progress bar. */
+const FILLED = "\u2501";
+/** U+2500 BOX DRAWINGS LIGHT HORIZONTAL: one track cell behind the fill. */
+const TRACK = "\u2500";
 
 /**
  * Fraction of a window at which the panel switches to the warning role.
