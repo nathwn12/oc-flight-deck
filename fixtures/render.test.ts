@@ -259,6 +259,38 @@ test("renders the opt-in branding pair when sidebar.footer.lines is set", async 
   expect(footerFrame).toContain("─────────────────");
 });
 
+test("renders the Go usage panel in the footer slot when sidebar.footer.go is set", async () => {
+  const { context, claims } = harness({ sidebar: { footer: { go: true } } }, workspace(), LIVE_SESSION);
+  flightDeck.setup(context);
+
+  // `sidebar.footer.go` claims the slot on its own: no fixed lines are set.
+  const { sidebarFooter } = railClaims(claims);
+  expect(sidebarFooter).toBeDefined();
+  const frame = await frameOf(sidebarFooter!.render, 40, 4);
+  // This harness has no host memory store, so the bridge never starts and the
+  // panel is the resting placeholder: three labelled lines, never blank.
+  expect(frame).toContain("Rolling");
+  expect(frame).toContain("Weekly");
+  expect(frame).toContain("Monthly");
+  expect(frame).toContain("\u2014");
+});
+
+test("draws the fixed footer lines above the Go panel", async () => {
+  const { context, claims } = harness(
+    { sidebar: { footer: { lines: ["\u25B8 FLIGHT DECK", "\u2500".repeat(17)], go: true } } },
+    workspace(),
+    LIVE_SESSION,
+  );
+  flightDeck.setup(context);
+
+  const { sidebarFooter } = railClaims(claims);
+  const frame = await frameOf(sidebarFooter!.render, 40, 5);
+  // Fixed lines first, then the panel: one slot, two opt-in surfaces.
+  expect(frame).toContain("FLIGHT DECK");
+  expect(frame).toContain("Rolling");
+  expect(frame.indexOf("FLIGHT DECK")).toBeLessThan(frame.indexOf("Rolling"));
+});
+
 test("totals subagent sessions and reads context from the last request", async () => {
   const messages = [
     { tokens: { input: 100, output: 10, cache: { read: 1000, write: 0 } } },

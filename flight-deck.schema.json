@@ -39,14 +39,19 @@
         "footer": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Fixed lines rendered in the sidebar footer slot, a separate host region below the rows that draws outside the 24-line rail cap. Empty by default since 0.8.1 — set the documented `▸ FLIGHT DECK` / `─────────────────` pair in `lines` to re-enable the branding. An explicitly empty `lines` array removes the slot entirely.",
+          "description": "The sidebar footer slot: fixed lines, plus an optional live Go usage panel, rendered in a separate host region below the rows that draws outside the 24-line rail cap. The fixed lines are empty by default since 0.8.1 - set the documented `▸ FLIGHT DECK` branding pair in `lines` to re-enable it. An explicitly empty `lines` array removes the fixed lines; `go` still claims the slot on its own.",
           "properties": {
             "lines": {
               "type": "array",
               "items": { "type": "string" },
               "default": [],
               "maxItems": 24,
-              "description": "The footer's fixed lines, in order. Empty by default since 0.8.1 — set the documented `▸ FLIGHT DECK` / `─────────────────` pairing here to re-enable it. Independent of `sidebar.lines`, so setting your own top lines does not turn the footer on. An explicit empty array opts the footer slot out (and never registers it)."
+              "description": "The footer's fixed lines, in order. Empty by default since 0.8.1 - set the documented `▸ FLIGHT DECK` pairing here to re-enable it. Independent of `sidebar.lines`, so setting your own top lines does not turn the footer on. An explicit empty array removes the fixed lines (and never registers the slot on its own; `go` can still claim it)."
+            },
+            "go": {
+              "type": "boolean",
+              "default": false,
+              "description": "Draw the live Go usage panel under the footer's fixed lines: three lines - `Rolling`, `Weekly`, `Monthly` - each with a ten-cell bar, a whole-number percent and a reset countdown, read from Zen Go usage via OPENCODE_GO_API_KEY. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty."
             }
           }
         },

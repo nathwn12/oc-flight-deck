@@ -288,7 +288,14 @@ export function goTone(window: GoWindow): "error" | "normal" {
   return "normal";
 }
 
-function formatRemaining(ms: number): string {
+/**
+ * A duration as one short unit: `45s`, `12m`, `2h`, `5d`.
+ *
+ * Exported because the footer's Go panel (./go-panel.ts) draws a countdown for
+ * every known future reset, while {@link goResetSuffix} draws one only under the
+ * error tone. Both must read the same way, so both read this.
+ */
+export function formatRemaining(ms: number): string {
   const seconds = Math.ceil(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.ceil(ms / 60_000);

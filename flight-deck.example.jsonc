@@ -73,10 +73,21 @@
     //
     //   "lines": ["▸ FLIGHT DECK", "─────────────────"]
     //
-    // An explicitly empty list removes the footer slot entirely. Fixed lines
-    // use style.lines.
+    // An explicitly empty "lines" list removes the footer's fixed lines, but
+    // not the slot itself: "go" below can still claim it. Fixed lines use
+    // style.lines.
     "footer": {
-      "lines": []
+      "lines": [],
+
+      // The live Go usage panel: three lines - Rolling, Weekly, Monthly -
+      // each with a ten-cell bar, a whole-number percent, and a reset
+      // countdown. Reads Zen Go usage from OPENCODE_GO_API_KEY (the same
+      // account-wide poll the "go" row uses, one poll for both surfaces). A
+      // window at 90% or more - or reporting a non-ok status - turns its bar
+      // and number red. Off by default; turning it on claims this footer slot
+      // even with no fixed lines above, and draws three dim resting lines
+      // until the first poll lands.
+      "go": false
     },
 
     // The live rows, top to bottom. Every value is read from the open session,

@@ -12,6 +12,7 @@ import { copyFeedback, copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
 import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
+import { goPanelLines } from "./go-panel.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
 import { attributeMask, themeColor } from "./style.js";
 import { startGuardBridge } from "./guard.js";
@@ -217,8 +218,17 @@ export default Plugin.define({
     // The go row is opt-in the same way: a row nobody drew should cost no timer
     // and no request. The bridge is account-wide (one key, one quota), so it
     // starts here and has no session to follow — unlike guard.
-    const wantGo = config.sidebar.enabled && config.sidebar.rows.includes("go");
+    // The footer's Go panel (0.13.0) draws the same account-wide usage as three
+    // wider lines, so it wants the same bridge: either surface is reason enough
+    // to start the one poll, and neither starts it alone.
+    const wantGo =
+      config.sidebar.enabled && (config.sidebar.rows.includes("go") || config.sidebar.footer.go);
     const goBridge = wantGo ? startGoBridge(context) : undefined;
+
+    // The footer panel's geometry, resolved once from the same config the rail
+    // reads, so a narrowed `layout.barWidth` or `layout.labelWidth` moves the
+    // panel's lines with the rows instead of leaving them behind.
+    const goPanelLayout = { labelWidth: config.layout.labelWidth, barWidth: config.layout.barWidth };
 
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
@@ -357,7 +367,7 @@ export default Plugin.define({
       );
     }
 
-    if (config.sidebar.enabled && config.sidebar.footer.lines.length > 0) {
+    if (config.sidebar.enabled && (config.sidebar.footer.lines.length > 0 || config.sidebar.footer.go)) {
       releases.push(
         context.ui.slot({
           // The sidebar footer: a separate host slot below the rows. The
@@ -365,14 +375,27 @@ export default Plugin.define({
           // purely opt-in — set `sidebar.footer.lines` (the documented
           // `▸ FLIGHT DECK` pair, or your own) to claim the slot. It draws
           // outside the `maxLines` budget and stays when `sidebar.lines` is
-          // customized. The lines are fixed, so nothing here subscribes to
-          // the ticker or the session.
+          // customized. The fixed lines are static; the Go panel below is live,
+          // so this render subscribes to the tick and to the go store.
           append: "sidebar.footer",
-          render: () => (
-            <box flexDirection="column">
-              {config.sidebar.footer.lines.map((text) => themedLine({ text }))}
-            </box>
-          ),
+          render: () => {
+            // Read the tick and the go store INSIDE the render, the same way
+            // the rail subscribes to the session snapshot: the countdown is
+            // clock-derived, and the read is what registers the dependency so
+            // a poll re-runs this slot. `goBridge` is absent when neither
+            // surface asked for it, so both reads are safe to skip.
+            void ticker?.frame;
+            const goUsage = goBridge?.usage;
+            const panel = config.sidebar.footer.go
+              ? goPanelLines(goUsage, Date.now(), goPanelLayout)
+              : [];
+            return (
+              <box flexDirection="column">
+                {config.sidebar.footer.lines.map((text) => themedLine({ text }))}
+                {panel.map((line) => themedLine(line))}
+              </box>
+            );
+          },
         }),
       );
     }
