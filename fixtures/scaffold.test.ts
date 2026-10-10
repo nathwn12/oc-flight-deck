@@ -271,6 +271,24 @@ describe("flight deck plugin", () => {
     }
   });
 
+  test("claims the footer slot for the Go panel look object as well", async () => {
+    // An object enables the panel exactly like `true`, with a custom look, so
+    // it must claim the slot and start the one shared bridge too.
+    const savedKey = process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    try {
+      const { context, slots, memoryCalls } = stubContext({
+        sidebar: { footer: { go: { header: true, barWidth: 10, sweep: true } } },
+      });
+      const cleanup = await flightDeck.setup(context);
+      expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+      expect(memoryCalls.filter((key) => key === "flight-deck.go")).toHaveLength(1);
+      await cleanup?.();
+    } finally {
+      if (savedKey !== undefined) process.env.OPENCODE_GO_API_KEY = savedKey;
+    }
+  });
+
   test("registers both sidebar slots when the branding pair is opted in", async () => {
     // The documented opt-in: setting `sidebar.footer.lines` to the branding
     // pair claims the footer slot alongside the sidebar itself.

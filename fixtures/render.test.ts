@@ -266,14 +266,30 @@ test("renders the Go usage panel in the footer slot when sidebar.footer.go is se
   // `sidebar.footer.go` claims the slot on its own: no fixed lines are set.
   const { sidebarFooter } = railClaims(claims);
   expect(sidebarFooter).toBeDefined();
-  const frame = await frameOf(sidebarFooter!.render, 40, 4);
+  const frame = await frameOf(sidebarFooter!.render, 40, 3);
   // This harness has no host memory store, so the bridge never starts and the
-  // panel is the resting placeholder: header plus three labelled lines, never blank.
-  expect(frame).toContain("OPENCODE GO");
+  // panel is the resting placeholder: three labelled lines with no header by
+  // default, never blank.
+  expect(frame).not.toContain("OPENCODE GO");
   expect(frame).toContain("ROLL");
   expect(frame).toContain("WEEK");
   expect(frame).toContain("MONTH");
   expect(frame).toContain("\u2014");
+});
+
+test("renders the Go panel header only when the look opts in", async () => {
+  const { context, claims } = harness(
+    { sidebar: { footer: { go: { header: true } } } },
+    workspace(),
+    LIVE_SESSION,
+  );
+  flightDeck.setup(context);
+
+  const { sidebarFooter } = railClaims(claims);
+  expect(sidebarFooter).toBeDefined();
+  const frame = await frameOf(sidebarFooter!.render, 40, 4);
+  expect(frame).toContain("OPENCODE GO");
+  expect(frame).toContain("ROLL");
 });
 
 test("draws the fixed footer lines above the Go panel", async () => {

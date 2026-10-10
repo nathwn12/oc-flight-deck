@@ -1,16 +1,18 @@
 // The live Go usage panel for the sidebar footer slot.
 //
-// A designed instrument, not a data dump: one dim header naming the plan,
-// then three fixed lines - ROLL (5h), WEEK (1w), MONTH (1m). Each line is a
-// short uppercase label, a thin-rule meter, a right-aligned percent column
-// and a dim reset countdown, so the footer reads as one gauge block.
+// A designed instrument, not a data dump: three fixed lines - ROLL (5h),
+// WEEK (1w), MONTH (1m) - plus an opt-in dim header naming the plan. Each
+// line is a strict fixed-width column layout - a left-aligned label, a
+// thin-rule meter, a right-aligned percent and a right-aligned reset
+// countdown - separated by single spaces, so all three rows share one axis
+// and the bar's start and end never wander between rows.
 //
 // Pure, like ./go-usage.js: the clock arrives as `nowMs`, the animation phase
 // as `frame`, and the usage and its no-data reason as values, so the panel is
 // a function of its inputs and testable without a server, a store, or a
 // frozen clock. There is no I/O, no timer and no hidden `Date.now()`.
 // `layout` is `unknown` on principle - it crosses the config boundary - so
-// its bar width is re-read defensively instead of trusted.
+// its look is re-read defensively instead of trusted.
 //
 // Every glyph is written as a `\uXXXX` escape so this source stays ASCII
 // whatever the write path does with it: U+25C8 is the header diamond, U+2501
@@ -48,46 +50,94 @@ const TRACK = "\u2500";
  */
 export const GO_WARNING_RATIO = 0.6;
 
-/** Width of the short label column: the longest label (`MONTH`) needs no more. */
-const PANEL_LABEL_WIDTH = 5;
 /** Bar width when the caller supplies no readable `layout.barWidth`. */
-const PANEL_DEFAULT_BAR_WIDTH = 14;
+export const PANEL_DEFAULT_BAR_WIDTH = 14;
+/** Label width when the caller supplies no readable `layout.labelWidth`. */
+export const PANEL_DEFAULT_LABEL_WIDTH = 6;
+/** Whether the header draws when the caller says nothing. */
+export const PANEL_DEFAULT_HEADER = false;
+/** Whether the percent column draws when the caller says nothing. */
+export const PANEL_DEFAULT_PERCENT = true;
+/** Whether the reset column draws when the caller says nothing. */
+export const PANEL_DEFAULT_RESET = true;
 /**
- * Widest bar that keeps the longest line within the sidebar.
+ * Whether the sweep may move when the caller says nothing.
  *
- * Longest line is leading space (1) + label (5) + gap (2) + bar + gap (2) +
- * percent (4) + gap (2) + countdown (`30d23h`, 6): `22 + bar`. At 18 the line
- * is exactly 40 columns, so anything wider is capped rather than wrapped.
+ * Off: the meter is static and changes only when the percentage itself
+ * changes. Opt in with `sweep: true` for the travelling highlight.
  */
-const PANEL_MAX_BAR_WIDTH = 18;
+export const PANEL_DEFAULT_SWEEP = false;
 /** Width of the right-aligned percent column: `100%` is the widest value. */
-const PERCENT_WIDTH = 4;
+export const PANEL_PERCENT_WIDTH = 4;
+/** Width of the right-aligned reset column: `30d21h` is the widest usual value. */
+export const PANEL_RESET_WIDTH = 6;
+/** The sidebar width budget: no line may draw past it. */
+export const PANEL_SIDEBAR_BUDGET = 40;
+/** Narrowest label column that still holds `MONTH` without truncation. */
+const PANEL_MIN_LABEL_WIDTH = 5;
+/** Widest label column the panel honours; wider would eat the sidebar. */
+const PANEL_MAX_LABEL_WIDTH = 24;
+/** Widest bar the config may name before the sidebar cap applies. */
+const PANEL_MAX_NAMED_BAR_WIDTH = 40;
 
-/**
- * One label cell: leading space, the label padded to the common width, and
- * the two-space gap before the meter.
- *
- * The leading space aligns the rows under the header's own leading space, so
- * the block reads as one instrument. The gap is fixed (not from
- * `layout.labelWidth`): the short labels need only five columns, and the
- * rail's ten would waste the sidebar and risk overflow.
- */
-function labelCell(label: string): string {
-  return ` ${label.padEnd(PANEL_LABEL_WIDTH)}  `;
+/** The panel's look, re-read from an untrusted hint. */
+interface PanelLook {
+  readonly header: boolean;
+  readonly barWidth: number;
+  readonly labelWidth: number;
+  readonly showPercent: boolean;
+  readonly showReset: boolean;
+  readonly sweep: boolean;
+}
+
+function readLookFlag(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 /**
- * The panel's bar width, re-read from an untrusted hint.
+ * One label column: the label left-aligned to the common width.
  *
- * A missing, malformed, or non-positive knob falls back to the panel's own
- * default, and anything that would overflow the sidebar is capped, so a bad
- * `layout` can change the meter but never break or wrap a line.
+ * The single space AFTER it is the column separator, so every row's meter
+ * starts on the same axis regardless of label length.
  */
-function readBarWidth(layout: unknown): number {
+function labelField(label: string, labelWidth: number): string {
+  return label.padEnd(labelWidth);
+}
+
+/**
+ * The panel's look, re-read from an untrusted hint.
+ *
+ * A missing, malformed, or out-of-range knob falls back to the panel's own
+ * default, and the bar is capped so the longest line - label plus meter plus
+ * the enabled columns - stays within the sidebar, so a bad `layout` can
+ * change the look but never break or wrap a line.
+ */
+function readLook(layout: unknown): PanelLook {
   const hint = asRecord(layout) ?? {};
-  const raw = Math.floor(asCount(hint["barWidth"]) ?? PANEL_DEFAULT_BAR_WIDTH);
-  const width = raw >= 1 ? raw : PANEL_DEFAULT_BAR_WIDTH;
-  return Math.min(width, PANEL_MAX_BAR_WIDTH);
+  const header = readLookFlag(hint["header"], PANEL_DEFAULT_HEADER);
+  const showPercent = readLookFlag(hint["percent"], PANEL_DEFAULT_PERCENT);
+  const showReset = readLookFlag(hint["reset"], PANEL_DEFAULT_RESET);
+  const sweep = readLookFlag(hint["sweep"], PANEL_DEFAULT_SWEEP);
+  const rawLabel = hint["labelWidth"];
+  const flooredLabel = rawLabel === undefined ? undefined : Math.floor(asCount(rawLabel) ?? Number.NaN);
+  const labelWidth =
+    flooredLabel !== undefined &&
+    Number.isFinite(flooredLabel) &&
+    flooredLabel >= PANEL_MIN_LABEL_WIDTH &&
+    flooredLabel <= PANEL_MAX_LABEL_WIDTH
+      ? flooredLabel
+      : PANEL_DEFAULT_LABEL_WIDTH;
+  const rawBar = hint["barWidth"];
+  const flooredBar = rawBar === undefined ? undefined : Math.floor(asCount(rawBar) ?? Number.NaN);
+  const namedBar =
+    flooredBar !== undefined && Number.isFinite(flooredBar) && flooredBar >= 1
+      ? Math.min(flooredBar, PANEL_MAX_NAMED_BAR_WIDTH)
+      : PANEL_DEFAULT_BAR_WIDTH;
+  // Longest line is label + separator + bar + (separator + percent)? +
+  // (separator + reset)?: every separator is one space.
+  const fixed = labelWidth + 1 + (showPercent ? 1 + PANEL_PERCENT_WIDTH : 0) + (showReset ? 1 + PANEL_RESET_WIDTH : 0);
+  const maxBar = Math.max(1, PANEL_SIDEBAR_BUDGET - fixed);
+  return { header, barWidth: Math.min(namedBar, maxBar), labelWidth, showPercent, showReset, sweep };
 }
 
 /**
@@ -207,12 +257,13 @@ function readFrame(frame: unknown): number | undefined {
 /**
  * The index of the bright cell within the filled region, or `-1` for no sweep.
  *
- * Sweeping only makes sense over a non-empty fill, so a 0% window is static.
- * The modulo keeps the cell inside `[0, filled)` for any frame, including a
- * frame the host advanced past the bar's width.
+ * Sweeping only makes sense over a non-empty fill when the caller opted in, so
+ * a static panel (`sweep: false`, the default) or a 0% window is never given a
+ * bright cell. The modulo keeps the cell inside `[0, filled)` for any frame,
+ * including a frame the host advanced past the bar's width.
  */
-function sweepIndex(frame: number | undefined, filled: number): number {
-  if (frame === undefined || filled <= 0) return -1;
+function sweepIndex(frame: number | undefined, filled: number, sweep: boolean): number {
+  if (!sweep || frame === undefined || filled <= 0) return -1;
   return frame % filled;
 }
 
@@ -246,9 +297,10 @@ function readReason(reason: unknown): string | undefined {
 /**
  * The dim header naming the plan: a small diamond plus the label.
  *
- * Drawn once, above the three meters, in `subdued` so it frames the block
- * without competing with a flagged meter. It carries the `go` field so the
- * footer resolves the same row style the inline `go` row does.
+ * Drawn only when the caller opts in with `header: true`, above the three
+ * meters, in `subdued` so it frames the block without competing with a flagged
+ * meter. It carries the `go` field so the footer resolves the same row style
+ * the inline `go` row does.
  */
 function headerLine(): RailLine {
   const text = ` ${HEADER_GLYPH} OPENCODE GO`;
@@ -259,55 +311,62 @@ function headerLine(): RailLine {
  * One resting line: the label, the empty track, and the placeholder - plus a
  * dim reason tag when the caller knows why there is no data.
  *
- * The tag sits IMMEDIATELY after the label, before the track, and the track
- * is shortened by the tag's width so the line never grows past the meter
- * column and the tag can never be clipped off the sidebar's edge. The track
- * is kept even with no data, so the panel's shape never jumps between
- * "waiting" and "reading": the meter column is always there. The percent
- * placeholder is right-aligned into the same column the values use, so a
- * resting line and a reading line share one grid. Everything past the label
- * is toned `subdued` explicitly so a resting line stays dim even when
- * `style.rows.go` is set bright - none of it is a value.
+ * Every column is fixed-width and separated by one space, so a resting line
+ * and a reading line share one grid. The tag sits IMMEDIATELY after the
+ * label's separator, before the track, and the track is shortened by the tag's
+ * width so the line never grows past the meter column and the tag can never be
+ * clipped off the sidebar's edge. The track is kept even with no data, so the
+ * panel's shape never jumps between "waiting" and "reading": the meter column
+ * is always there. Everything past the label is toned `subdued` explicitly so
+ * a resting line stays dim even when `style.rows.go` is set bright - none of
+ * it is a value.
  */
-function restingLine(label: string, barWidth: number, reason: string | undefined): RailLine {
-  const cells = Math.max(1, Math.floor(barWidth));
-  const segments: StatSegment[] = [{ text: labelCell(label) }];
+function restingLine(label: string, look: PanelLook, reason: string | undefined): RailLine {
+  const cells = Math.max(1, Math.floor(look.barWidth));
+  const segments: StatSegment[] = [{ text: `${labelField(label, look.labelWidth)} ` }];
   let trackCells = cells;
   if (reason !== undefined) {
     segments.push({ text: `${reason} `, tone: "subdued" });
     trackCells = Math.max(0, cells - reason.length - 1);
   }
-  const tail = `${TRACK.repeat(trackCells)}  ${DEFAULT_PLACEHOLDER.padStart(PERCENT_WIDTH)}`;
+  const tail =
+    TRACK.repeat(trackCells) + (look.showPercent ? ` ${DEFAULT_PLACEHOLDER.padStart(PANEL_PERCENT_WIDTH)}` : "");
   segments.push({ text: tail, tone: "subdued" });
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
 }
 
 /**
  * One drawn line: the label, a thin-rule meter, the right-aligned percent,
- * and the dim countdown.
+ * and the right-aligned dim countdown.
  *
- * The meter is `FILLED` over `TRACK`, with one brighter cell (`default`, the
- * theme's primary text colour) sweeping across the filled region when a live
- * frame is supplied. Only the meter and the percent can take the window's
- * tone - the label keeps the line's own colour and the countdown stays dim,
- * so a flagged window reads as this panel with a problem rather than as a
- * different kind of line. A window whose ratio is unknown draws the
- * placeholder for the number beside an empty meter: the percent is the
- * precision, and inventing one from a count with no limit is exactly the
- * confident guess the model refuses to make.
+ * Columns are fixed-width with one space between them: the label is
+ * left-aligned to `labelWidth`, the meter is exactly `barWidth` cells of
+ * `FILLED` over `TRACK`, the percent is right-aligned to four and the reset to
+ * six, so the percent and the countdown sit on a shared axis on every row.
+ * The meter carries one brighter cell (`default`, the theme's primary text
+ * colour) sweeping across the filled region only when the caller opts in with
+ * `sweep: true` and supplies a live frame; by default the bar is static and
+ * changes only when the percentage itself changes. Only the meter and the
+ * percent can take the window's tone - the label keeps the line's own colour
+ * and the countdown stays dim, so a flagged window reads as this panel with a
+ * problem rather than as a different kind of line. A window whose ratio is
+ * unknown draws the placeholder for the number beside an empty meter: the
+ * percent is the precision, and inventing one from a count with no limit is
+ * exactly the confident guess the model refuses to make. Disabled columns are
+ * omitted entirely, never left as a gap.
  */
 function valueLine(
   label: string,
-  barWidth: number,
+  look: PanelLook,
   window: GoWindow,
   nowMs: number,
   frame: number | undefined,
 ): RailLine {
   const tone = panelTone(window);
   const ratio = window.ratio;
-  const cells = Math.max(1, Math.floor(barWidth));
+  const cells = Math.max(1, Math.floor(look.barWidth));
   const filled = Math.max(0, Math.min(cells, Math.round((ratio ?? 0) * cells)));
-  const sweep = sweepIndex(frame, filled);
+  const sweep = sweepIndex(frame, filled, look.sweep);
 
   const runs: StatSegment[] = [];
   for (let index = 0; index < filled; index += 1) {
@@ -316,33 +375,39 @@ function valueLine(
   for (let index = filled; index < cells; index += 1) {
     appendRun(runs, TRACK, tone);
   }
-  const percent = ratio === undefined ? DEFAULT_PLACEHOLDER : `${Math.round(ratio * 100)}%`;
-  // The percent joins the meter's trailing run so a uniform meter stays one
-  // span; the countdown is its own dim run (relief, not severity).
-  appendRun(runs, `  ${percent.padStart(PERCENT_WIDTH)}`, tone);
+  if (look.showPercent) {
+    const percent = ratio === undefined ? DEFAULT_PLACEHOLDER : `${Math.round(ratio * 100)}%`;
+    // The percent joins the meter's trailing run so a uniform meter stays one
+    // span; the countdown is its own dim run (relief, not severity).
+    appendRun(runs, ` ${percent.padStart(PANEL_PERCENT_WIDTH)}`, tone);
+  }
 
-  const segments: StatSegment[] = [{ text: labelCell(label) }, ...runs];
-  const countdown = resetCountdown(window, nowMs);
-  if (countdown !== undefined) {
-    segments.push({ text: `  ${countdown}`, tone: "subdued" });
+  const segments: StatSegment[] = [{ text: `${labelField(label, look.labelWidth)} ` }, ...runs];
+  if (look.showReset) {
+    const countdown = resetCountdown(window, nowMs);
+    if (countdown !== undefined) {
+      segments.push({ text: ` ${countdown.padStart(PANEL_RESET_WIDTH)}`, tone: "subdued" });
+    }
   }
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
 }
 
 /**
- * The footer's Go usage panel: a dim header plus exactly three
- * {@link RailLine}s, ROLL -> WEEK -> MONTH, ready for the host's themed
- * renderer.
+ * The footer's Go usage panel: exactly three {@link RailLine}s, ROLL ->
+ * WEEK -> MONTH, ready for the host's themed renderer, plus the dim header
+ * only when the caller opts in with `header: true`.
  *
- * Never throws and never returns fewer than four lines - a panel that
+ * Never throws and never returns fewer than three lines - a panel that
  * vanished or took the footer slot down with it would be worse than one that
  * says nothing yet - so a missing, empty, or hostile usage payload degrades
- * to the header plus the same three labels with the resting placeholder.
+ * to the same three labels with the resting placeholder.
  *
  * `frame` is the host ticker's counter, passed in rather than read here so
- * the panel stays pure; `reason` names why there is no data (a ./go.js
- * `GoNoDataReason`, or the caller's `"no-bridge"`) and is drawn once, on the
- * first meter line, only when the whole panel is empty.
+ * the panel stays pure; it moves a bright cell only when the look opts in
+ * with `sweep: true`, so by default the bar is static. `reason` names why
+ * there is no data (a ./go.js `GoNoDataReason`, or the caller's `"no-bridge"`)
+ * and is drawn once, on the first meter line, only when the whole panel is
+ * empty.
  */
 export function goPanelLines(
   usage: GoUsage | undefined,
@@ -352,28 +417,24 @@ export function goPanelLines(
   reason?: unknown,
 ): readonly RailLine[] {
   try {
-    const barWidth = readBarWidth(layout);
+    const look = readLook(layout);
     const windows = windowById(usage);
     // The reason explains the whole panel, so it is only meaningful when no
     // window rendered at all, and it is tagged once rather than three times.
     const tag = windows.size === 0 ? readReason(reason) : undefined;
     const sweepFrame = readFrame(frame);
-    const head = headerLine();
     const rows = PANEL_WINDOWS.map(({ id, label }, index) => {
       const window = windows.get(id);
       return window === undefined
-        ? restingLine(label, barWidth, index === 0 ? tag : undefined)
-        : valueLine(label, barWidth, window, nowMs, sweepFrame);
+        ? restingLine(label, look, index === 0 ? tag : undefined)
+        : valueLine(label, look, window, nowMs, sweepFrame);
     });
-    return [head, ...rows];
+    return look.header ? [headerLine(), ...rows] : rows;
   } catch {
     // Belt and braces: the body above is defensive, but a renderer must never
     // be taken down by the panel, so any unexpected throw lands on the resting
-    // placeholder - the same header plus three lines, with no values.
-    const fallback = readBarWidth(undefined);
-    return [
-      headerLine(),
-      ...PANEL_WINDOWS.map(({ label }) => restingLine(label, fallback, undefined)),
-    ];
+    // placeholder - the same three lines, with no values.
+    const fallback = readLook(undefined);
+    return PANEL_WINDOWS.map(({ label }) => restingLine(label, fallback, undefined));
   }
 }

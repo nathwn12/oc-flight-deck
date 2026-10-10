@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-10-11
+
+### Changed
+
+- The footer Go panel draws three strict fixed-width columns - label (6, `ROLL`/`WEEK`/`MONTH`), meter (14), right-aligned percent (4) and right-aligned reset (6) with one space between columns - so the percent and the countdown share one axis and the bar starts and ends on the same columns on every row. The longest line stays within the sidebar width and never wraps.
+- The `◈ OPENCODE GO` header no longer draws by default; the panel is three lines unless `header: true` opts it back in.
+- `sidebar.footer.go` accepts `true`/`false` or a look object (`header`, `barWidth`, `labelWidth`, `percent`, `reset`, `sweep`, each falling back to its default). `true` keeps the default look (no header, 14-cell bar, 6-wide labels, both columns, static meter). The meter is static by default and changes only when the percentage itself changes; `sweep: true` opts the travelling highlight back in.
+
 ## [0.14.0] - 2026-10-11
 
 ### Changed
@@ -70,6 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in `ses` sidebar row: shows the full session id (the rail wraps it), and a mouse click copies that same full id and reports the outcome - a confirmation naming the id when the copy was sent, a distinct failure message when the terminal cannot take it. Off by default, and degrades gracefully when the terminal cannot copy.
 
+[0.15.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nathwn12/oc-flight-deck/compare/v0.10.4...v0.11.0
