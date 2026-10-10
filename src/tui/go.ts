@@ -8,9 +8,11 @@
 //   * Guard is per-session, so it waits for `follow(sessionID)` before fetching.
 //     Go usage is account-wide: one API key, one shared quota, no session to
 //     target — so the timer starts at construction and there is no `follow`.
-//   * The key is resolved on every poll - first from the host's own credential
-//     store, then the `OPENCODE_GO_API_KEY` env var - so a key loaded, rotated,
-//     or activated after startup is picked up without a restart.
+//   * The key is resolved on every poll - from the host's credential store
+//     (direct or wrapped), the provider catalog's resolved `settings.apiKey`,
+//     then the `OPENCODE_GO_API_KEY` env var - so a key loaded, rotated, or
+//     activated after startup is picked up without a restart. Every source is
+//     guarded and bounded, so a hung read becomes a named reason, not a stall.
 //
 // Why the store bridge at all is documented in ./guard.ts and ./ticker.ts: the
 // host's Solid and the plugin's are separate module instances, so only the
@@ -26,6 +28,10 @@
 // which stage failed (see the type) and exposes it as `reason`. The two are
 // written together, so a reader can never see a null value with a stale reason.
 
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { normalizeGoUsage, type GoUsage } from "./go-usage.js";
 
 /**
@@ -36,17 +42,22 @@ import { normalizeGoUsage, type GoUsage } from "./go-usage.js";
  * is closed so a renderer can trust it, and each value names the failed stage,
  * not a symptom:
  *
- *   * `"no-client"` - the host's credential client was absent, or it answered
- *     with something that was not a usable list (a throw or a non-array). The
- *     key lookup never had a chance to run.
- *   * `"no-key"`    - the credential client answered, but held no usable
- *     `opencode-go` key entry, and no `OPENCODE_GO_API_KEY` fallback was set.
+ *   * `"no-client"` - none of the host's credential sources could be asked at
+ *     all: the client was absent, its `list` was not a function, or it answered
+ *     with something that was not a usable list. The key lookup never had a
+ *     chance to run.
+ *   * `"no-key"`    - a source answered, but held no usable `opencode-go`
+ *     credential and no `OPENCODE_GO_API_KEY` fallback was set.
  *   * `"http"`      - a key was resolved and the usage request threw or came
  *     back non-OK.
  *   * `"parse"`     - the request succeeded but the body did not normalize into
  *     any known window shape.
+ *   * `"timeout"`   - a credential source never settled inside its hard bound,
+ *     so the poll stopped waiting rather than stalling forever.
+ *   * `"pending"`   - a bridge exists but has produced neither a value nor a
+ *     reason yet (its first poll is still in flight).
  */
-export type GoNoDataReason = "no-client" | "no-key" | "http" | "parse";
+export type GoNoDataReason = "no-client" | "no-key" | "http" | "parse" | "timeout" | "pending";
 
 /** The value kept in the host's memory store. Null means "no data". */
 interface GoStoreState {
@@ -80,6 +91,11 @@ type GoUpdate = (mutation: (draft: GoStoreState) => void) => void;
  */
 interface GoCredentialClient {
   readonly credential?: GoCredentialStore;
+  /**
+   * Some contexts wrap the client one level deeper. Reached only through
+   * `credential.list` again, and only when the direct store yielded nothing.
+   */
+  readonly api?: { readonly credential?: GoCredentialStore };
 }
 
 /**
@@ -105,6 +121,16 @@ export interface GoHost {
   };
   /** The host's HTTP client, reached only for its credential store. */
   readonly client?: GoCredentialClient;
+  /**
+   * The host's data collections, reached only for the provider catalog: the
+   * provider RPC does not redact, so the resolved `settings.apiKey` may be
+   * there when the credential store is not.
+   */
+  readonly data?: {
+    readonly location?: {
+      readonly provider?: unknown;
+    };
+  };
 }
 
 /** Injectable key accessor and fetch, so tests never touch the network or env. */
@@ -114,6 +140,8 @@ export interface GoDeps {
   /** Async key override; used when `key` is absent, ahead of the store/env. */
   readonly resolveKey?: () => Promise<string | undefined>;
   readonly fetchJson?: (url: string, init: RequestInit) => Promise<unknown>;
+  /** Overrides the credential-source hard bound, so a hung store is testable fast. */
+  readonly credentialTimeoutMs?: number;
 }
 
 interface GoBridge {
@@ -161,11 +189,28 @@ export const GO_KEY_ENV = "OPENCODE_GO_API_KEY";
 /**
  * The integration id the Zen Go provider stores its credential under. The
  * provider id and the integration id are the same string, so this is the one
- * value that selects the right entry out of `credential.list()`.
+ * value that selects the right entry out of `credential.list()`. It is NOT a
+ * key, a label, or a value: which entry is the right one is decided by its
+ * `active` flag, which differs per user.
  */
 const GO_INTEGRATION_ID = "opencode-go";
 
 const GO_TIMEOUT_MS = 10_000;
+
+/**
+ * The hard bound on any single credential source.
+ *
+ * A credential read that never settles must not stall the poll forever, so it
+ * races this bound and resolves to the `"timeout"` reason instead.
+ */
+export const GO_CREDENTIAL_TIMEOUT_MS = 6_000;
+
+/** Where the poll's observation log lives, under the OS temp directory. */
+const GO_LOG_DIR = "opencode";
+const GO_LOG_FILE = "flight-deck-go.log";
+
+/** The log is overwritten once it holds this many lines, so it stays small. */
+export const GO_LOG_MAX_LINES = 200;
 
 /**
  * Fetch and parse a usage payload. A non-OK response throws so the poll's one
@@ -174,7 +219,11 @@ const GO_TIMEOUT_MS = 10_000;
  */
 async function defaultFetchJson(url: string, init: RequestInit): Promise<unknown> {
   const response = await fetch(url, init);
-  if (!response.ok) throw new Error(`go usage: HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`go usage: HTTP ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 
@@ -208,7 +257,14 @@ function readUsage(store: GoStore | undefined): GoUsage | undefined {
 }
 
 /** The closed set of reasons, so a corrupt store value can never leak through. */
-const GO_NO_DATA_REASONS: readonly GoNoDataReason[] = ["no-client", "no-key", "http", "parse"];
+export const GO_NO_DATA_REASONS: readonly GoNoDataReason[] = [
+  "no-client",
+  "no-key",
+  "http",
+  "parse",
+  "timeout",
+  "pending",
+];
 
 /**
  * Why the store has no value, or `undefined` when it has one or the reason is
@@ -278,39 +334,206 @@ function keyOfValue(value: unknown): string | undefined {
   return typeof key === "string" && key.length > 0 ? key : undefined;
 }
 
-/**
- * The Zen Go key held in the host's own credential store, plus whether that
- * store was usable at all.
- *
- * Never throws and never logs. `unavailable` is true when the credential client
- * was absent, its `list` was not a function, the call threw, or it answered
- * with a non-array - in every one of those cases the lookup never had a fair
- * chance, which is the `"no-client"` reason. `unavailable` false with no `key`
- * means the store answered and genuinely held no usable entry (`"no-key"`).
- * Among matching entries the `active` one wins; otherwise the first usable one.
- */
-async function credentialKey(
-  client: GoHost["client"],
-): Promise<{ key?: string; unavailable: boolean }> {
+/** Read a property without letting a hostile getter or proxy throw. */
+function safeGet(target: unknown, key: string): unknown {
   try {
-    const store = client?.credential;
-    if (store === undefined || typeof store.list !== "function") return { unavailable: true };
-    const entries = await store.list();
-    if (!Array.isArray(entries)) return { unavailable: true };
-    let firstMatch: string | undefined;
-    for (const entry of entries) {
-      if (entry === null || typeof entry !== "object") continue;
-      const record = entry as Record<string, unknown>;
-      if (record["integrationID"] !== GO_INTEGRATION_ID) continue;
-      const key = keyOfValue(record["value"]);
-      if (key === undefined) continue;
-      if (record["active"] === true) return { key, unavailable: false };
-      if (firstMatch === undefined) firstMatch = key;
-    }
-    return firstMatch === undefined ? { unavailable: false } : { key: firstMatch, unavailable: false };
+    if (target === null || (typeof target !== "object" && typeof target !== "function")) return undefined;
+    return (target as Record<string, unknown>)[key];
   } catch {
-    return { unavailable: true };
+    return undefined;
   }
+}
+
+/** The credential-source bound, overridable for tests, defaulting to 6s. */
+function resolveCredentialTimeout(deps: GoDeps | undefined): number {
+  if (deps !== undefined) {
+    try {
+      const value = deps.credentialTimeoutMs;
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+    } catch {
+      // fall through to the default bound
+    }
+  }
+  return GO_CREDENTIAL_TIMEOUT_MS;
+}
+
+/** Where a resolved key came from, for the observation log only. */
+export type GoKeySource = "credential" | "provider" | "env" | "none";
+
+/** One source's outcome: a key, or why it had none, plus whether it answered. */
+interface KeyAttempt {
+  readonly key?: string;
+  readonly reason?: GoNoDataReason;
+  /** True when the source answered with a readable collection, key or not. */
+  readonly answered: boolean;
+}
+
+/** The settled-or-not result of one guarded, timed source call. */
+type Settled =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly timedOut: boolean };
+
+/**
+ * Await `call()` under a hard bound.
+ *
+ * A promise that never settles resolves to `timedOut: true` instead of stalling
+ * the poll forever; a synchronous throw or a rejection is an error, not a
+ * timeout. Never rejects.
+ */
+function settleCall(call: () => unknown, ms: number): Promise<Settled> {
+  let produced: unknown;
+  try {
+    produced = call();
+  } catch {
+    return Promise.resolve({ ok: false, timedOut: false });
+  }
+
+  const thenable =
+    produced !== null && (typeof produced === "object" || typeof produced === "function")
+      ? (produced as { then?: unknown }).then
+      : undefined;
+  if (typeof thenable !== "function") return Promise.resolve({ ok: true, value: produced });
+
+  return new Promise<Settled>((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ms);
+    (produced as Promise<unknown>).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ ok: true, value });
+      },
+      () => {
+        clearTimeout(timer);
+        resolve({ ok: false, timedOut: false });
+      },
+    );
+  });
+}
+
+/**
+ * The list inside a credential response.
+ *
+ * The RPC may hand back a bare array or wrap it in an envelope (`{ data: [...] }`,
+ * `{ output: [...] }`); every one of those is accepted. Only a value that yields
+ * no array at all is not a usable list.
+ */
+function asList(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const data = record["data"];
+  if (Array.isArray(data)) return data;
+  const output = record["output"];
+  if (Array.isArray(output)) return output;
+  return undefined;
+}
+
+/**
+ * Whether a credential entry is the active one.
+ *
+ * Robust on purpose: the API may serialise `active` as a boolean `true` or a
+ * numeric `1`, so any truthy value counts. The active entry is the credential
+ * the user selected, and it differs per user - it is never hard-coded.
+ */
+function isActive(value: unknown): boolean {
+  return Boolean(value);
+}
+
+/**
+ * The Zen Go key among credential entries.
+ *
+ * The ACTIVE entry for the `opencode-go` integration always wins. A non-active
+ * entry is a fallback ONLY when no entry is marked active. Among equally-active
+ * entries the first usable one wins.
+ */
+function goKeyFromEntries(entries: readonly unknown[]): string | undefined {
+  let fallback: string | undefined;
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (record["integrationID"] !== GO_INTEGRATION_ID) continue;
+    const key = keyOfValue(record["value"]);
+    if (key === undefined) continue;
+    if (isActive(record["active"])) return key;
+    if (fallback === undefined) fallback = key;
+  }
+  return fallback;
+}
+
+/**
+ * Ask one credential store for the Zen Go key.
+ *
+ * Guarded and timed: a store that is absent, whose `list` is not a function,
+ * that throws, times out, or answers with a non-list yields `"no-client"` or
+ * `"timeout"` with no key; a store that answers without a usable entry yields
+ * `"no-key"`. Never throws.
+ */
+async function credentialAttempt(store: unknown, ms: number): Promise<KeyAttempt> {
+  const list = safeGet(store, "list");
+  if (typeof list !== "function") return { reason: "no-client", answered: false };
+  const settled = await settleCall(() => (list as () => unknown).call(store), ms);
+  if (!settled.ok) return { reason: settled.timedOut ? "timeout" : "no-client", answered: false };
+  const entries = asList(settled.value);
+  if (entries === undefined) return { reason: "no-client", answered: false };
+  const key = goKeyFromEntries(entries);
+  return key === undefined ? { reason: "no-key", answered: true } : { key, answered: true };
+}
+
+/** The `opencode-go` provider's own `settings.apiKey`, if it is there. */
+function providerKeyOf(info: unknown): string | undefined {
+  if (info === null || typeof info !== "object") return undefined;
+  const record = info as Record<string, unknown>;
+  if (record["id"] !== GO_INTEGRATION_ID && record["integrationID"] !== GO_INTEGRATION_ID) return undefined;
+  const settings = record["settings"];
+  if (settings === null || typeof settings !== "object") return undefined;
+  const apiKey = (settings as Record<string, unknown>)["apiKey"];
+  return typeof apiKey === "string" && apiKey.length > 0 ? apiKey : undefined;
+}
+
+/** Unwrap a one-item envelope (`{ data: ProviderInfo }`) before reading it. */
+function unwrapOne(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  const data = (value as Record<string, unknown>)["data"];
+  return data !== null && typeof data === "object" && !Array.isArray(data) ? data : value;
+}
+
+/**
+ * Ask the provider catalog for the `opencode-go` provider's resolved credential.
+ *
+ * The provider RPC does not redact, so the key may sit in `settings.apiKey`.
+ * Either collection shape - `get(id)` or `list()` - is handled defensively, and
+ * the call is guarded and timed like every other source. Never throws.
+ */
+async function providerAttempt(provider: unknown, ms: number): Promise<KeyAttempt> {
+  if (provider === null || typeof provider !== "object") return { reason: "no-client", answered: false };
+  const collection = provider as Record<string, unknown>;
+  const get = collection["get"];
+  const list = collection["list"];
+
+  if (typeof get === "function") {
+    const settled = await settleCall(() => (get as (id: string) => unknown).call(collection, GO_INTEGRATION_ID), ms);
+    if (!settled.ok) return { reason: settled.timedOut ? "timeout" : "no-client", answered: false };
+    if (settled.value === undefined || settled.value === null) return { reason: "no-key", answered: true };
+    const key = providerKeyOf(unwrapOne(settled.value));
+    return key === undefined ? { reason: "no-key", answered: true } : { key, answered: true };
+  }
+
+  if (typeof list === "function") {
+    const settled = await settleCall(() => (list as () => unknown).call(collection), ms);
+    if (!settled.ok) return { reason: settled.timedOut ? "timeout" : "no-client", answered: false };
+    const entries = asList(settled.value);
+    if (entries === undefined) return { reason: "no-client", answered: false };
+    let key: string | undefined;
+    for (const entry of entries) {
+      const candidate = providerKeyOf(entry);
+      if (candidate !== undefined) {
+        key = candidate;
+        break;
+      }
+    }
+    return key === undefined ? { reason: "no-key", answered: true } : { key, answered: true };
+  }
+
+  return { reason: "no-client", answered: false };
 }
 
 function resolveFetchJson(deps: GoDeps | undefined): (url: string, init: RequestInit) => Promise<unknown> {
@@ -324,6 +547,49 @@ function resolveFetchJson(deps: GoDeps | undefined): (url: string, init: Request
   return defaultFetchJson;
 }
 
+/** The HTTP status a failure carried, or `"n/a"` when it carried none. */
+function httpOf(error: unknown): string {
+  const status = error !== null && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+  return typeof status === "number" && Number.isFinite(status) ? String(status) : "n/a";
+}
+
+/**
+ * The observation boundary: ONE bounded line per poll outcome, so a failure is
+ * readable next time.
+ *
+ * Written under the OS temp directory, resolved via `os.tmpdir()`. It records
+ * which source was consulted, whether it produced a key, the HTTP status, the
+ * parse result, and the reason - and NEVER the key or any part of it. Best
+ * effort: a log that cannot be written must never affect the poll. Rotated by
+ * overwriting once the file holds {@link GO_LOG_MAX_LINES} lines.
+ */
+function logPoll(entry: {
+  readonly src: GoKeySource;
+  readonly key: boolean;
+  readonly http: string;
+  readonly parse: string;
+  readonly reason: string;
+}): void {
+  try {
+    const directory = join(tmpdir(), GO_LOG_DIR);
+    const path = join(directory, GO_LOG_FILE);
+    const line = `ts=${new Date().toISOString()} src=${entry.src} key=${entry.key ? "yes" : "no"} http=${entry.http} parse=${entry.parse} reason=${entry.reason}\n`;
+
+    let prior = "";
+    try {
+      if (existsSync(path)) prior = readFileSync(path, "utf8");
+    } catch {
+      prior = "";
+    }
+    const lines = prior.length === 0 ? 0 : prior.split("\n").filter((row) => row.length > 0).length;
+    mkdirSync(directory, { recursive: true });
+    if (lines >= GO_LOG_MAX_LINES) writeFileSync(path, line);
+    else appendFileSync(path, line);
+  } catch {
+    // Observation must never break the observed.
+  }
+}
+
 /**
  * Start polling Go usage into the host's memory store, or return `undefined`
  * when there is no usable store.
@@ -333,9 +599,10 @@ function resolveFetchJson(deps: GoDeps | undefined): (url: string, init: Request
  * immediately so the row populates without waiting a full interval.
  *
  * Assumption: `deps` is a test-only override. Production omits it, so on each
- * poll the key is resolved from the host's credential store and then from
- * `process.env[GO_KEY_ENV]` (late or rotated keys recover), and the request is
- * the real `fetch` with a bounded timeout.
+ * poll the key is resolved from the host's credential sources - the credential
+ * store, then the provider catalog's `settings.apiKey`, then
+ * `process.env[GO_KEY_ENV]` (late or rotated keys recover) - each under a hard
+ * bound, and the request is the real `fetch` with a bounded timeout.
  */
 export function startGoBridge(
   host: GoHost | undefined,
@@ -352,35 +619,69 @@ export function startGoBridge(
   const keyFn = resolveKeyFn(deps);
   const asyncKeyFn = resolveAsyncKeyFn(deps);
   const fetchJson = resolveFetchJson(deps);
+  const credentialTimeoutMs = resolveCredentialTimeout(deps);
   const client = host.client;
+  // Read the nested sources once, through `safeGet`, so a hostile getter or a
+  // wrapped client cannot throw out of the setup.
+  const directStore = safeGet(client, "credential");
+  const wrappedStore = safeGet(safeGet(client, "api"), "credential");
+  const providerSource = safeGet(safeGet(safeGet(host, "data"), "location"), "provider");
 
   // The key source, in order: an injected override (`key`, then `resolveKey`),
-  // the host's credential store, then the env var. Never throws. When nothing
-  // yields a key the result names WHY, so the blank panel is not silent: a
-  // usable store that held no entry is `"no-key"`, a store that could not be
-  // asked at all is `"no-client"`.
-  const readKey = async (): Promise<{ key?: string; reason?: GoNoDataReason }> => {
+  // then the real sources - the host's own credential store (direct, then a
+  // context that wraps the client), the provider catalog's unredacted
+  // `settings.apiKey`, and finally `OPENCODE_GO_API_KEY`. Every source is
+  // guarded and timed, and the result names WHICH source produced the key (or
+  // why none did), so the blank panel is never silent and never lies.
+  const readKey = async (): Promise<{ key?: string; src: GoKeySource; reason?: GoNoDataReason }> => {
     if (keyFn !== undefined) {
       try {
         const key = keyFn();
-        return typeof key === "string" && key.length > 0 ? { key } : { reason: "no-key" };
+        return typeof key === "string" && key.length > 0
+          ? { key, src: "credential" }
+          : { src: "none", reason: "no-key" };
       } catch {
-        return { reason: "no-key" };
+        return { src: "none", reason: "no-key" };
       }
     }
     if (asyncKeyFn !== undefined) {
       try {
         const key = await asyncKeyFn();
-        return typeof key === "string" && key.length > 0 ? { key } : { reason: "no-key" };
+        return typeof key === "string" && key.length > 0
+          ? { key, src: "credential" }
+          : { src: "none", reason: "no-key" };
       } catch {
-        return { reason: "no-key" };
+        return { src: "none", reason: "no-key" };
       }
     }
-    const stored = await credentialKey(client);
-    if (typeof stored.key === "string" && stored.key.length > 0) return { key: stored.key };
+
+    let answered = false;
+    let timedOut = false;
+
+    // a. the host's own credential store.
+    const direct = await credentialAttempt(directStore, credentialTimeoutMs);
+    if (direct.key !== undefined) return { key: direct.key, src: "credential" };
+    answered = answered || direct.answered;
+    timedOut = timedOut || direct.reason === "timeout";
+
+    // b. a context that wraps the client one level deeper.
+    const wrapped = await credentialAttempt(wrappedStore, credentialTimeoutMs);
+    if (wrapped.key !== undefined) return { key: wrapped.key, src: "credential" };
+    answered = answered || wrapped.answered;
+    timedOut = timedOut || wrapped.reason === "timeout";
+
+    // c. the provider catalog's resolved credential.
+    const provider = await providerAttempt(providerSource, credentialTimeoutMs);
+    if (provider.key !== undefined) return { key: provider.key, src: "provider" };
+    answered = answered || provider.answered;
+    timedOut = timedOut || provider.reason === "timeout";
+
+    // d. the env var, the last resort.
     const env = process.env[GO_KEY_ENV];
-    if (typeof env === "string" && env.length > 0) return { key: env };
-    return { reason: stored.unavailable ? "no-client" : "no-key" };
+    if (typeof env === "string" && env.length > 0) return { key: env, src: "env" };
+
+    if (answered) return { src: "none", reason: "no-key" };
+    return { src: "none", reason: timedOut ? "timeout" : "no-client" };
   };
 
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -407,10 +708,12 @@ export function startGoBridge(
     const stillCurrent = () => myGeneration === generation && mySeq === latestSeq && !disposed;
 
     let key: string | undefined;
+    let keySrc: GoKeySource = "none";
     let keyReason: GoNoDataReason = "no-key";
     try {
       const resolved = await readKey();
       key = resolved.key;
+      keySrc = resolved.src;
       if (resolved.reason !== undefined) keyReason = resolved.reason;
     } catch {
       key = undefined;
@@ -418,8 +721,8 @@ export function startGoBridge(
     // No key is the row's "no key" dash path, not an error: store null and
     // make no request, so a keyless install never touches the endpoint.
     if (typeof key !== "string" || key.length === 0) {
-      if (!stillCurrent()) return;
-      if (!writeValue(opened, null, keyReason)) stopTimer();
+      if (stillCurrent() && !writeValue(opened, null, keyReason)) stopTimer();
+      logPoll({ src: keySrc, key: false, http: "n/a", parse: "n/a", reason: keyReason });
       return;
     }
 
@@ -429,14 +732,14 @@ export function startGoBridge(
         headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(GO_TIMEOUT_MS),
       });
-    } catch {
+    } catch (error) {
       // Refused, timed out, non-OK status, or a transport failure: no data,
       // not an error.
-      if (!stillCurrent()) return;
-      if (!writeValue(opened, null, "http")) stopTimer();
+      if (stillCurrent() && !writeValue(opened, null, "http")) stopTimer();
+      logPoll({ src: keySrc, key: true, http: httpOf(error), parse: "n/a", reason: "http" });
       return;
     }
-    if (!stillCurrent()) return;
+
     let normalized: GoUsage | null;
     try {
       normalized = normalizeGoUsage(raw) ?? null;
@@ -445,7 +748,14 @@ export function startGoBridge(
     }
     // A body that normalized to nothing is the `"parse"` reason; a real value
     // clears the reason inside `writeValue`.
-    if (!writeValue(opened, normalized, "parse")) stopTimer();
+    if (stillCurrent() && !writeValue(opened, normalized, "parse")) stopTimer();
+    logPoll({
+      src: keySrc,
+      key: true,
+      http: "ok",
+      parse: normalized === null ? "no" : "ok",
+      reason: normalized === null ? "parse" : "none",
+    });
   };
 
   timer = setInterval(() => {

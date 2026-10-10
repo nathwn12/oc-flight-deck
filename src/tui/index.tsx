@@ -392,8 +392,12 @@ export default Plugin.define({
             // A blank panel must name its cause. `goBridge` absent means
             // `startGoBridge` found no usable host store - distinct from a
             // bridge that ran but had nothing to report, which carries its own
-            // reason. Only meaningful when the panel is actually drawn.
-            const goReason = goBridge === undefined ? "no-bridge" : goBridge.reason;
+            // reason. A bridge with neither a value nor a reason yet (its first
+            // poll still in flight) is `"pending"`, so the panel is never silent.
+            const goReason =
+              goBridge === undefined
+                ? "no-bridge"
+                : (goBridge.reason ?? (goUsage === undefined ? "pending" : undefined));
             const panel = config.sidebar.footer.go
               ? goPanelLines(goUsage, Date.now(), goPanelLayout, ticker?.frame ?? 0, goReason)
               : [];

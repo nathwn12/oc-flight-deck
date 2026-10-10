@@ -296,10 +296,14 @@ describe("go panel lines", () => {
     expect(rest?.text).toBe(`Rolling   ${track(14)} ${DASH}`);
   });
 
-  test("renders a short, dim reason tag on the first line only when there is no data", () => {
+  test("renders a short, dim reason tag right after the label, on the first line only", () => {
     const lines = goPanelLines(undefined, NOW, undefined, undefined, "no-client");
-    expect(lines[0]?.text).toBe(`Rolling   ${track()} ${DASH}  no-client`);
-    expect(lines[0]?.segments?.[2]).toEqual({ text: "  no-client", tone: "subdued" });
+    // The tag sits immediately after the label, before the track, so a narrow
+    // sidebar can never clip it off the edge.
+    expect(lines[0]?.text).toBe(`Rolling   no-client ${DASH}`);
+    expect(lines[0]?.segments?.[0]).toEqual({ text: "Rolling   " });
+    expect(lines[0]?.segments?.[1]).toEqual({ text: "no-client ", tone: "subdued" });
+    expect(lines[0]?.segments?.[2]).toEqual({ text: `${DASH}`, tone: "subdued" });
     // Tagged once: the other two lines stay plain.
     expect(lines[1]?.text).toBe(`Weekly    ${track()} ${DASH}`);
     expect(lines[2]?.text).toBe(`Monthly   ${track()} ${DASH}`);
@@ -312,5 +316,26 @@ describe("go panel lines", () => {
     expect(goPanelLines(undefined, NOW, undefined, undefined, "not a reason!")[0]?.text).toBe(
       `Rolling   ${track()} ${DASH}`,
     );
+  });
+
+  test("shortens the resting track by the tag so the line never grows past the bar column", () => {
+    const plain = goPanelLines(undefined, NOW)[0]?.text ?? "";
+    // A shorter tag leaves some track; a longer one leaves none.
+    expect(goPanelLines(undefined, NOW, undefined, undefined, "http")[0]?.text).toBe(
+      `Rolling   http ${track(5)} ${DASH}`,
+    );
+    expect(goPanelLines(undefined, NOW, undefined, undefined, "pending")[0]?.text).toBe(
+      `Rolling   pending ${track(2)} ${DASH}`,
+    );
+    // A tag as wide as the column collapses the track to the placeholder alone.
+    expect(goPanelLines(undefined, NOW, undefined, undefined, "no-client")[0]?.text).toBe(
+      `Rolling   no-client ${DASH}`,
+    );
+
+    for (const reason of ["http", "pending", "no-client", "timeout", "no-bridge"]) {
+      const line = goPanelLines(undefined, NOW, undefined, undefined, reason)[0]?.text ?? "";
+      expect(line.length).toBeLessThanOrEqual(plain.length);
+      expect(line).toContain(reason);
+    }
   });
 });

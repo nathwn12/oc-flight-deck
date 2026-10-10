@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  GO_CREDENTIAL_TIMEOUT_MS,
   GO_KEY,
   GO_KEY_ENV,
+  GO_LOG_MAX_LINES,
+  GO_NO_DATA_REASONS,
   GO_POLL_MS,
   GO_USAGE_URL,
   startGoBridge,
@@ -72,6 +78,27 @@ function fakeHostWithStore(list: (() => Promise<unknown>) | undefined, initialVa
     client: list === undefined ? undefined : { credential: { list } },
   };
   return { host: withClient, state, seen };
+}
+
+/** `fakeHost` plus a provider collection, so the provider path is exercised. */
+function fakeHostWithProvider(provider: unknown, initialValue: unknown = null) {
+  const { host, state, seen } = fakeHost(initialValue);
+  const withData: GoHost = {
+    storage: host.storage,
+    data: { location: { provider } },
+  };
+  return { host: withData, state, seen };
+}
+
+/** A `ProviderInfo` for the Go integration, carrying its resolved api key. */
+function goProvider(apiKey: unknown) {
+  return {
+    id: "opencode-go",
+    name: "Go",
+    activation: "enabled",
+    package: "opencode-go",
+    settings: { apiKey },
+  };
 }
 
 /** Run `body` with `OPENCODE_GO_API_KEY` set (or cleared), restoring it after. */
@@ -474,5 +501,159 @@ describe("go bridge", () => {
     expect(bridge?.usage?.windows.length).toBe(3);
     expect(bridge?.reason).toBeUndefined();
     bridge?.dispose();
+  });
+
+  test("resolves a hung credential read to timeout and does not stall", async () => {
+    await withEnvKey(undefined, async () => {
+      const { host, state } = fakeHostWithStore(() => new Promise<unknown>(() => {}));
+      const started = Date.now();
+      const bridge = startGoBridge(host, { fetchJson: async () => FLAT, credentialTimeoutMs: 30 }, 1_000);
+      await sleep(90);
+      // The read never settles, yet the poll finished and named the cause.
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(bridge?.usage).toBeUndefined();
+      expect(bridge?.reason).toBe("timeout");
+      expect(state.value).toBeNull();
+      bridge?.dispose();
+    });
+  });
+
+  test("accepts a bare array and the data/output envelopes from the credential store", async () => {
+    await withEnvKey(undefined, async () => {
+      const shapes: readonly { readonly value: unknown; readonly key: string }[] = [
+        { value: [entry("opencode-go", true, keyValue("bare-key"))], key: "bare-key" },
+        { value: { data: [entry("opencode-go", true, keyValue("data-key"))] }, key: "data-key" },
+        { value: { output: [entry("opencode-go", true, keyValue("output-key"))] }, key: "output-key" },
+      ];
+      for (const shape of shapes) {
+        const { host } = fakeHostWithStore(async () => shape.value);
+        const auth: string[] = [];
+        const bridge = startGoBridge(host, authDeps(auth), 1_000);
+        await sleep(25);
+        expect(auth).toContain(`Bearer ${shape.key}`);
+        bridge?.dispose();
+      }
+    });
+  });
+
+  test("resolves the key from the provider catalog's settings.apiKey", async () => {
+    await withEnvKey(undefined, async () => {
+      // A `list()` collection.
+      const listed = fakeHostWithProvider({ list: () => [goProvider("provider-list-key")] });
+      const listAuth: string[] = [];
+      const listBridge = startGoBridge(listed.host, authDeps(listAuth), 1_000);
+      await sleep(25);
+      expect(listAuth).toContain("Bearer provider-list-key");
+      listBridge?.dispose();
+
+      // A `get(id)` collection, wrapped in the RPC's `{ data }` envelope.
+      const got = fakeHostWithProvider({
+        get: (id: string) => (id === "opencode-go" ? { data: goProvider("provider-get-key") } : undefined),
+      });
+      const getAuth: string[] = [];
+      const getBridge = startGoBridge(got.host, authDeps(getAuth), 1_000);
+      await sleep(25);
+      expect(getAuth).toContain("Bearer provider-get-key");
+      getBridge?.dispose();
+    });
+  });
+
+  test("uses the provider key only after the credential store yields none", async () => {
+    await withEnvKey(undefined, async () => {
+      const { host } = fakeHostWithStore(async () => [entry("opencode-go", true, keyValue("store-key"))]);
+      // Same host shape plus a provider that also holds a key: the store wins.
+      const both: GoHost = {
+        storage: host.storage,
+        client: host.client,
+        data: { location: { provider: { list: () => [goProvider("provider-key")] } } },
+      };
+      const auth: string[] = [];
+      const bridge = startGoBridge(both, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer store-key");
+      expect(auth).not.toContain("Bearer provider-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("uses the env var only after the store and the provider yield no key", async () => {
+    await withEnvKey("env-key", async () => {
+      // The provider holds a key: it wins over the env var.
+      const { host: providerHost } = fakeHostWithProvider({ list: () => [goProvider("provider-key")] });
+      const providerAuth: string[] = [];
+      const providerBridge = startGoBridge(providerHost, authDeps(providerAuth), 1_000);
+      await sleep(25);
+      expect(providerAuth).toContain("Bearer provider-key");
+      expect(providerAuth).not.toContain("Bearer env-key");
+      providerBridge?.dispose();
+
+      // Neither yields a key: the env var is the last resort.
+      const { host: emptyHost } = fakeHostWithProvider({ list: () => [goProvider(undefined)] });
+      const envAuth: string[] = [];
+      const envBridge = startGoBridge(emptyHost, authDeps(envAuth), 1_000);
+      await sleep(25);
+      expect(envAuth).toContain("Bearer env-key");
+      envBridge?.dispose();
+    });
+  });
+
+  test("treats a numeric 1 as active and prefers it over an inactive entry", async () => {
+    await withEnvKey(undefined, async () => {
+      const numericActive = {
+        id: "opencode-go:1",
+        integrationID: "opencode-go",
+        label: "test",
+        active: 1,
+        value: keyValue("numeric-active-key"),
+      };
+      const { host } = fakeHostWithStore(async () => [
+        entry("opencode-go", false, keyValue("inactive-key")),
+        numericActive,
+      ]);
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer numeric-active-key");
+      expect(auth).not.toContain("Bearer inactive-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("falls back to a non-active entry only when no entry is marked active", async () => {
+    await withEnvKey(undefined, async () => {
+      const { host } = fakeHostWithStore(async () => [
+        { id: "opencode-go:0", integrationID: "opencode-go", label: "test", active: 0, value: keyValue("only-key") },
+      ]);
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      expect(auth).toContain("Bearer only-key");
+      bridge?.dispose();
+    });
+  });
+
+  test("names timeout and pending in the closed reason set, with a 6s credential bound", () => {
+    expect(GO_NO_DATA_REASONS).toContain("timeout");
+    expect(GO_NO_DATA_REASONS).toContain("pending");
+    expect(GO_CREDENTIAL_TIMEOUT_MS).toBe(6_000);
+  });
+
+  test("writes one bounded observation line per poll and never the key", async () => {
+    const { host } = fakeHostWithStore(async () => [entry("opencode-go", true, keyValue("secret-key-value"))]);
+    const bridge = startGoBridge(host, authDeps([]), 1_000);
+    await sleep(25);
+    bridge?.dispose();
+
+    const path = join(tmpdir(), "opencode", "flight-deck-go.log");
+    if (!existsSync(path)) return;
+    const text = readFileSync(path, "utf8");
+    expect(text).not.toContain("secret-key-value");
+    expect(text).not.toContain("Bearer");
+    const lines = text.split("\n").filter((line) => line.length > 0);
+    expect(lines.length).toBeLessThanOrEqual(GO_LOG_MAX_LINES);
+    const last = lines[lines.length - 1] ?? "";
+    expect(last).toMatch(
+      /^ts=\S+ src=(credential|provider|env|none) key=(yes|no) http=\S+ parse=\S+ reason=\S+$/,
+    );
   });
 });
