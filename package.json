@@ -55,7 +55,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.19"
+    "@opencode/plugin": "2.0.26"
   },
   "devDependencies": {
     "@opentui/core": "0.5.12",
