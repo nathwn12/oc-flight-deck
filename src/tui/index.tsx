@@ -11,6 +11,7 @@ import {
 import { copyFeedback, copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
 import { loadConfigFile } from "./file-config.js";
+import { createGoLookReader } from "./go-look.js";
 import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
 import { goPanelLines } from "./go-panel.js";
 import { ANIMATED_FIELDS, type StatSource } from "./stats.js";
@@ -231,11 +232,18 @@ export default Plugin.define({
       config.sidebar.enabled && (config.sidebar.rows.includes("go") || goPanelEnabled);
     const goBridge = wantGo ? startGoBridge(context) : undefined;
 
-    // The footer panel's look, resolved once from the footer option itself, so
-    // `sidebar.footer.go` edits change the panel without touching the rows.
+    // The footer panel's look, re-resolved live from the config file: the
+    // reader cheap-stats the file each render (mtime + size) and re-reads +
+    // re-parses only when it moved, so `sidebar.footer.go` edits take effect
+    // on the next tick with no restart. `true` passes nothing (the panel's own
+    // defaults); an object passes its look straight through for the panel to
+    // re-read defensively. Host options keep setup precedence on every
+    // re-read; a missing, unreadable, or malformed file keeps the last good
+    // look and never throws out of the render below.
     // `true` passes nothing (the panel's own defaults); an object passes its
     // look straight through for the panel to re-read defensively.
     const goPanelLayout = goOption === true ? undefined : (typeof goOption === "object" && goOption !== null ? goOption : undefined);
+    const goLook = createGoLookReader({ hostOptions: context.options, initial: goPanelLayout });
 
     // Read session state inside the render so the rail stays live: cost and
     // tokens climb as the session runs, and the branch appears once VCS
@@ -410,7 +418,7 @@ export default Plugin.define({
                 ? "no-bridge"
                 : (goBridge.reason ?? (goUsage === undefined ? "pending" : undefined));
             const panel = goPanelEnabled
-              ? goPanelLines(goUsage, Date.now(), goPanelLayout, ticker?.frame ?? 0, goReason)
+              ? goPanelLines(goUsage, Date.now(), goLook.current(), ticker?.frame ?? 0, goReason)
               : [];
             return (
               <box flexDirection="column">
