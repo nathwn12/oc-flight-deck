@@ -8,9 +8,9 @@
 //   * Guard is per-session, so it waits for `follow(sessionID)` before fetching.
 //     Go usage is account-wide: one API key, one shared quota, no session to
 //     target — so the timer starts at construction and there is no `follow`.
-//   * The key is read on every poll through the same env accessor the Zen Go
-//     client uses, so a key loaded or rotated after startup is picked up
-//     without a restart.
+//   * The key is resolved on every poll - first from the host's own credential
+//     store, then the `OPENCODE_GO_API_KEY` env var - so a key loaded, rotated,
+//     or activated after startup is picked up without a restart.
 //
 // Why the store bridge at all is documented in ./guard.ts and ./ticker.ts: the
 // host's Solid and the plugin's are separate module instances, so only the
@@ -36,6 +36,31 @@ interface GoStore {
 /** The mutation function the host hands back. */
 type GoUpdate = (mutation: (draft: GoStoreState) => void) => void;
 
+/**
+ * The credential store as the bridge reads it.
+ *
+ * Deliberately minimal and structural, for the same reason `storage` is typed
+ * loosely: `credential.list()` arrived after the pinned `@opencode/plugin`
+ * client type, so this shape is what the bridge checks at runtime rather than
+ * what it trusts from the installed declaration. A host that predates the
+ * method simply fails the `typeof list === "function"` check and the bridge
+ * falls through to the env var.
+ */
+interface GoCredentialClient {
+  readonly credential?: GoCredentialStore;
+}
+
+/**
+ * The store's shape. The index signature is load-bearing: without it the
+ * all-optional type is "weak" to TypeScript, and the pinned client's
+ * `credential` group - which carries only `update`/`activate`/`remove` - has no
+ * property in common with it, so passing the real `context` would not compile.
+ */
+interface GoCredentialStore {
+  readonly list?: () => Promise<unknown>;
+  readonly [key: string]: unknown;
+}
+
 /** The one host capability the bridge needs, so it stays trivially stubbable. */
 export interface GoHost {
   readonly storage?: {
@@ -46,11 +71,16 @@ export interface GoHost {
      */
     memory(key: string, options: { readonly initial: GoStoreState }): unknown;
   };
+  /** The host's HTTP client, reached only for its credential store. */
+  readonly client?: GoCredentialClient;
 }
 
 /** Injectable key accessor and fetch, so tests never touch the network or env. */
 export interface GoDeps {
+  /** Synchronous key override; short-circuits the store and the env var. */
   readonly key?: () => string | undefined;
+  /** Async key override; used when `key` is absent, ahead of the store/env. */
+  readonly resolveKey?: () => Promise<string | undefined>;
   readonly fetchJson?: (url: string, init: RequestInit) => Promise<unknown>;
 }
 
@@ -82,8 +112,20 @@ export const GO_POLL_MS = 60_000;
 /** The Zen Go usage endpoint. Fixed: usage is account-wide, not per-session. */
 export const GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 
-/** The env var the Zen Go client reads its key from, matched by name only. */
+/**
+ * The env var the Zen Go client reads its key from, matched by name only.
+ *
+ * Since 0.14.0 this is a fallback: the bridge reads the host's credential store
+ * first and only falls back here when the store holds no usable entry.
+ */
 export const GO_KEY_ENV = "OPENCODE_GO_API_KEY";
+
+/**
+ * The integration id the Zen Go provider stores its credential under. The
+ * provider id and the integration id are the same string, so this is the one
+ * value that selects the right entry out of `credential.list()`.
+ */
+const GO_INTEGRATION_ID = "opencode-go";
 
 const GO_TIMEOUT_MS = 10_000;
 
@@ -138,15 +180,66 @@ function writeValue(opened: { store: GoStore; update: GoUpdate }, value: GoUsage
   }
 }
 
-function resolveKeyFn(deps: GoDeps | undefined): () => string | undefined {
+function resolveKeyFn(deps: GoDeps | undefined): (() => string | undefined) | undefined {
   if (deps !== undefined) {
     try {
       if (typeof deps.key === "function") return deps.key;
     } catch {
-      // fall through to the env accessor
+      // fall through to the async override, the store, then the env var
     }
   }
-  return () => process.env[GO_KEY_ENV];
+  return undefined;
+}
+
+function resolveAsyncKeyFn(deps: GoDeps | undefined): (() => Promise<string | undefined>) | undefined {
+  if (deps !== undefined) {
+    try {
+      if (typeof deps.resolveKey === "function") return deps.resolveKey;
+    } catch {
+      // fall through to the store, then the env var
+    }
+  }
+  return undefined;
+}
+
+/** A credential entry's key, or undefined unless it is a usable `key` value. */
+function keyOfValue(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record["type"] !== "key") return undefined;
+  const key = record["key"];
+  return typeof key === "string" && key.length > 0 ? key : undefined;
+}
+
+/**
+ * The Zen Go key held in the host's own credential store, or `undefined`.
+ *
+ * Never throws and never logs: a host whose client predates `credential.list`,
+ * a rejected call, a malformed payload, or no `opencode-go` `key` entry all
+ * collapse to `undefined` so the caller can fall through to the env var. Among
+ * matching entries the `active` one wins; otherwise the first usable one.
+ */
+async function credentialKey(client: GoHost["client"]): Promise<string | undefined> {
+  try {
+    const store = client?.credential;
+    const list = store?.list;
+    if (store === undefined || typeof list !== "function") return undefined;
+    const entries = await list.call(store);
+    if (!Array.isArray(entries)) return undefined;
+    let firstMatch: string | undefined;
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      if (record["integrationID"] !== GO_INTEGRATION_ID) continue;
+      const key = keyOfValue(record["value"]);
+      if (key === undefined) continue;
+      if (record["active"] === true) return key;
+      if (firstMatch === undefined) firstMatch = key;
+    }
+    return firstMatch;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveFetchJson(deps: GoDeps | undefined): (url: string, init: RequestInit) => Promise<unknown> {
@@ -168,9 +261,10 @@ function resolveFetchJson(deps: GoDeps | undefined): (url: string, init: Request
  * starts here and reads the key afresh on every poll. The first poll fires
  * immediately so the row populates without waiting a full interval.
  *
- * Assumption: `deps` is a test-only override. Production omits it, so the
- * accessor is `process.env[GO_KEY_ENV]` on each poll (late keys recover) and
- * the request is the real `fetch` with a bounded timeout.
+ * Assumption: `deps` is a test-only override. Production omits it, so on each
+ * poll the key is resolved from the host's credential store and then from
+ * `process.env[GO_KEY_ENV]` (late or rotated keys recover), and the request is
+ * the real `fetch` with a bounded timeout.
  */
 export function startGoBridge(
   host: GoHost | undefined,
@@ -185,7 +279,32 @@ export function startGoBridge(
 
   const cadence = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : GO_POLL_MS;
   const keyFn = resolveKeyFn(deps);
+  const asyncKeyFn = resolveAsyncKeyFn(deps);
   const fetchJson = resolveFetchJson(deps);
+  const client = host.client;
+
+  // The key source, in order: an injected override (`key`, then `resolveKey`),
+  // the host's credential store, then the env var. Never throws; an empty
+  // result is the row's "no key" path, not an error.
+  const readKey = async (): Promise<string | undefined> => {
+    if (keyFn !== undefined) {
+      try {
+        return keyFn();
+      } catch {
+        return undefined;
+      }
+    }
+    if (asyncKeyFn !== undefined) {
+      try {
+        return await asyncKeyFn();
+      } catch {
+        return undefined;
+      }
+    }
+    const stored = await credentialKey(client);
+    if (typeof stored === "string" && stored.length > 0) return stored;
+    return process.env[GO_KEY_ENV];
+  };
 
   let timer: ReturnType<typeof setInterval> | undefined;
   // Generation invalidated on dispose, so a poll that outlives its bridge —
@@ -212,7 +331,7 @@ export function startGoBridge(
 
     let key: string | undefined;
     try {
-      key = keyFn();
+      key = await readKey();
     } catch {
       key = undefined;
     }
