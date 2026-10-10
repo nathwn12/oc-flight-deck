@@ -59,6 +59,9 @@ describe("the schema describes the real config", () => {
     expect(goObject.properties.reset.default).toBe(DEFAULT_GO_PANEL_LOOK.reset);
     expect(goObject.properties.sweep.default).toBe(DEFAULT_GO_PANEL_LOOK.sweep);
     expect(goObject.properties.sweep.default).toBe(false);
+    expect(goObject.properties.align.default).toBe(DEFAULT_GO_PANEL_LOOK.align);
+    expect(goObject.properties.align.default).toBe("right");
+    expect(goObject.properties.align.enum).toEqual(["left", "right", "center"]);
     // The signature look: renameable lowercase labels, a breathing mark, a
     // bounded breath. The label column is a minimum now, not a fixed width.
     expect(goObject.properties.labels.properties.rolling.default).toBe(
@@ -359,5 +362,13 @@ describe("the shipped example validates against the shipped schema", () => {
     const goWide = { sidebar: { footer: { go: { barWidth: 100 } } } };
     expect(schemaErrors(schema as unknown as SchemaNode, goWide, "")).not.toEqual([]);
     expect(resolveConfig(goWide).issues.join(" ")).toContain("sidebar.footer.go.barWidth");
+    // The trailing-cell align validates too: only the three exact strings
+    // pass, and the config falls back loudly on anything else.
+    const goAlign = { sidebar: { footer: { go: { align: "middle" } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goAlign, "")).not.toEqual([]);
+    expect(resolveConfig(goAlign).issues.join(" ")).toContain("sidebar.footer.go.align");
+    const goAlignOk = { sidebar: { footer: { go: { align: "center" } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goAlignOk, "")).toEqual([]);
+    expect(resolveConfig(goAlignOk).issues).toEqual([]);
   });
 });

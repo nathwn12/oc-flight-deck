@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-10-10
+
+### Added
+
+- `sidebar.footer.go` accepts `align` (`left`, `right`, `center`, default `right`): where each trailing value sits inside its own fixed-width percent (4) and reset (6) cell. `right` pins the value to the cell's right edge, so the digits stay put as values change length; `left` hugs the bar with the padding trailing; `center` splits the padding. Both trailing cells use the same setting, and the cell widths never move.
+
+### Removed
+
+- The `OPENCODE_GO_API_KEY` environment fallback is gone: the `go` row and the footer Go panel resolve the Zen Go key only from OpenCode's own credential sources (the credential store, then the provider catalog's resolved `settings.apiKey`). With no usable entry the bridge stores null and reports the `no-key` reason without making a request.
+
 ## [0.15.0] - 2026-10-11
 
 ### Changed

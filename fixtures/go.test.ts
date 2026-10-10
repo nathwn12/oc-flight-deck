@@ -5,7 +5,6 @@ import { join } from "node:path";
 import {
   GO_CREDENTIAL_TIMEOUT_MS,
   GO_KEY,
-  GO_KEY_ENV,
   GO_LOG_MAX_LINES,
   GO_NO_DATA_REASONS,
   GO_POLL_MS,
@@ -102,16 +101,19 @@ function goProvider(apiKey: unknown) {
   };
 }
 
+/** The env var name the bridge must never read; kept as a literal so no import can re-widen the path. */
+const ENV_KEY = "OPENCODE_GO_API_KEY";
+
 /** Run `body` with `OPENCODE_GO_API_KEY` set (or cleared), restoring it after. */
 async function withEnvKey<T>(value: string | undefined, body: () => Promise<T>): Promise<T> {
-  const saved = process.env[GO_KEY_ENV];
-  if (value === undefined) delete process.env[GO_KEY_ENV];
-  else process.env[GO_KEY_ENV] = value;
+  const saved = process.env[ENV_KEY];
+  if (value === undefined) delete process.env[ENV_KEY];
+  else process.env[ENV_KEY] = value;
   try {
     return await body();
   } finally {
-    if (saved === undefined) delete process.env[GO_KEY_ENV];
-    else process.env[GO_KEY_ENV] = saved;
+    if (saved === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = saved;
   }
 }
 
@@ -130,7 +132,6 @@ describe("go bridge", () => {
     expect(GO_KEY).toBe("flight-deck.go");
     expect(GO_POLL_MS).toBe(60_000);
     expect(GO_USAGE_URL).toBe("https://opencode.ai/zen/go/v1/usage");
-    expect(GO_KEY_ENV).toBe("OPENCODE_GO_API_KEY");
   });
 
   test("degrades to undefined when the host store is unusable", () => {
@@ -407,42 +408,62 @@ describe("go bridge", () => {
     });
   });
 
-  test("falls back to the env var when the store has no matching key", async () => {
+  test("ignores the env var when the store has no matching key", async () => {
     await withEnvKey("env-key", async () => {
-      const { host } = fakeHostWithStore(async () => [entry("someone-else", true, keyValue("other-key"))]);
-      const auth: string[] = [];
-      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      const { host, state } = fakeHostWithStore(async () => [entry("someone-else", true, keyValue("other-key"))]);
+      let fetches = 0;
+      const bridge = startGoBridge(host, { fetchJson: async () => { fetches += 1; return FLAT; } }, 5);
       await sleep(25);
-      expect(auth).toContain("Bearer env-key");
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      expect(bridge?.reason).toBe("no-key");
       bridge?.dispose();
     });
   });
 
-  test("falls back to the env var on a host whose client has no credential.list", async () => {
+  test("ignores the env var on a host whose client has no credential.list", async () => {
     await withEnvKey("env-key", async () => {
-      const { host } = fakeHostWithStore(undefined);
-      const auth: string[] = [];
-      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      const { host, state } = fakeHostWithStore(undefined);
+      let fetches = 0;
+      const bridge = startGoBridge(host, { fetchJson: async () => { fetches += 1; return FLAT; } }, 5);
       await sleep(25);
-      expect(auth).toContain("Bearer env-key");
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      expect(bridge?.reason).toBe("no-client");
       bridge?.dispose();
     });
   });
 
-  test("degrades to the env var when credential.list throws", async () => {
+  test("ignores the env var when credential.list throws", async () => {
     await withEnvKey("env-key", async () => {
-      const { host } = fakeHostWithStore(async () => {
+      const { host, state } = fakeHostWithStore(async () => {
         throw new Error("no store");
       });
-      const auth: string[] = [];
-      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      let fetches = 0;
+      const bridge = startGoBridge(host, { fetchJson: async () => { fetches += 1; return FLAT; } }, 5);
       await sleep(25);
-      expect(auth).toContain("Bearer env-key");
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      expect(bridge?.reason).toBe("no-client");
       bridge?.dispose();
     });
   });
 
-  test("stores null and makes no request when neither the store nor the env has a key", async () => {
+  test("ignores a set env var and resolves from the credential store instead", async () => {
+    await withEnvKey("env-dummy-key", async () => {
+      const { host } = fakeHostWithStore(async () => [entry("opencode-go", true, keyValue("store-key"))]);
+      const auth: string[] = [];
+      const bridge = startGoBridge(host, authDeps(auth), 1_000);
+      await sleep(25);
+      // The dummy env value is never read: the store key authenticates.
+      expect(auth).toContain("Bearer store-key");
+      expect(auth).not.toContain("Bearer env-dummy-key");
+      expect(bridge?.usage?.windows.length).toBe(3);
+      bridge?.dispose();
+    });
+  });
+
+  test("stores null and makes no request when the store has no key", async () => {
     await withEnvKey(undefined, async () => {
       const { host, state } = fakeHostWithStore(async () => []);
       let fetches = 0;
@@ -626,9 +647,9 @@ describe("go bridge", () => {
     });
   });
 
-  test("uses the env var only after the store and the provider yield no key", async () => {
+  test("uses the provider key and ignores the env var when the store yields none", async () => {
     await withEnvKey("env-key", async () => {
-      // The provider holds a key: it wins over the env var.
+      // The provider holds a key: it is used, never the env var.
       const { host: providerHost } = fakeHostWithProvider({ list: () => [goProvider("provider-key")] });
       const providerAuth: string[] = [];
       const providerBridge = startGoBridge(providerHost, authDeps(providerAuth), 1_000);
@@ -637,12 +658,18 @@ describe("go bridge", () => {
       expect(providerAuth).not.toContain("Bearer env-key");
       providerBridge?.dispose();
 
-      // Neither yields a key: the env var is the last resort.
-      const { host: emptyHost } = fakeHostWithProvider({ list: () => [goProvider(undefined)] });
-      const envAuth: string[] = [];
-      const envBridge = startGoBridge(emptyHost, authDeps(envAuth), 1_000);
+      // Neither yields a key: no request is made, whatever the env var holds.
+      const { host: emptyHost, state } = fakeHostWithProvider({ list: () => [goProvider(undefined)] });
+      let fetches = 0;
+      const envBridge = startGoBridge(
+        emptyHost,
+        { fetchJson: async () => { fetches += 1; return FLAT; } },
+        1_000,
+      );
       await sleep(25);
-      expect(envAuth).toContain("Bearer env-key");
+      expect(fetches).toBe(0);
+      expect(state.value).toBeNull();
+      expect(envBridge?.reason).toBe("no-key");
       envBridge?.dispose();
     });
   });
@@ -703,7 +730,7 @@ describe("go bridge", () => {
     expect(lines.length).toBeLessThanOrEqual(GO_LOG_MAX_LINES);
     const last = lines[lines.length - 1] ?? "";
     expect(last).toMatch(
-      /^ts=\S+ src=(credential|provider|env|none) key=(yes|no) http=\S+ parse=\S+ reason=\S+$/,
+      /^ts=\S+ src=(credential|provider|none) key=(yes|no) http=\S+ parse=\S+ reason=\S+$/,
     );
   });
 });

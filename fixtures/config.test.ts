@@ -237,6 +237,7 @@ describe("the sidebar footer", () => {
       labelWidth: 6,
       percent: true,
       reset: true,
+      align: "right",
       sweep: false,
       labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
       blink: true,
@@ -252,6 +253,7 @@ describe("the sidebar footer", () => {
             labelWidth: 8,
             percent: false,
             reset: false,
+            align: "center",
             sweep: true,
             labels: { rolling: "5h", weekly: "1w", monthly: "1m" },
             blink: false,
@@ -267,6 +269,7 @@ describe("the sidebar footer", () => {
       labelWidth: 8,
       percent: false,
       reset: false,
+      align: "center",
       sweep: true,
       labels: { rolling: "5h", weekly: "1w", monthly: "1m" },
       blink: false,
@@ -282,6 +285,7 @@ describe("the sidebar footer", () => {
       labelWidth: 6,
       percent: true,
       reset: true,
+      align: "right",
       sweep: false,
       labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
       blink: true,
@@ -299,6 +303,7 @@ describe("the sidebar footer", () => {
             labelWidth: -3,
             percent: 1,
             reset: null,
+            align: "sideways",
             sweep: "often",
             labels: { rolling: 42, weekly: "", monthly: "x".repeat(30) },
             blink: "yes",
@@ -313,6 +318,7 @@ describe("the sidebar footer", () => {
       labelWidth: 6,
       percent: true,
       reset: true,
+      align: "right",
       sweep: false,
       labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
       blink: true,
@@ -323,6 +329,7 @@ describe("the sidebar footer", () => {
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labelWidth");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.percent");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.reset");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.align");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.sweep");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labels.rolling");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labels.weekly");
@@ -366,6 +373,25 @@ describe("the sidebar footer", () => {
     const fast = resolveConfig({ sidebar: { footer: { go: { blinkMs: 5001 } } } });
     expect(fast.config.sidebar.footer.go).toMatchObject({ blinkMs: 700 });
     expect(fast.issues.join(" ")).toContain("sidebar.footer.go.blinkMs");
+  });
+
+  test("reads the go trailing-cell align, defaulting to right", () => {
+    // Each exact value passes through cleanly.
+    for (const align of ["left", "right", "center"] as const) {
+      const resolution = resolveConfig({ sidebar: { footer: { go: { align } } } });
+      expect(resolution.issues).toEqual([]);
+      expect(resolution.config.sidebar.footer.go).toMatchObject({ align });
+    }
+    // Absent means the default, silently.
+    expect(resolveConfig({ sidebar: { footer: { go: {} } } }).config.sidebar.footer.go).toMatchObject({
+      align: "right",
+    });
+    // Anything else present falls back to right, loudly.
+    for (const align of ["RIGHT", " Left", "", 0, null, { align: "left" }]) {
+      const bad = resolveConfig({ sidebar: { footer: { go: { align } } } });
+      expect(bad.config.sidebar.footer.go).toMatchObject({ align: "right" });
+      expect(bad.issues.join(" ")).toContain("sidebar.footer.go.align");
+    }
   });
 
   test("replaces the empty default with an explicit list", () => {

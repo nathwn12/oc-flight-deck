@@ -3,9 +3,11 @@
 // A designed instrument, not a data dump: three fixed lines - rolling (5h),
 // weekly (1w), monthly (1m) - plus an opt-in dim header naming the plan. Each
 // line is a strict fixed-width column layout - a breathing mark, a
-// left-aligned label, a thin-rule meter, a right-aligned percent and a
-// right-aligned reset countdown - separated by single spaces, so all three
+// left-aligned label, a thin-rule meter, a percent cell and a reset
+// countdown cell - separated by single spaces, so all three
 // rows share one axis and the bar's start and end never wander between rows.
+// The two trailing cells keep their widths; `align` moves each value inside
+// its own cell, defaulting to the right edge.
 //
 // Pure, like ./go-usage.js: the clock arrives as `nowMs`, the animation phase
 // as `frame`, and the usage and its no-data reason as values, so the panel is
@@ -97,6 +99,11 @@ export const PANEL_DEFAULT_PERCENT = true;
 /** Whether the reset column draws when the caller says nothing. */
 export const PANEL_DEFAULT_RESET = true;
 /**
+ * Where a trailing value sits inside its fixed-width cell when the caller
+ * says nothing: pinned to the cell's right edge.
+ */
+export const PANEL_DEFAULT_ALIGN = "right" as const;
+/**
  * Whether the sweep may move when the caller says nothing.
  *
  * Off: the meter is static and changes only when the percentage itself
@@ -123,6 +130,7 @@ interface PanelLook {
   readonly labelWidth: number;
   readonly showPercent: boolean;
   readonly showReset: boolean;
+  readonly align: "left" | "right" | "center";
   readonly sweep: boolean;
   readonly labels: GoPanelLabels;
   readonly blink: boolean;
@@ -131,6 +139,25 @@ interface PanelLook {
 
 function readLookFlag(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * One trailing value inside its fixed-width cell.
+ *
+ * The width never moves - only the value does. `right` pins it to the cell's
+ * right edge so digits stay put as values change length; `left` hugs the bar
+ * with the padding trailing; `center` splits the padding, the odd cell going
+ * right. A value already at or past the width is returned as-is.
+ */
+function alignCell(value: string, width: number, align: PanelLook["align"]): string {
+  if (value.length >= width) return value;
+  const padding = width - value.length;
+  if (align === "left") return value + " ".repeat(padding);
+  if (align === "center") {
+    const left = Math.floor(padding / 2);
+    return " ".repeat(left) + value + " ".repeat(padding - left);
+  }
+  return " ".repeat(padding) + value;
 }
 
 /**
@@ -205,6 +232,9 @@ function readLook(layout: unknown): PanelLook {
   const header = readLookFlag(hint["header"], PANEL_DEFAULT_HEADER);
   const showPercent = readLookFlag(hint["percent"], PANEL_DEFAULT_PERCENT);
   const showReset = readLookFlag(hint["reset"], PANEL_DEFAULT_RESET);
+  const rawAlign = hint["align"];
+  const align: PanelLook["align"] =
+    rawAlign === "left" || rawAlign === "right" || rawAlign === "center" ? rawAlign : PANEL_DEFAULT_ALIGN;
   const sweep = readLookFlag(hint["sweep"], PANEL_DEFAULT_SWEEP);
   const rawLabel = hint["labelWidth"];
   const flooredLabel = rawLabel === undefined ? undefined : Math.floor(asCount(rawLabel) ?? Number.NaN);
@@ -244,7 +274,7 @@ function readLook(layout: unknown): PanelLook {
   const fixed =
     markWidth + labelWidth + 1 + (showPercent ? 1 + PANEL_PERCENT_WIDTH : 0) + (showReset ? 1 + PANEL_RESET_WIDTH : 0);
   const maxBar = Math.max(1, PANEL_SIDEBAR_BUDGET - fixed);
-  return { header, barWidth: Math.min(namedBar, maxBar), labelWidth, showPercent, showReset, sweep, labels, blink, blinkMs };
+  return { header, barWidth: Math.min(namedBar, maxBar), labelWidth, showPercent, showReset, align, sweep, labels, blink, blinkMs };
 }
 
 /**
@@ -465,19 +495,21 @@ function restingLine(
     trackCells = Math.max(0, cells - reason.length - 1);
   }
   const tail =
-    TRACK.repeat(trackCells) + (look.showPercent ? ` ${DEFAULT_PLACEHOLDER.padStart(PANEL_PERCENT_WIDTH)}` : "");
+    TRACK.repeat(trackCells) +
+    (look.showPercent ? ` ${alignCell(DEFAULT_PLACEHOLDER, PANEL_PERCENT_WIDTH, look.align)}` : "");
   segments.push({ text: tail, tone: "subdued" });
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
 }
 
 /**
- * One drawn line: the label, a thin-rule meter, the right-aligned percent,
- * and the right-aligned dim countdown.
+ * One drawn line: the label, a thin-rule meter, the percent cell, and the
+ * dim countdown cell.
  *
  * Columns are fixed-width with one space between them: the label is
  * left-aligned to `labelWidth`, the meter is exactly `barWidth` cells of
- * `FILLED` over `TRACK`, the percent is right-aligned to four and the reset to
- * six, so the percent and the countdown sit on a shared axis on every row.
+ * `FILLED` over `TRACK`, the percent is 4 wide and the reset 6, so the percent
+ * and the countdown sit on a shared axis on every row. `align` moves each
+ * trailing value inside its own cell without moving the axis.
  * The meter carries one brighter cell (`default`, the theme's primary text
  * colour) sweeping across the filled region only when the caller opts in with
  * `sweep: true` and supplies a live frame; by default the bar is static and
@@ -515,7 +547,7 @@ function valueLine(
     const percent = ratio === undefined ? DEFAULT_PLACEHOLDER : `${Math.round(ratio * 100)}%`;
     // The percent joins the meter's trailing run so a uniform meter stays one
     // span; the countdown is its own dim run (relief, not severity).
-    appendRun(runs, ` ${percent.padStart(PANEL_PERCENT_WIDTH)}`, tone);
+    appendRun(runs, ` ${alignCell(percent, PANEL_PERCENT_WIDTH, look.align)}`, tone);
   }
 
   const segments: StatSegment[] = [];
@@ -525,7 +557,7 @@ function valueLine(
   if (look.showReset) {
     const countdown = resetCountdown(window, nowMs);
     if (countdown !== undefined) {
-      segments.push({ text: ` ${countdown.padStart(PANEL_RESET_WIDTH)}`, tone: "subdued" });
+      segments.push({ text: ` ${alignCell(countdown, PANEL_RESET_WIDTH, look.align)}`, tone: "subdued" });
     }
   }
   return { field: "go", text: segments.map((segment) => segment.text).join(""), segments };
