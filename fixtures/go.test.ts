@@ -14,6 +14,7 @@ import {
   type GoDeps,
   type GoHost,
 } from "../src/tui/go.js";
+import { normalizeGoUsage } from "../src/tui/go-usage.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -297,12 +298,61 @@ describe("go bridge", () => {
   test("reads whatever the host store currently holds, defensively", () => {
     const { host, state } = fakeHost();
     const bridge = startGoBridge(host, { key: () => "k", fetchJson: async () => FLAT }, 1_000);
-    state.value = FLAT;
+    // The store holds NORMALISED usage, never the raw payload.
+    state.value = normalizeGoUsage(FLAT);
     expect(bridge?.usage?.windows[0]?.ratio).toBe(0.95);
     state.value = "garbage";
     expect(bridge?.usage).toBeUndefined();
     state.value = null;
     expect(bridge?.usage).toBeUndefined();
+    bridge?.dispose();
+  });
+
+  test("round-trips a normalised live payload through the store", () => {
+    const live = {
+      usage: {
+        rolling: { status: "ok", percent: 0, resetsAt: "2026-09-26T13:07:26.662Z" },
+        weekly: { status: "ok", percent: 79, resetsAt: "2026-09-28T00:00:00.000Z" },
+        monthly: { status: "ok", percent: 39, resetsAt: "2026-10-24T02:24:22.000Z" },
+      },
+    };
+    const normalised = normalizeGoUsage(live);
+    expect(normalised?.windows.map((w) => w.id)).toEqual(["5h", "1w", "1m"]);
+    const { host, state } = fakeHost();
+    const bridge = startGoBridge(host, { key: () => "k", fetchJson: async () => FLAT }, 1_000);
+    // Simulate the fetch path writing the normalised value into the store.
+    state.value = normalised;
+    // Before the fix this read back through the raw-payload normaliser, which
+    // drops ratio-only windows, so the panel stayed pending despite a good poll.
+    expect(bridge?.usage).toEqual(normalised);
+    bridge?.dispose();
+  });
+
+  test("a stored window carrying only ratio survives", () => {
+    const { host, state } = fakeHost();
+    const bridge = startGoBridge(host, { key: () => "k", fetchJson: async () => FLAT }, 1_000);
+    state.value = { windows: [{ id: "5h", ratio: 0.5 }] };
+    expect(bridge?.usage?.windows).toEqual([{ id: "5h", ratio: 0.5 }]);
+    // Ratios clamp into [0, 1] on read, so over-limit never escapes the dial.
+    state.value = { windows: [{ id: "5h", ratio: 1.5 }] };
+    expect(bridge?.usage?.windows[0]?.ratio).toBe(1);
+    bridge?.dispose();
+  });
+
+  test("a malformed stored value still yields undefined", () => {
+    const { host, state } = fakeHost();
+    const bridge = startGoBridge(host, { key: () => "k", fetchJson: async () => FLAT }, 1_000);
+    for (const malformed of [
+      { windows: [{ id: "fortnightly", ratio: 0.5 }] },
+      { windows: [{ id: "5h", ratio: "half" }] },
+      { windows: [{ id: "5h" }] },
+      { windows: [] },
+      { nope: true },
+      FLAT,
+    ]) {
+      state.value = malformed;
+      expect(bridge?.usage).toBeUndefined();
+    }
     bridge?.dispose();
   });
 
