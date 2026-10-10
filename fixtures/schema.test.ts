@@ -52,13 +52,28 @@ describe("the schema describes the real config", () => {
     expect(goObject.properties.header.default).toBe(DEFAULT_GO_PANEL_LOOK.header);
     expect(goObject.properties.header.default).toBe(false);
     expect(goObject.properties.barWidth.default).toBe(DEFAULT_GO_PANEL_LOOK.barWidth);
-    expect(goObject.properties.barWidth.default).toBe(14);
+    expect(goObject.properties.barWidth.default).toBe(10);
     expect(goObject.properties.labelWidth.default).toBe(DEFAULT_GO_PANEL_LOOK.labelWidth);
     expect(goObject.properties.labelWidth.default).toBe(6);
     expect(goObject.properties.percent.default).toBe(DEFAULT_GO_PANEL_LOOK.percent);
     expect(goObject.properties.reset.default).toBe(DEFAULT_GO_PANEL_LOOK.reset);
     expect(goObject.properties.sweep.default).toBe(DEFAULT_GO_PANEL_LOOK.sweep);
     expect(goObject.properties.sweep.default).toBe(false);
+    // The signature look: renameable lowercase labels, a breathing mark, a
+    // bounded breath. The label column is a minimum now, not a fixed width.
+    expect(goObject.properties.labels.properties.rolling.default).toBe(
+      DEFAULT_GO_PANEL_LOOK.labels.rolling,
+    );
+    expect(goObject.properties.labels.properties.rolling.default).toBe("rolling");
+    expect(goObject.properties.labels.properties.weekly.default).toBe("weekly");
+    expect(goObject.properties.labels.properties.monthly.default).toBe("monthly");
+    expect(goObject.properties.labels.additionalProperties).toBe(false);
+    expect(goObject.properties.blink.default).toBe(DEFAULT_GO_PANEL_LOOK.blink);
+    expect(goObject.properties.blink.default).toBe(true);
+    expect(goObject.properties.blinkMs.default).toBe(DEFAULT_GO_PANEL_LOOK.blinkMs);
+    expect(goObject.properties.blinkMs.default).toBe(700);
+    expect(goObject.properties.blinkMs.minimum).toBe(200);
+    expect(goObject.properties.blinkMs.maximum).toBe(5000);
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
@@ -323,8 +338,24 @@ describe("the shipped example validates against the shipped schema", () => {
     const goObject = { sidebar: { footer: { go: { header: true, barWidth: 10, labelWidth: 8 } } } };
     expect(schemaErrors(schema as unknown as SchemaNode, goObject, "")).toEqual([]);
     expect(resolveConfig(goObject).issues).toEqual([]);
+    // The new knobs validate too: a rename, a blink toggle and a breath.
+    const goNew = {
+      sidebar: { footer: { go: { labels: { weekly: "this week" }, blink: false, blinkMs: 1000 } } },
+    };
+    expect(schemaErrors(schema as unknown as SchemaNode, goNew, "")).toEqual([]);
+    expect(resolveConfig(goNew).issues).toEqual([]);
     const goExtra = { sidebar: { footer: { go: { header: true, colour: "red" } } } };
     expect(schemaErrors(schema as unknown as SchemaNode, goExtra, "")).not.toEqual([]);
+    // Unknown rename keys are rejected the same way, and the config ignores
+    // them forward-compatibly.
+    const goLabelExtra = { sidebar: { footer: { go: { labels: { weekly: "ok", yearly: "no" } } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goLabelExtra, "")).not.toEqual([]);
+    expect(resolveConfig(goLabelExtra).issues).toEqual([]);
+    // A breath outside 200-5000 fails the schema, and the config falls back
+    // loudly rather than breathing at flicker or frozen rates.
+    const goBreath = { sidebar: { footer: { go: { blinkMs: 6000 } } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, goBreath, "")).not.toEqual([]);
+    expect(resolveConfig(goBreath).issues.join(" ")).toContain("sidebar.footer.go.blinkMs");
     const goWide = { sidebar: { footer: { go: { barWidth: 100 } } } };
     expect(schemaErrors(schema as unknown as SchemaNode, goWide, "")).not.toEqual([]);
     expect(resolveConfig(goWide).issues.join(" ")).toContain("sidebar.footer.go.barWidth");

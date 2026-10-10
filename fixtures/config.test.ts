@@ -233,15 +233,32 @@ describe("the sidebar footer", () => {
     expect(empty.issues).toEqual([]);
     expect(empty.config.sidebar.footer.go).toEqual({
       header: false,
-      barWidth: 14,
+      barWidth: 10,
       labelWidth: 6,
       percent: true,
       reset: true,
       sweep: false,
+      labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
+      blink: true,
+      blinkMs: 700,
     });
 
     const custom = resolveConfig({
-      sidebar: { footer: { go: { header: true, barWidth: 10, labelWidth: 8, percent: false, reset: false, sweep: true } } },
+      sidebar: {
+        footer: {
+          go: {
+            header: true,
+            barWidth: 10,
+            labelWidth: 8,
+            percent: false,
+            reset: false,
+            sweep: true,
+            labels: { rolling: "5h", weekly: "1w", monthly: "1m" },
+            blink: false,
+            blinkMs: 1000,
+          },
+        },
+      },
     });
     expect(custom.issues).toEqual([]);
     expect(custom.config.sidebar.footer.go).toEqual({
@@ -251,6 +268,9 @@ describe("the sidebar footer", () => {
       percent: false,
       reset: false,
       sweep: true,
+      labels: { rolling: "5h", weekly: "1w", monthly: "1m" },
+      blink: false,
+      blinkMs: 1000,
     });
 
     // Partial objects fill the rest with defaults, cleanly.
@@ -258,27 +278,45 @@ describe("the sidebar footer", () => {
     expect(partial.issues).toEqual([]);
     expect(partial.config.sidebar.footer.go).toEqual({
       header: true,
-      barWidth: 14,
+      barWidth: 10,
       labelWidth: 6,
       percent: true,
       reset: true,
       sweep: false,
+      labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
+      blink: true,
+      blinkMs: 700,
     });
   });
 
   test("reports a malformed go look value and ignores it, never crashing", () => {
     const bad = resolveConfig({
       sidebar: {
-        footer: { go: { header: "yes", barWidth: "big", labelWidth: -3, percent: 1, reset: null, sweep: "often" } },
+        footer: {
+          go: {
+            header: "yes",
+            barWidth: "big",
+            labelWidth: -3,
+            percent: 1,
+            reset: null,
+            sweep: "often",
+            labels: { rolling: 42, weekly: "", monthly: "x".repeat(30) },
+            blink: "yes",
+            blinkMs: 50,
+          },
+        },
       },
     });
     expect(bad.config.sidebar.footer.go).toEqual({
       header: false,
-      barWidth: 14,
+      barWidth: 10,
       labelWidth: 6,
       percent: true,
       reset: true,
       sweep: false,
+      labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
+      blink: true,
+      blinkMs: 700,
     });
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.header");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.barWidth");
@@ -286,10 +324,15 @@ describe("the sidebar footer", () => {
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.percent");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.reset");
     expect(bad.issues.join(" ")).toContain("sidebar.footer.go.sweep");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labels.rolling");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labels.weekly");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.labels.monthly");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.blink");
+    expect(bad.issues.join(" ")).toContain("sidebar.footer.go.blinkMs");
 
     // Out-of-range numbers fall back too, loudly.
     const range = resolveConfig({ sidebar: { footer: { go: { barWidth: 100, labelWidth: 100 } } } });
-    expect(range.config.sidebar.footer.go).toMatchObject({ barWidth: 14, labelWidth: 6 });
+    expect(range.config.sidebar.footer.go).toMatchObject({ barWidth: 10, labelWidth: 6 });
     expect(range.issues.join(" ")).toContain("sidebar.footer.go.barWidth");
     expect(range.issues.join(" ")).toContain("sidebar.footer.go.labelWidth");
 
@@ -297,6 +340,32 @@ describe("the sidebar footer", () => {
     const future = resolveConfig({ sidebar: { footer: { go: { header: true, colour: "red" } } } });
     expect(future.config.sidebar.footer.go).toMatchObject({ header: true });
     expect(future.issues).toEqual([]);
+  });
+
+  test("renames go labels per-key and bounds the breath", () => {
+    // Partial renames: a present key wins, an absent key keeps its default.
+    const renamed = resolveConfig({ sidebar: { footer: { go: { labels: { weekly: "this week" } } } } });
+    expect(renamed.issues).toEqual([]);
+    expect(renamed.config.sidebar.footer.go).toMatchObject({
+      labels: { rolling: "rolling", weekly: "this week", monthly: "monthly" },
+    });
+
+    // A non-object labels value falls back whole, loudly.
+    const whole = resolveConfig({ sidebar: { footer: { go: { labels: "loud" } } } });
+    expect(whole.config.sidebar.footer.go).toMatchObject({
+      labels: { rolling: "rolling", weekly: "weekly", monthly: "monthly" },
+    });
+    expect(whole.issues.join(" ")).toContain("sidebar.footer.go.labels");
+
+    // The breath keeps its bounds: 200 to 5000, floored to whole milliseconds.
+    expect(resolveConfig({ sidebar: { footer: { go: { blinkMs: 200 } } } }).issues).toEqual([]);
+    expect(resolveConfig({ sidebar: { footer: { go: { blinkMs: 5000 } } } }).issues).toEqual([]);
+    const slow = resolveConfig({ sidebar: { footer: { go: { blinkMs: 199 } } } });
+    expect(slow.config.sidebar.footer.go).toMatchObject({ blinkMs: 700 });
+    expect(slow.issues.join(" ")).toContain("sidebar.footer.go.blinkMs");
+    const fast = resolveConfig({ sidebar: { footer: { go: { blinkMs: 5001 } } } });
+    expect(fast.config.sidebar.footer.go).toMatchObject({ blinkMs: 700 });
+    expect(fast.issues.join(" ")).toContain("sidebar.footer.go.blinkMs");
   });
 
   test("replaces the empty default with an explicit list", () => {

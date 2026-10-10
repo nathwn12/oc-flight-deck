@@ -50,7 +50,7 @@
             },
             "go": {
               "default": false,
-              "description": "Draw the live Go usage panel under the footer's fixed lines: three fixed-width lines - ROLL (5h), WEEK (1w), MONTH (1m) - each with a bar, a right-aligned percent and a right-aligned reset countdown, read from Zen Go usage via OPENCODE_GO_API_KEY. true enables with the default look (no header, 14-cell bar, 6-wide labels, both columns, static meter); an object with header, barWidth, labelWidth, percent, reset and sweep enables with a custom look. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty.",
+              "description": "Draw the live Go usage panel under the footer's fixed lines: three fixed-width lines - rolling (5h), weekly (1w), monthly (1m) - each with a bar, a right-aligned percent and a right-aligned reset countdown, read from the active opencode-go credential in OpenCode's own credential store (there is no env var). true enables with the default look (no header, 10-cell bar, labels at least 6 wide, both columns, breathing mark on, static meter); an object with header, barWidth, labelWidth, percent, reset, sweep, labels, blink and blinkMs enables with a custom look. A window at 90% or more, or reporting a non-ok status, turns its bar and number red. Off by default; turning it on starts the same account-wide poll the `go` row uses and claims the sidebar footer slot even when `lines` is empty. The panel renders first inside the footer slot, directly above the host's own location row.",
               "anyOf": [
                 { "type": "boolean" },
                 {
@@ -66,7 +66,7 @@
                       "type": "integer",
                       "minimum": 1,
                       "maximum": 40,
-                      "default": 14,
+                      "default": 10,
                       "description": "Cells in the panel meter. Honoured while the longest line stays within the sidebar width; capped rather than wrapped."
                     },
                     "labelWidth": {
@@ -74,7 +74,7 @@
                       "minimum": 5,
                       "maximum": 24,
                       "default": 6,
-                      "description": "Width of the panel label column holding ROLL, WEEK and MONTH. Left-aligned and shared by all three rows."
+                      "description": "Minimum width of the panel label column. Left-aligned and shared by all three rows; auto-widens past this to hold the longest rendered rename, so a rename can never overflow or wrap."
                     },
                     "percent": {
                       "type": "boolean",
@@ -90,6 +90,46 @@
                       "type": "boolean",
                       "default": false,
                       "description": "Let a bright cell sweep the fill while the ticker runs. Off by default: the bar is static and changes only when the percentage itself changes."
+                    },
+                    "labels": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "description": "Rename the three meter labels, each optionally and independently. Absent keys keep their lowercase defaults; the label column auto-widens to hold the longest rename.",
+                      "properties": {
+                        "rolling": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 24,
+                          "default": "rolling",
+                          "description": "Label for the 5h window. Must be a non-empty string of at most 24 characters; anything else falls back to the default and is reported."
+                        },
+                        "weekly": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 24,
+                          "default": "weekly",
+                          "description": "Label for the 1w window. Must be a non-empty string of at most 24 characters; anything else falls back to the default and is reported."
+                        },
+                        "monthly": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 24,
+                          "default": "monthly",
+                          "description": "Label for the 1m window. Must be a non-empty string of at most 24 characters; anything else falls back to the default and is reported."
+                        }
+                      }
+                    },
+                    "blink": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Draw the slow breathing mark at the start of the first meter line. On by default: only the mark breathes, the meter stays static. Off removes the two-cell mark column entirely."
+                    },
+                    "blinkMs": {
+                      "type": "integer",
+                      "minimum": 200,
+                      "maximum": 5000,
+                      "default": 700,
+                      "description": "Milliseconds per breath step of the mark. One step moves the mark rest, swell, live, swell; indexed from the wall clock so the breath is independent of the ticker period."
                     }
                   }
                 }

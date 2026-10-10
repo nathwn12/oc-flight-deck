@@ -1,11 +1,11 @@
 // The live Go usage panel for the sidebar footer slot.
 //
-// A designed instrument, not a data dump: three fixed lines - ROLL (5h),
-// WEEK (1w), MONTH (1m) - plus an opt-in dim header naming the plan. Each
-// line is a strict fixed-width column layout - a left-aligned label, a
-// thin-rule meter, a right-aligned percent and a right-aligned reset
-// countdown - separated by single spaces, so all three rows share one axis
-// and the bar's start and end never wander between rows.
+// A designed instrument, not a data dump: three fixed lines - rolling (5h),
+// weekly (1w), monthly (1m) - plus an opt-in dim header naming the plan. Each
+// line is a strict fixed-width column layout - a breathing mark, a
+// left-aligned label, a thin-rule meter, a right-aligned percent and a
+// right-aligned reset countdown - separated by single spaces, so all three
+// rows share one axis and the bar's start and end never wander between rows.
 //
 // Pure, like ./go-usage.js: the clock arrives as `nowMs`, the animation phase
 // as `frame`, and the usage and its no-data reason as values, so the panel is
@@ -14,10 +14,12 @@
 // `layout` is `unknown` on principle - it crosses the config boundary - so
 // its look is re-read defensively instead of trusted.
 //
-// Every glyph is written as a `\uXXXX` escape so this source stays ASCII
-// whatever the write path does with it: U+25C8 is the header diamond, U+2501
-// is the filled cell, U+2500 the track. The bar is capped so the longest line
-// stays within the ~40-column sidebar and can never overflow or wrap.
+// Every glyph is written as a `\uXXXX` escape or a `String.fromCharCode`
+// so this source stays ASCII whatever the write path does with it: U+25C8 is
+// the header diamond, U+2501 is the filled cell, U+2500 the track, and
+// U+25CB/U+25CE/U+25CF are the breathing mark's rest/swell/live rings. The
+// bar is capped so the longest line stays within the ~40-column sidebar and
+// can never overflow or wrap.
 
 import { asCount, asRecord } from "./coerce.js";
 import { goTone, type GoUsage, type GoWindow } from "./go-usage.js";
@@ -26,15 +28,39 @@ import type { StatSegment } from "./rows.js";
 import { DEFAULT_PLACEHOLDER } from "./stat-fields.js";
 import type { StyleColor } from "./style.js";
 
-/** The panel's three windows and their short labels, in canonical 5h -> 1w -> 1m order. */
-const PANEL_WINDOWS: readonly { readonly id: GoWindow["id"]; readonly label: string }[] = [
-  { id: "5h", label: "ROLL" },
-  { id: "1w", label: "WEEK" },
-  { id: "1m", label: "MONTH" },
-];
+/** The panel's three windows, in canonical 5h -> 1w -> 1m order. Labels live in the look. */
+const PANEL_WINDOWS: readonly GoWindow["id"][] = ["5h", "1w", "1m"];
+
+/** Default labels by wire name: lowercase signature look. */
+export const PANEL_DEFAULT_LABELS = {
+  rolling: "rolling",
+  weekly: "weekly",
+  monthly: "monthly",
+} as const;
+
+/** One label per window id. */
+export interface GoPanelLabels {
+  readonly rolling: string;
+  readonly weekly: string;
+  readonly monthly: string;
+}
+
+function labelKeyFor(id: GoWindow["id"]): keyof GoPanelLabels {
+  if (id === "5h") return "rolling";
+  if (id === "1w") return "weekly";
+  return "monthly";
+}
 
 /** U+25C8 BLACK DIAMOND CONTAINING WHITE SMALL DIAMOND: the header mark. */
 const HEADER_GLYPH = "\u25C8";
+/** U+25CB WHITE CIRCLE, U+25CE BULLSEYE, U+25CF BLACK CIRCLE: the breathing mark. */
+const MARK_REST = String.fromCharCode(0x25cb);
+const MARK_MID = String.fromCharCode(0x25ce);
+const MARK_LIVE = String.fromCharCode(0x25cf);
+/** One slow breath: rest -> swell -> live -> swell, stepping once per `blinkMs`. */
+const MARK_FRAMES: readonly string[] = [MARK_REST, MARK_MID, MARK_LIVE, MARK_MID];
+/** Cells the mark column occupies: the glyph plus one space. */
+const MARK_WIDTH = 2;
 /** U+2501 BOX DRAWINGS HEAVY HORIZONTAL: one filled cell of the progress bar. */
 const FILLED = "\u2501";
 /** U+2500 BOX DRAWINGS LIGHT HORIZONTAL: one track cell behind the fill. */
@@ -51,9 +77,19 @@ const TRACK = "\u2500";
 export const GO_WARNING_RATIO = 0.6;
 
 /** Bar width when the caller supplies no readable `layout.barWidth`. */
-export const PANEL_DEFAULT_BAR_WIDTH = 14;
+export const PANEL_DEFAULT_BAR_WIDTH = 10;
 /** Label width when the caller supplies no readable `layout.labelWidth`. */
 export const PANEL_DEFAULT_LABEL_WIDTH = 6;
+/** Whether the breathing mark draws when the caller says nothing. */
+export const PANEL_DEFAULT_BLINK = true;
+/** Milliseconds per breath step when the caller supplies no readable `layout.blinkMs`. */
+export const PANEL_DEFAULT_BLINK_MS = 700;
+/** Slowest breath the panel honours; slower would read as stuck. */
+const PANEL_MIN_BLINK_MS = 200;
+/** Fastest breath the panel honours; faster would read as flicker. */
+const PANEL_MAX_BLINK_MS = 5000;
+/** Longest rename the panel honours per label; longer would eat the sidebar. */
+const PANEL_MAX_LABEL_LENGTH = 24;
 /** Whether the header draws when the caller says nothing. */
 export const PANEL_DEFAULT_HEADER = false;
 /** Whether the percent column draws when the caller says nothing. */
@@ -73,7 +109,7 @@ export const PANEL_PERCENT_WIDTH = 4;
 export const PANEL_RESET_WIDTH = 6;
 /** The sidebar width budget: no line may draw past it. */
 export const PANEL_SIDEBAR_BUDGET = 40;
-/** Narrowest label column that still holds `MONTH` without truncation. */
+/** Narrowest label column the panel honours; shorter would misalign the grid. */
 const PANEL_MIN_LABEL_WIDTH = 5;
 /** Widest label column the panel honours; wider would eat the sidebar. */
 const PANEL_MAX_LABEL_WIDTH = 24;
@@ -88,6 +124,9 @@ interface PanelLook {
   readonly showPercent: boolean;
   readonly showReset: boolean;
   readonly sweep: boolean;
+  readonly labels: GoPanelLabels;
+  readonly blink: boolean;
+  readonly blinkMs: number;
 }
 
 function readLookFlag(value: unknown, fallback: boolean): boolean {
@@ -105,12 +144,61 @@ function labelField(label: string, labelWidth: number): string {
 }
 
 /**
+ * One rename, re-read from an untrusted hint.
+ *
+ * A non-string, an empty string, or a rename longer than the widest label
+ * column falls back to the default: a rename must never overflow or wrap the
+ * sidebar, and the auto-widen below can only grow to what fits.
+ */
+function readLabel(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const text = value.trim();
+  if (text.length === 0 || text.length > PANEL_MAX_LABEL_LENGTH) return fallback;
+  return text;
+}
+
+/** The three renames, each falling back per-key to its default. */
+function readLabels(layout: unknown): GoPanelLabels {
+  const hint = asRecord(asRecord(layout)?.["labels"]) ?? {};
+  return {
+    rolling: readLabel(hint["rolling"], PANEL_DEFAULT_LABELS.rolling),
+    weekly: readLabel(hint["weekly"], PANEL_DEFAULT_LABELS.weekly),
+    monthly: readLabel(hint["monthly"], PANEL_DEFAULT_LABELS.monthly),
+  };
+}
+
+/**
+ * The breath step for one wall-clock instant: one ring per `blinkMs`,
+ * cycling rest -> swell -> live -> swell.
+ *
+ * Indexed from `nowMs`, never from the ticker frame, so the breath keeps its
+ * own cadence whatever the ticker's period is. A broken clock reads as the
+ * rest ring, never a throw.
+ */
+function markIndex(nowMs: number, blinkMs: number): number {
+  if (!Number.isFinite(nowMs) || !Number.isFinite(blinkMs) || blinkMs <= 0) return 0;
+  const step = Math.floor(nowMs / blinkMs) % MARK_FRAMES.length;
+  return ((step % MARK_FRAMES.length) + MARK_FRAMES.length) % MARK_FRAMES.length;
+}
+
+/**
+ * The mark's tone at one breath step: dim at the rest ring, normal at the
+ * live dot, so the pulse reads in monochrome. The swell rings stay dim with
+ * the rest - only the live dot lights.
+ */
+function markToneAt(index: number): StyleColor | undefined {
+  return index === 2 ? undefined : "subdued";
+}
+
+/**
  * The panel's look, re-read from an untrusted hint.
  *
  * A missing, malformed, or out-of-range knob falls back to the panel's own
- * default, and the bar is capped so the longest line - label plus meter plus
- * the enabled columns - stays within the sidebar, so a bad `layout` can
- * change the look but never break or wrap a line.
+ * default, and the bar is capped so the longest line - mark plus label plus
+ * meter plus the enabled columns - stays within the sidebar, so a bad
+ * `layout` can change the look but never break or wrap a line. The label
+ * column auto-widens past the configured width to hold the longest rendered
+ * rename, so a rename can never overflow its column.
  */
 function readLook(layout: unknown): PanelLook {
   const hint = asRecord(layout) ?? {};
@@ -120,24 +208,43 @@ function readLook(layout: unknown): PanelLook {
   const sweep = readLookFlag(hint["sweep"], PANEL_DEFAULT_SWEEP);
   const rawLabel = hint["labelWidth"];
   const flooredLabel = rawLabel === undefined ? undefined : Math.floor(asCount(rawLabel) ?? Number.NaN);
-  const labelWidth =
+  const configuredLabelWidth =
     flooredLabel !== undefined &&
     Number.isFinite(flooredLabel) &&
     flooredLabel >= PANEL_MIN_LABEL_WIDTH &&
     flooredLabel <= PANEL_MAX_LABEL_WIDTH
       ? flooredLabel
       : PANEL_DEFAULT_LABEL_WIDTH;
+  const labels = readLabels(layout);
+  // Auto-align: the column holds the longest rendered rename, never less
+  // than the configured width. A rename can widen the column but never
+  // overflow or wrap it.
+  const longestLabel = Math.max(labels.rolling.length, labels.weekly.length, labels.monthly.length);
+  const labelWidth = Math.max(configuredLabelWidth, longestLabel);
+  const blink = readLookFlag(hint["blink"], PANEL_DEFAULT_BLINK);
+  const rawBlinkMs = hint["blinkMs"];
+  const flooredBlinkMs = rawBlinkMs === undefined ? undefined : Math.floor(asCount(rawBlinkMs) ?? Number.NaN);
+  const blinkMs =
+    flooredBlinkMs !== undefined &&
+    Number.isFinite(flooredBlinkMs) &&
+    flooredBlinkMs >= PANEL_MIN_BLINK_MS &&
+    flooredBlinkMs <= PANEL_MAX_BLINK_MS
+      ? flooredBlinkMs
+      : PANEL_DEFAULT_BLINK_MS;
   const rawBar = hint["barWidth"];
   const flooredBar = rawBar === undefined ? undefined : Math.floor(asCount(rawBar) ?? Number.NaN);
   const namedBar =
     flooredBar !== undefined && Number.isFinite(flooredBar) && flooredBar >= 1
       ? Math.min(flooredBar, PANEL_MAX_NAMED_BAR_WIDTH)
       : PANEL_DEFAULT_BAR_WIDTH;
-  // Longest line is label + separator + bar + (separator + percent)? +
-  // (separator + reset)?: every separator is one space.
-  const fixed = labelWidth + 1 + (showPercent ? 1 + PANEL_PERCENT_WIDTH : 0) + (showReset ? 1 + PANEL_RESET_WIDTH : 0);
+  // Longest line is mark? + label + separator + bar + (separator + percent)? +
+  // (separator + reset)?: every separator is one space, and the mark column
+  // is two cells (the glyph plus one space) drawn only when blink is on.
+  const markWidth = blink ? MARK_WIDTH : 0;
+  const fixed =
+    markWidth + labelWidth + 1 + (showPercent ? 1 + PANEL_PERCENT_WIDTH : 0) + (showReset ? 1 + PANEL_RESET_WIDTH : 0);
   const maxBar = Math.max(1, PANEL_SIDEBAR_BUDGET - fixed);
-  return { header, barWidth: Math.min(namedBar, maxBar), labelWidth, showPercent, showReset, sweep };
+  return { header, barWidth: Math.min(namedBar, maxBar), labelWidth, showPercent, showReset, sweep, labels, blink, blinkMs };
 }
 
 /**
@@ -308,6 +415,25 @@ function headerLine(): RailLine {
 }
 
 /**
+ * The mark column's cells for one row: the breathing glyph plus one space on
+ * the first meter line, two spaces on every other line so all three rows share
+ * one axis, and nothing at all when blink is off.
+ *
+ * The glyph steps rest -> swell -> live -> swell once per `blinkMs`, indexed
+ * from the wall clock (`nowMs`), so the breath is independent of the ticker
+ * period. Only this column breathes: the meter stays static and changes only
+ * when the percentage itself changes.
+ */
+function markField(look: PanelLook, nowMs: number, isFirst: boolean): StatSegment | undefined {
+  if (!look.blink) return undefined;
+  if (!isFirst) return { text: "  " };
+  const index = markIndex(nowMs, look.blinkMs);
+  const text = `${MARK_FRAMES[index] ?? MARK_REST} `;
+  const tone = markToneAt(index);
+  return tone === undefined ? { text } : { text, tone };
+}
+
+/**
  * One resting line: the label, the empty track, and the placeholder - plus a
  * dim reason tag when the caller knows why there is no data.
  *
@@ -321,9 +447,18 @@ function headerLine(): RailLine {
  * a resting line stays dim even when `style.rows.go` is set bright - none of
  * it is a value.
  */
-function restingLine(label: string, look: PanelLook, reason: string | undefined): RailLine {
+function restingLine(
+  label: string,
+  look: PanelLook,
+  reason: string | undefined,
+  nowMs: number,
+  isFirst: boolean,
+): RailLine {
   const cells = Math.max(1, Math.floor(look.barWidth));
-  const segments: StatSegment[] = [{ text: `${labelField(label, look.labelWidth)} ` }];
+  const segments: StatSegment[] = [];
+  const mark = markField(look, nowMs, isFirst);
+  if (mark !== undefined) segments.push(mark);
+  segments.push({ text: `${labelField(label, look.labelWidth)} ` });
   let trackCells = cells;
   if (reason !== undefined) {
     segments.push({ text: `${reason} `, tone: "subdued" });
@@ -361,6 +496,7 @@ function valueLine(
   window: GoWindow,
   nowMs: number,
   frame: number | undefined,
+  isFirst: boolean,
 ): RailLine {
   const tone = panelTone(window);
   const ratio = window.ratio;
@@ -382,7 +518,10 @@ function valueLine(
     appendRun(runs, ` ${percent.padStart(PANEL_PERCENT_WIDTH)}`, tone);
   }
 
-  const segments: StatSegment[] = [{ text: `${labelField(label, look.labelWidth)} ` }, ...runs];
+  const segments: StatSegment[] = [];
+  const mark = markField(look, nowMs, isFirst);
+  if (mark !== undefined) segments.push(mark);
+  segments.push({ text: `${labelField(label, look.labelWidth)} ` }, ...runs);
   if (look.showReset) {
     const countdown = resetCountdown(window, nowMs);
     if (countdown !== undefined) {
@@ -393,8 +532,8 @@ function valueLine(
 }
 
 /**
- * The footer's Go usage panel: exactly three {@link RailLine}s, ROLL ->
- * WEEK -> MONTH, ready for the host's themed renderer, plus the dim header
+ * The footer's Go usage panel: exactly three {@link RailLine}s, rolling ->
+ * weekly -> monthly, ready for the host's themed renderer, plus the dim header
  * only when the caller opts in with `header: true`.
  *
  * Never throws and never returns fewer than three lines - a panel that
@@ -404,10 +543,11 @@ function valueLine(
  *
  * `frame` is the host ticker's counter, passed in rather than read here so
  * the panel stays pure; it moves a bright cell only when the look opts in
- * with `sweep: true`, so by default the bar is static. `reason` names why
- * there is no data (a ./go.js `GoNoDataReason`, or the caller's `"no-bridge"`)
- * and is drawn once, on the first meter line, only when the whole panel is
- * empty.
+ * with `sweep: true`, so by default the bar is static. The breathing mark is
+ * different: it steps from the wall clock (`nowMs`), so it breathes whether
+ * or not the ticker runs. `reason` names why there is no data (a ./go.js
+ * `GoNoDataReason`, or the caller's `"no-bridge"`) and is drawn once, on the
+ * first meter line, only when the whole panel is empty.
  */
 export function goPanelLines(
   usage: GoUsage | undefined,
@@ -423,11 +563,12 @@ export function goPanelLines(
     // window rendered at all, and it is tagged once rather than three times.
     const tag = windows.size === 0 ? readReason(reason) : undefined;
     const sweepFrame = readFrame(frame);
-    const rows = PANEL_WINDOWS.map(({ id, label }, index) => {
+    const rows = PANEL_WINDOWS.map((id, index) => {
+      const label = look.labels[labelKeyFor(id)];
       const window = windows.get(id);
       return window === undefined
-        ? restingLine(label, look, index === 0 ? tag : undefined)
-        : valueLine(label, look, window, nowMs, sweepFrame);
+        ? restingLine(label, look, index === 0 ? tag : undefined, nowMs, index === 0)
+        : valueLine(label, look, window, nowMs, sweepFrame, index === 0);
     });
     return look.header ? [headerLine(), ...rows] : rows;
   } catch {
@@ -435,6 +576,8 @@ export function goPanelLines(
     // be taken down by the panel, so any unexpected throw lands on the resting
     // placeholder - the same three lines, with no values.
     const fallback = readLook(undefined);
-    return PANEL_WINDOWS.map(({ label }) => restingLine(label, fallback, undefined));
+    return PANEL_WINDOWS.map((id, index) =>
+      restingLine(fallback.labels[labelKeyFor(id)], fallback, undefined, nowMs, index === 0),
+    );
   }
 }

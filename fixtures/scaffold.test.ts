@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 function stubContext(options: Record<string, unknown> = {}) {
-  const slots: { readonly path: string; readonly release: () => void }[] = [];
+  const slots: { readonly path: string; readonly placement: string; readonly release: () => void }[] = [];
   const memoryCalls: string[] = [];
   // A workspace for `location.directory`; config isolation comes from the
   // `$XDG_CONFIG_HOME` the enclosing `beforeEach` points at a throwaway dir.
@@ -69,12 +69,15 @@ function stubContext(options: Record<string, unknown> = {}) {
       },
     },
     ui: {
-      slot: (claim: { append: string }) => {
+      slot: (claim: { append?: string; prepend?: string }) => {
         const release = () => {
           const index = slots.findIndex((slot) => slot.release === release);
           if (index >= 0) slots.splice(index, 1);
         };
-        slots.push({ path: claim.append, release });
+        // `prepend` is first inside the target's boundary, `append` last: the
+        // footer claim prepends so the panel sits above the host's `~` row.
+        const placement = claim.prepend !== undefined ? "prepend" : "append";
+        slots.push({ path: claim.append ?? claim.prepend ?? "unknown", placement, release });
         return release;
       },
       toast: { show: () => {} },
@@ -263,6 +266,9 @@ describe("flight deck plugin", () => {
       const { context, slots, memoryCalls } = stubContext({ sidebar: { footer: { go: true } } });
       const cleanup = await flightDeck.setup(context);
       expect(slots.map((slot) => slot.path)).toEqual(["sidebar.content", "sidebar.footer"]);
+      // First inside the footer's boundary: the panel renders ABOVE the host's
+      // own `~` location row, which stays the absolute last line.
+      expect(slots.find((slot) => slot.path === "sidebar.footer")?.placement).toBe("prepend");
       // The one bridge, not two: the panel and the `go` row share the store.
       expect(memoryCalls.filter((key) => key === "flight-deck.go")).toHaveLength(1);
       await cleanup?.();
