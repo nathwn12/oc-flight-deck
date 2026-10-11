@@ -150,6 +150,20 @@
           "maxItems": 24,
           "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, drawing its zero skeleton until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows a clipped preview of the session id under the `session` label - budget 18 cells, reduced by however much the label overflows `layout.labelWidth`, floored at 8 - and a mouse click on that row copies the full id to the terminal clipboard. `session` is accepted as an alias for `ses` and is normalized to it."
         },
+        "tps": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": { "scope": "family" },
+          "description": "Which sessions the `tps` row paces. `family` (the default) paces the open session plus its subagent sessions: generation tokens summed across the whole family over the union of all their streaming spans, so concurrent decoders share wall clock instead of adding it. `session` paces the open session alone: its own tokens over its own spans, reading zero while it is idle even when a child is still running.",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": ["family", "session"],
+              "default": "family",
+              "description": "The `tps` row's scope. `family` sums generation tokens (output plus reasoning) across the open session and its subagent sessions over the union of their streaming spans, so a root that is idle while its child decodes still reads live. `session` restores the per-session figure: the open session's own tokens over its own spans. An unknown value falls back to `family` and is reported."
+            }
+          }
+        },
         "persist": {
           "type": "boolean",
           "default": true,

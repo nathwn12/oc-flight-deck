@@ -699,7 +699,8 @@ test("a subagent total is still summed for the family root", async () => {
 });
 
 test("reads tps as the session's own live generation rate, integer and reasoning-inclusive", async () => {
-  // Two polls through the real panel. The first only sets the tracker's
+  // Scope `session`: today's per-session behaviour, pinned. Two polls through
+  // the real panel. The first only sets the tracker's
   // baselines and draws nothing (persist: false hides the zero); the second
   // divides the session's own delta. The parent's turn gains 100 generation
   // tokens over 1 new second while the subagent's wider advancing turn stays
@@ -718,7 +719,7 @@ test("reads tps as the session's own live generation rate, integer and reasoning
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
@@ -749,6 +750,89 @@ test("reads tps as the session's own live generation rate, integer and reasoning
   expect(frame).not.toContain("1100 tok/s");
 });
 
+test("reads the family rate by default while the root idles and a child streams", async () => {
+  // The shipped default (`sidebar.tps.scope` absent means `"family"`): the
+  // numerator sums generation tokens across the root and its subagents, and
+  // the denominator is the union of all their streaming spans — concurrent
+  // decoders share wall clock, so overlaps merge instead of adding. The
+  // root's own turn is frozen; only the child's advances. Two polls through
+  // the real panel: the first only sets the tracker's baselines and draws
+  // nothing (persist: false hides the zero).
+  const now = Date.now();
+  const messagesBySession: Record<string, readonly unknown[]> = {
+    ses_test: [
+      {
+        type: "assistant",
+        time: { created: now - 60_000, streamed: now - 58_000 },
+        tokens: { output: 200, reasoning: 900 },
+      },
+    ],
+    ses_child: [
+      { type: "assistant", time: { created: now - 60_000, streamed: now - 55_000 }, tokens: { output: 300 } },
+    ],
+  };
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
+    {
+      family: ["ses_test", "ses_child"],
+      messagesBySession,
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  // Past the reader's 1 s cache, so the second render re-derives.
+  await Bun.sleep(1_100);
+  messagesBySession.ses_child = [
+    { type: "assistant", time: { created: now - 60_000, streamed: now - 54_000 }, tokens: { output: 1300 } },
+  ];
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  // The child's +1,000 generation tokens over the 1 s wider union: the
+  // family rate, not the root's frozen zero.
+  expect(frame).toContain("tps       1000 tok/s");
+});
+
+test('scope "session" keeps the per-session figure on the same family fixture', async () => {
+  // Same host state as above — the root frozen, the child advancing — but
+  // `sidebar.tps.scope: "session"` restores the per-session figure: the
+  // root's own generating time never advances, so the row reads zero, which
+  // persist: false hides rather than serving the family's rate.
+  const now = Date.now();
+  const messagesBySession: Record<string, readonly unknown[]> = {
+    ses_test: [
+      {
+        type: "assistant",
+        time: { created: now - 60_000, streamed: now - 58_000 },
+        tokens: { output: 200, reasoning: 900 },
+      },
+    ],
+    ses_child: [
+      { type: "assistant", time: { created: now - 60_000, streamed: now - 55_000 }, tokens: { output: 300 } },
+    ],
+  };
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
+    {
+      family: ["ses_test", "ses_child"],
+      messagesBySession,
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  // Past the reader's 1 s cache, so the second render re-derives rather than
+  // re-reading the cache: the idle root must read zero, not the family rate.
+  await Bun.sleep(1_100);
+  messagesBySession.ses_child = [
+    { type: "assistant", time: { created: now - 60_000, streamed: now - 54_000 }, tokens: { output: 1300 } },
+  ];
+  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+});
+
 // The tps row is selected by host CAPABILITY - are assistant messages stamped? -
 // and never by the momentary state of the session. A stamped host takes the
 // live generation rate: per-poll generation deltas over the union of the turns' own
@@ -756,6 +840,8 @@ test("reads tps as the session's own live generation rate, integer and reasoning
 // work stops.
 
 test("reads the session's own active turn spans, not the family's or the wall clock", async () => {
+  // Scope `session`: the family's spans stay out even though the host lists
+  // them under their own sessions.
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
@@ -768,7 +854,7 @@ test("reads the session's own active turn spans, not the family's or the wall cl
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
     workspace(),
     // A lifetime figure of 30,000 / 600 s = 50 tok/s: a different metric, so it
     // must not be what is drawn.
@@ -1114,6 +1200,8 @@ test("never falls back once the host is known to stamp, even if a read fails", a
 });
 
 test("a subagent session keeps its own spans, not its family's", async () => {
+  // Scope `session`: the rendered session is a child, and the host keys
+  // `family()` by the root — only its own turn may enter the rate.
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_root: [
@@ -1127,7 +1215,7 @@ test("a subagent session keeps its own spans, not its family's", async () => {
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
     workspace(),
     // The rendered session is a CHILD: `root()` names someone else, so the host
     // keys `family()` by that root and returns ancestors plus siblings.

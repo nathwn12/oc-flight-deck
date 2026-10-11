@@ -142,12 +142,11 @@
     //              same value instead of resetting, it cannot step backwards
     //              while the host still reports those turns, and it is NOT
     //              wall-clock since the session began
-    //   tps        live speed, directly per-session — subagents excluded: the
-    //              session's own generation tokens (output + reasoning) over
-    //              its own generating time. Shows `0 tok/s` whenever the
-    //              session is not generating (idle, between turns, or before
-    //              the first sample), and never seeds itself from a lifetime
-    //              average. Not configurable
+    //   tps        live speed over `sidebar.tps.scope` below: generation
+    //              tokens (output + reasoning) over generating time. Shows
+    //              `0 tok/s` whenever the scope is not generating (idle,
+    //              between turns, or before the first sample), and never seeds
+    //              itself from a lifetime average
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them, in the same
     //              family scope as `cost`
@@ -192,6 +191,17 @@
       // ,"branch"    — current git branch
       // ,"ses"       - session id preview (labelled `session`); click to copy the full id
     ],
+
+    // Which sessions the `tps` row paces. `"family"` (the default) paces the
+    // open session plus its subagent sessions: generation tokens summed
+    // across the whole family over the union of all their streaming spans.
+    // Concurrent decoders share wall clock, so overlapping spans merge
+    // instead of adding — a root that is idle while its child decodes still
+    // reads live. `"session"` restores the per-session figure: the open
+    // session's own tokens over its own spans, reading `0 tok/s` while it is
+    // idle even when a child is still running. An unknown value falls back
+    // to `"family"` and is reported.
+    "tps": { "scope": "family" },
 
     // Every named row renders persistently: with no data yet it draws its
     // zero skeleton (a real-looking zero, never a placeholder symbol), in the

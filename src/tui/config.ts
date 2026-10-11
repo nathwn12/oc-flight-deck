@@ -33,6 +33,8 @@ interface SidebarConfig {
   readonly footer: SidebarFooterConfig;
   /** Live session fields to render, top to bottom. Default `DEFAULT_SIDEBAR_ROWS`. */
   readonly rows: readonly string[];
+  /** Which sessions the `tps` row paces. Default `{ scope: DEFAULT_TPS_SCOPE }`. */
+  readonly tps: TpsConfig;
   /**
    * Render every named row even when the host has no data for it, using
    * `placeholder` as the value. Default `true`; `false` restores omission.
@@ -117,6 +119,32 @@ export const DEFAULT_GO_PANEL_LOOK: GoPanelLook = {
   blink: true,
   blinkMs: 700,
 };
+
+/**
+ * Which sessions the `tps` row paces.
+ *
+ * `"family"` sums generation tokens across the displayed session and its
+ * subagent sessions, over the union of all their streaming spans.
+ * `"session"` paces the displayed session alone: its own tokens over its own
+ * spans.
+ */
+export type TpsScope = "family" | "session";
+
+/**
+ * The shipped `tps` scope: `"family"`.
+ *
+ * The one default for this knob, so flipping the shipped behaviour is one
+ * line here. Family ships because the visible work in a delegation-heavy
+ * session happens in its subagents: a root that has gone idle while its child
+ * is still decoding must still read live, the way `cost` already rolls the
+ * tree up. Set it to `"session"` for the previous per-session figure.
+ */
+export const DEFAULT_TPS_SCOPE: TpsScope = "family";
+
+interface TpsConfig {
+  /** Which sessions the `tps` row paces. Default `DEFAULT_TPS_SCOPE`. */
+  readonly scope: TpsScope;
+}
 
 interface SidebarFooterConfig {
   /**
@@ -386,6 +414,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
     lines: DEFAULT_SIDEBAR_LINES,
     footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES, go: false },
     rows: DEFAULT_SIDEBAR_ROWS,
+    tps: { scope: DEFAULT_TPS_SCOPE },
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
     maxLines: MAX_LINES,
@@ -662,6 +691,37 @@ function readRows(value: unknown, issues: string[], maxLines: number): readonly 
     return DEFAULT_SIDEBAR_ROWS;
   }
   return rows.slice(0, maxLines);
+}
+
+/**
+ * The `tps` row's scope, as one of a fixed pair of strings.
+ *
+ * Unlike a free-text value there is no sensible repair for a misspelled
+ * scope: the default comes back and the key is named, like every other
+ * invalid option. An absent key falls back silently.
+ */
+function readTpsScope(value: unknown, issues: string[]): TpsScope {
+  if (value === undefined) return DEFAULT_TPS_SCOPE;
+  if (value === "family" || value === "session") return value;
+  issues.push(`sidebar.tps.scope must be "family" or "session"; using "${DEFAULT_TPS_SCOPE}"`);
+  return DEFAULT_TPS_SCOPE;
+}
+
+/**
+ * Which sessions the `tps` row paces.
+ *
+ * A malformed section falls back whole and is reported, like
+ * `sidebar.footer`: a string where an object belongs must not silently
+ * become a scope.
+ */
+function readTps(section: Record<string, unknown>, issues: string[]): TpsConfig {
+  const raw = section["tps"];
+  if (raw !== undefined && !isRecord(raw)) {
+    issues.push("sidebar.tps must be an object; using defaults");
+    return { scope: DEFAULT_TPS_SCOPE };
+  }
+  const tps = isRecord(raw) ? raw : {};
+  return { scope: readTpsScope(tps["scope"], issues) };
 }
 
 /**
@@ -1099,6 +1159,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
           go: readFooterGo(sidebarFooter.go, issues),
         },
         rows,
+        tps: readTps(sidebar, issues),
         persist: readBoolean(sidebar.persist, DEFAULT_CONFIG.sidebar.persist, "sidebar.persist", issues),
         placeholder: readText(
           sidebar.placeholder,

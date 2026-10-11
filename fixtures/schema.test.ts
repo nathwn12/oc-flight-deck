@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, DEFAULT_GO_PANEL_LOOK, resolveConfig } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, DEFAULT_GO_PANEL_LOOK, DEFAULT_TPS_SCOPE, resolveConfig } from "../src/tui/config.js";
 import { parseJsonc } from "../src/tui/file-config.js";
 import { STAT_FIELDS } from "../src/tui/stats.js";
 
@@ -78,6 +78,10 @@ describe("the schema describes the real config", () => {
     expect(goObject.properties.blinkMs.minimum).toBe(200);
     expect(goObject.properties.blinkMs.maximum).toBe(5000);
     expect(props["sidebar"]!.properties.rows.default).toEqual([...DEFAULT_CONFIG.sidebar.rows]);
+    expect(props["sidebar"]!.properties.tps.properties.scope.default).toBe(DEFAULT_CONFIG.sidebar.tps.scope);
+    expect(props["sidebar"]!.properties.tps.properties.scope.default).toBe(DEFAULT_TPS_SCOPE);
+    expect(props["sidebar"]!.properties.tps.properties.scope.default).toBe("family");
+    expect(props["sidebar"]!.properties.tps.properties.scope.enum).toEqual(["family", "session"]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
     expect(props["sidebar"]!.properties.maxLines.default).toBe(DEFAULT_CONFIG.sidebar.maxLines);
@@ -293,6 +297,7 @@ describe("the shipped example validates against the shipped schema", () => {
     expect(sidebar["persist"]).toBe(true);
     expect(sidebar["placeholder"]).toBe("—");
     expect(sidebar["maxLines"]).toBe(DEFAULT_CONFIG.sidebar.maxLines);
+    expect(sidebar["tps"]).toEqual({ scope: "family" });
     const style = parsed["style"] as Record<string, unknown>;
     expect(resolveConfig(parsed).config.style).toEqual(DEFAULT_CONFIG.style);
     expect(style["rows"]).toEqual({ "*": { color: "subdued", attributes: [] } });
@@ -370,5 +375,16 @@ describe("the shipped example validates against the shipped schema", () => {
     const goAlignOk = { sidebar: { footer: { go: { align: "center" } } } };
     expect(schemaErrors(schema as unknown as SchemaNode, goAlignOk, "")).toEqual([]);
     expect(resolveConfig(goAlignOk).issues).toEqual([]);
+
+    // The tps scope is an enum in the schema too, so a typo is rejected by
+    // the editor's validator and corrected loudly by the config.
+    const tpsScope = { sidebar: { tps: { scope: "swarm" } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, tpsScope, "")).not.toEqual([]);
+    const tpsScopeResolution = resolveConfig(tpsScope);
+    expect(tpsScopeResolution.config.sidebar.tps.scope).toBe(DEFAULT_CONFIG.sidebar.tps.scope);
+    expect(tpsScopeResolution.issues.join(" ")).toContain("sidebar.tps.scope");
+    const tpsScopeOk = { sidebar: { tps: { scope: "session" } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, tpsScopeOk, "")).toEqual([]);
+    expect(resolveConfig(tpsScopeOk).issues).toEqual([]);
   });
 });

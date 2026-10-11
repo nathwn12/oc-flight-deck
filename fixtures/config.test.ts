@@ -5,6 +5,7 @@ import {
   DEFAULT_REFRESH_MS,
   DEFAULT_SIDEBAR_FOOTER_LINES,
   DEFAULT_SIDEBAR_LINES,
+  DEFAULT_TPS_SCOPE,
   MIN_REFRESH_MS,
   mergeOptions,
   resolveConfig,
@@ -59,6 +60,30 @@ describe("flight deck config", () => {
     expect(footerLine(resolution.config)).toBeUndefined();
     expect(DEFAULT_CONFIG.footer.enabled).toBe(false);
     expect(DEFAULT_FOOTER_TEXT).toBe("Flight Deck");
+  });
+
+  test("scopes the tps row to the family by default, with a loud fallback", () => {
+    // The shipped default is the one constant: a silent edit to it is caught
+    // here, and the example file pins the same value in scaffold.test.ts.
+    expect(DEFAULT_TPS_SCOPE).toBe("family");
+    expect(resolveConfig(undefined).config.sidebar.tps).toEqual({ scope: "family" });
+    expect(DEFAULT_CONFIG.sidebar.tps).toEqual({ scope: DEFAULT_TPS_SCOPE });
+
+    const session = resolveConfig({ sidebar: { tps: { scope: "session" } } });
+    expect(session.issues).toEqual([]);
+    expect(session.config.sidebar.tps).toEqual({ scope: "session" });
+
+    // No sensible repair for a misspelled scope: the default comes back and
+    // the key is named, like every other invalid option.
+    const bad = resolveConfig({ sidebar: { tps: { scope: "swarm" } } });
+    expect(bad.config.sidebar.tps).toEqual({ scope: "family" });
+    expect(bad.issues.join(" ")).toContain("sidebar.tps.scope");
+
+    // A string where an object belongs falls back whole rather than silently
+    // becoming a scope.
+    const malformed = resolveConfig({ sidebar: { tps: "family" } });
+    expect(malformed.config.sidebar.tps).toEqual({ scope: "family" });
+    expect(malformed.issues.join(" ")).toContain("sidebar.tps must be an object");
   });
 
   test("turns the footer on as soon as any footer setting is written", () => {
