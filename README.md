@@ -25,14 +25,14 @@ A session's own cost excludes its subagents, so the reported figure understates 
 - Elapsed time recomputed from the assistant-turn spans the host recorded, so a restart returns the same value instead of resetting.
 - Live throughput over `sidebar.tps.scope` (`family` or `session`, default `family`), reading `0 tok/s` whenever the scope is not generating.
 - Stable rail: with `sidebar.persist` every named row draws a zero skeleton until the host has data, while caution stays silent until something stops moving.
-- Reads only: no telemetry, nothing on disk, no network calls while the opt-in guard row stays off; the single write is a click on the opt-in ses row copying the full session id to the terminal clipboard.
+- Reads only while the opt-in guard and go surfaces stay off: no telemetry, nothing on disk, no network calls; the single write is a click on the opt-in ses row copying the full session id to the terminal clipboard. Enabling the opt-in `go` row or `sidebar.footer.go` panel polls `https://opencode.ai/zen/go/v1/usage` every 60 seconds, and only with `FLIGHT_DECK_GO_LOG=1` appends one observation line per poll to `tmpdir()/opencode/flight-deck-go.log` (never the key).
 - A bad config value is ignored with its default restored and a one-time toast naming the key, so a typo never breaks the TUI.
 
 ## Install
 
 1. Add the plugin to the `plugins` array in your `opencode.jsonc` (stable):
    ```jsonc
-   { "plugins": ["oc-flight-deck@0.12.0"] }
+   { "plugins": ["oc-flight-deck@0.19.0"] }
    ```
    For bleeding edge instead of stable, not in addition:
    ```jsonc

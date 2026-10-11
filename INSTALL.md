@@ -5,10 +5,10 @@ Three routes. Plugin entries are bare strings in the `plugins` array of `opencod
 ## NPM - stable, slow release (MEASURED: WORKS)
 
 ```jsonc
-{ "plugins": ["oc-flight-deck@0.12.0"] }
+{ "plugins": ["oc-flight-deck@0.19.0"] }
 ```
 
-Stable default. Use this unless you have a reason not to. Measured working as npm version spec `"oc-flight-deck@0.12.0"`.
+Stable default. Use this unless you have a reason not to. Measured working as npm version spec `"oc-flight-deck@0.19.0"`.
 
 ## GITHUB - bleeding edge, experimental (MEASURED: WORKS as package spec)
 
@@ -24,7 +24,7 @@ Experimental, unsupported, may be broken. Every commit is installable, so this r
 { "plugins": ["<path to repo - a local clone of this repository>"] }
 ```
 
-Point the plugin entry at a local clone of this repo (MEASURED: WORKS - host log for the equivalent oc-todo path: `msg="loading plugin" id=<workspace-root>/PERSONAL/oc-todo entrypoint=file:///<workspace-root>/PERSONAL/oc-todo/index.ts role=server`).
+Point the plugin entry at a local clone of this repo (MEASURED: WORKS - host log for the equivalent oc-todo path: `msg="loading plugin" id=<local-clone-path> entrypoint=file:///<local-clone-path>/index.ts role=server`).
 
 The bare `github:nathwn12/oc-flight-deck@<full sha>` directory form with no `#path` DOES NOT LOAD - measured result, not pending: it produced no load, only `NpmInstallFailedError (cause: Error: An unknown git error occurred)`. Same for the `#` and `#index.ts` variants. Do not use it.
 

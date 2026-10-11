@@ -778,7 +778,26 @@ function mergeSection(
   // silently preferring the valid side.
   if (hostValue !== undefined && !isRecord(hostValue)) return hostValue;
   if (fileValue !== undefined && !isRecord(fileValue) && hostValue === undefined) return fileValue;
-  return { ...sectionOf(file, key), ...sectionOf(host, key) };
+  const merged: Record<string, unknown> = { ...sectionOf(file, key), ...sectionOf(host, key) };
+  // A nested `sidebar.footer` / `sidebar.tps` object from the host replaces
+  // only the leaf keys it names: a host `{ footer: { lines } }` must not drop
+  // a file `{ footer: { go } }`, and vice versa. Either side malformed (or
+  // absent) keeps the shallow winner above so resolveConfig still reports it.
+  if (key === "sidebar") {
+    const fileSidebar = sectionOf(file, key);
+    const hostSidebar = sectionOf(host, key);
+    const fileFooter = fileSidebar["footer"];
+    const hostFooter = hostSidebar["footer"];
+    if (isRecord(fileFooter) && isRecord(hostFooter)) {
+      merged["footer"] = { ...fileFooter, ...hostFooter };
+    }
+    const fileTps = fileSidebar["tps"];
+    const hostTps = hostSidebar["tps"];
+    if (isRecord(fileTps) && isRecord(hostTps)) {
+      merged["tps"] = { ...fileTps, ...hostTps };
+    }
+  }
+  return merged;
 }
 
 /**

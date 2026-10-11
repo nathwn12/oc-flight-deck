@@ -333,7 +333,16 @@ export default Plugin.define({
     let toastedKey: string | undefined;
     let watchTimer: ReturnType<typeof setInterval> | undefined;
 
-    if (config.caution.enabled && config.caution.toast) {
+    // Floored at one second: cautions display whole seconds, so polling faster
+    // than that only multiplies host reads (message lists, shells, statuses)
+    // for a display that cannot change any faster. `refresh` still drives the
+    // rail's own ticker; the toast keeps its own slower cadence.
+    //
+    // Gated on the sidebar too: `watchedSession` is assigned only inside the
+    // `sidebar.content` render, which exists only when the sidebar is enabled,
+    // so without it this timer could never fire and would leak a live interval.
+    const toastMs = Math.max(1_000, config.refresh > 0 ? config.refresh : 1_000);
+    if (config.sidebar.enabled && config.caution.enabled && config.caution.toast) {
       watchTimer = setInterval(() => {
         const sessionID = watchedSession;
         if (sessionID === undefined) return;
@@ -353,7 +362,7 @@ export default Plugin.define({
         } catch {
           // A warning must never be able to break the panel it warns about.
         }
-      }, config.refresh > 0 ? config.refresh : 1_000);
+      }, toastMs);
     }
 
     if (config.sidebar.enabled) {

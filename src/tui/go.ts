@@ -201,6 +201,20 @@ export const GO_CREDENTIAL_TIMEOUT_MS = 6_000;
 const GO_LOG_DIR = "opencode";
 const GO_LOG_FILE = "flight-deck-go.log";
 
+/**
+ * Opt-in switch for the observation log: the log is written only when this
+ * environment variable is `"1"`, so the default is quiet (no disk write).
+ */
+export const GO_LOG_ENV = "FLIGHT_DECK_GO_LOG";
+
+function goLogEnabled(): boolean {
+  try {
+    return process.env[GO_LOG_ENV] === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** The log is overwritten once it holds this many lines, so it stays small. */
 export const GO_LOG_MAX_LINES = 200;
 
@@ -653,11 +667,12 @@ function httpOf(error: unknown): string {
  * The observation boundary: ONE bounded line per poll outcome, so a failure is
  * readable next time.
  *
- * Written under the OS temp directory, resolved via `os.tmpdir()`. It records
- * which source was consulted, whether it produced a key, the HTTP status, the
- * parse result, and the reason - and NEVER the key or any part of it. Best
- * effort: a log that cannot be written must never affect the poll. Rotated by
- * overwriting once the file holds {@link GO_LOG_MAX_LINES} lines.
+ * Written under the OS temp directory, resolved via `os.tmpdir()`, and only
+ * when `FLIGHT_DECK_GO_LOG=1` (see {@link GO_LOG_ENV}): the default is quiet.
+ * It records which source was consulted, whether it produced a key, the HTTP
+ * status, the parse result, and the reason - and NEVER the key or any part of
+ * it. Best effort: a log that cannot be written must never affect the poll.
+ * Rotated by overwriting once the file holds {@link GO_LOG_MAX_LINES} lines.
  */
 function logPoll(entry: {
   readonly src: GoKeySource;
@@ -666,6 +681,7 @@ function logPoll(entry: {
   readonly parse: string;
   readonly reason: string;
 }): void {
+  if (!goLogEnabled()) return;
   try {
     const directory = join(tmpdir(), GO_LOG_DIR);
     const path = join(directory, GO_LOG_FILE);

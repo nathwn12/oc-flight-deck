@@ -40,7 +40,7 @@ export type DurationStyle = "compact" | "spaced";
  * `format.duration` (spaced).
  */
 export function formatDuration(ms: number, style: DurationStyle = "compact"): string {
-  const total = Math.floor(ms / 1_000);
+  const total = Math.max(0, Math.floor(ms / 1_000));
   const seconds = total % 60;
   const minutes = Math.floor(total / 60) % 60;
   const hours = Math.floor(total / 3_600);
