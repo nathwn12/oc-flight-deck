@@ -20,7 +20,7 @@ A session's own cost excludes its subagents, so the reported figure understates 
 
 ## Features
 
-- Live rows for status, agent, model, cost, project, tokens, cache, context, perms, elapsed and tps, plus opt-in rows: caution, branch, total, spark, reasoning, turns, guard, go and ses.
+- Live rows for `status`, `agent`, `model`, `cost`, `project`, `tokens`, `cache`, `context`, `perms`, `elapsed` and `tps`, plus opt-in rows: `caution`, `branch`, `total`, `spark`, `reasoning`, `turns`, `guard`, `go` and `ses`.
 - Family-scoped money: cost, tokens, cache and reasoning cover the conversation plus every subagent session in its tree; the project row covers every session in the project.
 - Elapsed time recomputed from the assistant-turn spans the host recorded, so a restart returns the same value instead of resetting.
 - Live throughput over `sidebar.tps.scope` (`family` or `session`, default `family`), reading `0 tok/s` whenever the scope is not generating.
@@ -99,7 +99,7 @@ bun run check
 }
 ```
 
-That installs a copy, not a symlink, so re-run the install after editing the checkout. Built against `@opencode/plugin` 2.0.26 on the official OpenCode V2 CLI plugin API.
+That installs a copy, not a symlink, so re-run the install after editing the checkout. Built against `@opencode/plugin` 2.0.26 on the official [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
 
 ## Docs
 
