@@ -746,6 +746,19 @@ export function startGoBridge(
   // WHICH source produced the key (or why none did), so the blank panel is
   // never silent and never lies. There is deliberately no environment fallback:
   // the key comes only from OpenCode's own credential store.
+  // Deliberately renderer-side, not server-side: the TUI/CLI plugin page
+  // documents `context.client` as "the generated OpenCode client" but gives
+  // no credential-read example or credential-specific authorization; the
+  // documented server-side secret channel is `integration.connection.active`
+  // + `resolve`, exposed to the renderer through an RPC contract. The move
+  // stays unmade because one fact is unestablished: whether
+  // `resolve(active("opencode-go"))` yields the SAME key the Zen Go usage
+  // endpoint accepts. OpenCode's own provider plugin
+  // (`packages/core/src/plugin/provider/opencode.ts`, upstream) resolves only
+  // the `opencode` (Console OAuth) integration; the endpoint's accepted
+  // credential is undocumented, and the `settings.apiKey` source below has
+  // no documented server-side equivalent, so the move could silently lose
+  // the feature for installs whose key lives outside that connection.
   const readKey = async (): Promise<{ key?: string; src: GoKeySource; reason?: GoNoDataReason }> => {
     if (keyFn !== undefined) {
       try {
