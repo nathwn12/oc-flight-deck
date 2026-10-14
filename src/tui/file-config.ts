@@ -3,7 +3,10 @@
 // The host's `context.options` is the official configuration channel, but not
 // every host build forwards it (and `cli.json` may not allow comments). So the
 // plugin also reads a small global JSONC file, which guarantees inline comments
-// work everywhere. `context.options` still wins when present.
+// work everywhere. `context.options` still wins when present: it is the
+// authoritative channel and takes precedence key by key at the `mergeOptions`
+// site (`config.ts:821-834`). The file fallback also covers the documented
+// bare-string install (`README.md:32-35`), which forwards no `options` at all.
 //
 // There is exactly one config file, in the user's config directory. There is no
 // per-project channel: what the rail shows cannot change with the directory the

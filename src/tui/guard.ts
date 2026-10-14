@@ -262,13 +262,14 @@ function resolveStatusFn(host: GuardHost, deps: GuardDeps | undefined): GuardDep
     // The payload is normalized defensively after the call, so drift degrades
     // to the placeholder instead of throwing.
     //
-    // NEVER use `.call`/`.apply` on the rpc factory itself: the real client
-    // attaches its raw API onto the callable (`Object.assign(makeRpc(...),
-    // raw.rpc)`), so the factory's `.call` is the raw `rpc.call` endpoint —
-    // not `Function.prototype.call`. Using it would POST
-    // `/api/rpc/undefined/undefined` and silently yield `undefined`. Invoke
-    // the factory directly; the resulting `status` is a plain function, so a
-    // direct call is safe there too.
+    // The factory is public API: the installed types declare
+    // `rpc: RpcApi<...> & { call }` (`client.d.ts`) with
+    // `interface RpcApi<...> { <D extends Rpc.PortableDefinition>(definition: D):
+    // RpcClient<D, ...> }` (`rpc.d.ts`); the rpc doc's cross-plugin example
+    // is `context.client.rpc(<contract>)`. The sibling `.call` is the raw
+    // `rpc.call` endpoint, not `Function.prototype.call`, so the factory is
+    // invoked directly and `.call` is never used on it. The resulting
+    // `status` is a plain function, so a direct call is safe there too.
     const factory = rpc as (definition: typeof GUARD_CONTRACT) => { readonly status?: unknown };
     const remote = factory(GUARD_CONTRACT) as { readonly status?: unknown };
     const status = (remote as Record<string, unknown>).status;
@@ -374,6 +375,13 @@ export function startGuardBridge(
     if (!writeValue(opened, normalized)) stopTimer();
   };
 
+  // No host subscription: `context.data.on` / `data.listen` carry server
+  // events (`permission.asked`, `session.execution.succeeded`); a cross-plugin
+  // event exists only when the other plugin declares and emits it. This
+  // bridge's mirrored contract declares `events: {}`, and the live config
+  // installs no guard plugin, so there is nothing to subscribe to. The
+  // ten-second poll is the read itself, not a fallback: each tick re-resolves
+  // `status`, so a later guard install appears within one interval.
   timer = setInterval(() => {
     const sessionID = currentSessionID;
     if (sessionID === undefined) return;
