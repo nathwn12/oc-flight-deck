@@ -580,6 +580,69 @@ describe("option validation", () => {
     expect(resolveConfig({ layout: { labelWidth: 24, barWidth: 40, sparkWidth: 64 } }).issues).toEqual([]);
   });
 
+  test("leaves every label at its built-in text when layout.labels is absent", () => {
+    const { config, issues } = resolveConfig({ sidebar: { rows: ["cost", "total", "session"] } });
+    expect(issues).toEqual([]);
+    expect(config.layout.labels).toBeUndefined();
+    // The plain rail: every label is the shipped one, `ses` still drawing
+    // `session` because that is its built-in label, not a rename.
+    expect(sidebarLines(config, { cost: 0.1913, tree: { cost: 0.1913, count: 0 }, sessionId: "ses_x" })).toEqual([
+      "cost      $0.191",
+      "total     $0.191 · 0 subagents",
+      "session   ses_x",
+    ]);
+  });
+
+  test("renames the rows layout.labels names, and leaves the rest alone", () => {
+    const { config, issues } = resolveConfig({
+      sidebar: { rows: ["cost", "total", "agent"] },
+      layout: { labels: { cost: "session", total: "lifetime" } },
+    });
+    expect(issues).toEqual([]);
+    expect(config.layout.labels).toEqual({ cost: "session", total: "lifetime" });
+    expect(sidebarLines(config, { agent: "build", cost: 0.1913, tree: { cost: 0.1913, count: 0 } })).toEqual([
+      "session   $0.191",
+      "lifetime  $0.191 · 0 subagents",
+      "agent     build",
+    ]);
+  });
+
+  test("canonicalizes the session alias onto the ses row, like sidebar.rows", () => {
+    const { config, issues } = resolveConfig({
+      sidebar: { rows: ["ses"] },
+      layout: { labels: { session: "id" } },
+    });
+    expect(issues).toEqual([]);
+    // Stored under the canonical key, so one rename lands on whichever spelling
+    // the row list carried.
+    expect(config.layout.labels).toEqual({ ses: "id" });
+    expect(sidebarLines(config, { sessionId: "ses_x" })).toEqual(["id        ses_x"]);
+  });
+
+  test("reports a bad label and keeps that row's default", () => {
+    const unknown = resolveConfig({ layout: { labels: { costt: "money" } } });
+    expect(unknown.config.layout.labels).toBeUndefined();
+    expect(unknown.issues.join(" ")).toContain("layout.labels.costt is not a known row");
+    expect(unknown.issues.join(" ")).toContain("cost, total");
+
+    const wrongType = resolveConfig({ layout: { labels: { cost: 5 } } });
+    expect(wrongType.config.layout.labels).toBeUndefined();
+    expect(wrongType.issues.join(" ")).toContain("layout.labels.cost must be a string");
+
+    const empty = resolveConfig({ layout: { labels: { cost: "  " } } });
+    expect(empty.config.layout.labels).toBeUndefined();
+    expect(empty.issues.join(" ")).toContain("layout.labels.cost must not be empty");
+
+    const notObject = resolveConfig({ layout: { labels: "cost" } });
+    expect(notObject.config.layout.labels).toBeUndefined();
+    expect(notObject.issues.join(" ")).toContain("layout.labels must be an object");
+
+    // A good key beside a bad one survives: only the bad row falls back.
+    const mixed = resolveConfig({ layout: { labels: { cost: "session", nope: "x" } } });
+    expect(mixed.config.layout.labels).toEqual({ cost: "session" });
+    expect(mixed.issues.join(" ")).toContain("layout.labels.nope");
+  });
+
   test("reports the fixed lines and the live rows overrunning the rail together", () => {
     const { config, issues } = resolveConfig({
       sidebar: { lines: Array.from({ length: 20 }, (_, index) => `line ${index}`), rows: DEFAULT_CONFIG.sidebar.rows },

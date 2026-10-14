@@ -308,6 +308,61 @@ test("draws the fixed footer lines above the Go panel", async () => {
   expect(frame.indexOf("FLIGHT DECK")).toBeLessThan(frame.indexOf("rolling"));
 });
 
+test("draws the family total for a childless session, and under a renamed label", async () => {
+  const childless = async (options?: unknown) => {
+    const { context, claims } = harness(
+      options,
+      workspace(),
+      { ...LIVE_SESSION, cost: 0.1913 },
+      { family: ["ses_test"] },
+    );
+    flightDeck.setup(context);
+    const { sidebar } = railClaims(claims);
+    return frameOf(sidebar!.render, 40, 14);
+  };
+
+  // Shipped defaults WITH the `total` row on the rail (it is off the default
+  // row list): `cost` is the session figure, `total` the family figure. With no
+  // subagent run, that family figure IS the session's own cost - the row says so
+  // instead of blanking at `$0.000`.
+  const plain = await childless({ sidebar: { rows: ["cost", "total"] } });
+  expect(plain).toContain("cost      $0.191");
+  expect(plain).toContain("total     $0.191 · 0 subagents");
+
+  // The owner's rename: only the label column moves, the values do not.
+  const renamed = await childless({
+    sidebar: { rows: ["cost", "total"] },
+    layout: { labels: { cost: "session", total: "lifetime" } },
+  });
+  expect(renamed).toContain("session   $0.191");
+  expect(renamed).toContain("lifetime  $0.191 · 0 subagents");
+
+  // A session with a subagent still sums the family, unchanged by the fix.
+  const family = await (async () => {
+    const { context, claims } = harness(
+      { sidebar: { rows: ["cost", "total"] }, layout: { labels: { cost: "session", total: "lifetime" } } },
+      workspace(),
+      { ...LIVE_SESSION, cost: 0.191 },
+      { family: ["ses_test", "ses_child"], children: { ses_child: { cost: 0.0201 } } },
+    );
+    flightDeck.setup(context);
+    const { sidebar } = railClaims(claims);
+    return frameOf(sidebar!.render, 40, 8);
+  })();
+  expect(family).toContain("lifetime  $0.211 · 1 subagent");
+
+  // No session record at all: there is no family figure to compute, so the row
+  // is absent and the persist layer's unchanged skeleton draws in its place.
+  const empty = await (async () => {
+    const { context, claims } = harness({ sidebar: { rows: ["cost", "total"] } }, workspace());
+    flightDeck.setup(context);
+    const { sidebar } = railClaims(claims);
+    return frameOf(sidebar!.render, 40, 8);
+  })();
+  expect(empty).toContain("total     $0.000");
+  expect(empty).not.toContain("0 subagents");
+});
+
 test("totals subagent sessions and reads context from the last request", async () => {
   const messages = [
     { tokens: { input: 100, output: 10, cache: { read: 1000, write: 0 } } },

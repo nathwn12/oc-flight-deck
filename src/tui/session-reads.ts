@@ -72,7 +72,6 @@ export function createSessionReads(context: Plugin.Context) {
     } catch {
       return undefined;
     }
-    if (ids.length <= 1) return undefined;
 
     let own: SessionLike | undefined;
     try {
@@ -108,7 +107,13 @@ export function createSessionReads(context: Plugin.Context) {
       cost += asCount(child.cost) ?? 0;
       addTokens(child);
     }
-    return count === 0 ? undefined : { cost, count, tokens };
+    // The family figure, subagents included. A session that spawned none still
+    // records one: its own cost against a count of zero, so the `total` row has
+    // a real number to draw instead of blanking at `$0.000`. `undefined` is now
+    // reserved for a figure that genuinely cannot be computed — a non-root
+    // session (its family is its parent's), or a host read that threw.
+    if (ownCost === undefined && count === 0) return undefined;
+    return { cost, count, tokens };
   };
 
   // A message's own totals are per-request, so the last assistant message's

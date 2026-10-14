@@ -259,14 +259,19 @@
     "layout": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Row geometry. Change these when your terminal is unusually narrow or wide.",
+      "description": "Row geometry and wording. Change these when your terminal is unusually narrow or wide, or when you want a row called something else.",
       "properties": {
         "labelWidth": {
           "type": "integer",
           "minimum": 6,
           "maximum": 24,
           "default": 10,
-          "description": "Width of the label column that every row pads to. 10 fits `caution` plus a space. Narrow it to fit more value on screen, widen it if you rename the labels."
+          "description": "Width of the label column that every row pads to. 10 fits `caution` plus a space. Narrow it to fit more value on screen, widen it if you rename the labels with `labels` below."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "description": "Rename any rail row, keyed by its row name exactly as `sidebar.rows` spells it (`session` is folded to `ses`). For example `{ \"cost\": \"session\", \"total\": \"lifetime\" }` draws the session's own cost under `session` and the family total under `lifetime`. A row left out keeps its built-in label, so omitting the key changes nothing. An unknown row name, a non-string value, or an empty label is reported as a config issue and that row keeps its default label. A label wider than `labelWidth` is still given its guaranteed space rather than being glued to its value."
         },
         "barWidth": {
           "type": "integer",
