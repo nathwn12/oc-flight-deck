@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `layout.labels`: rename any rail row's label, keyed by the row name exactly as `sidebar.rows` spells it (`session` is folded to `ses`). `{ "cost": "session", "total": "lifetime" }` draws the session's own cost under `session` and the family total under `lifetime`; every row left out keeps its built-in label, so an install that never sets the key renders byte-identically to before. An unknown row name, a non-string value, or an empty label is reported as a config issue naming its path (`layout.labels.<name>`) and that row falls back to its default label. Both renderers resolve a row's label from the same map, so the plain-string view and the segmented (`style.rows`) view never disagree.
 - `sidebar.tps.scope` (`"family"` or `"session"`, default `"family"`): which sessions the `tps` row paces. `family` sums generation tokens (output plus reasoning) across the open session and its subagent sessions over the union of all their streaming spans — concurrent decoders share wall clock, so overlapping spans merge instead of adding, and a root that is idle while its child decodes still reads live. `session` restores the previous per-session figure: the open session's own tokens over its own spans. An unknown value falls back to `"family"` and is reported.
+
+### Changed
+
+- The `total` row draws the real family figure for a childless session: its own cost with `0 subagents`, instead of the persist layer's live-shaped `$0.000`. `treeTotals` now records a family of one as the session's own cost against a count of zero rather than returning nothing, and the row renders whenever a family figure exists — so a session that spawned no subagents still reads its lifetime figure under that row. `total` stays absent, and the unchanged skeleton draws, only when there is genuinely no tree or cost data at all (a session with no record yet), and a child session still has no `total` of its own. A session with subagents sums them exactly as before.
 
 ## [0.19.0] - 2026-10-11
 

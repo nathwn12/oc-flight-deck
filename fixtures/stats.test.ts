@@ -76,10 +76,38 @@ describe("flight deck live rows", () => {
     expect(statLine("cost", { cost: 0.2, tree: { cost: 0.25, count: 1 } })).toBe("cost      $0.250 · 1 subagent");
   });
 
-  test("only shows a tree total once a subagent has actually run", () => {
-    // No family data, or a family of one, must not invent a total row.
+  test("renames a row's label from the layout hint, in both renderers", () => {
+    const labels = { cost: "session", total: "lifetime" } as const;
+    const source = {
+      cost: 0.1913,
+      agent: "build",
+      sessionId: "ses_x",
+      caution: "▲ x",
+      go: { windows: [{ id: "5h", ratio: 0.1 }] },
+    };
+    // The plain path and the persistent-row path resolve through the same map.
+    expect(statLine("cost", source, { labels })).toBe("session   $0.191");
+    expect(statRows(["cost"], source, { labels })).toEqual(["session   $0.191"]);
+    expect(statLine("total", { tree: { cost: 0.9, count: 3 } }, { labels })).toBe("lifetime  $0.900 · 3 subagents");
+    // A row whose label is not in the map keeps its built-in text.
+    expect(statLine("agent", source, { labels })).toBe("agent     build");
+    // `ses` still draws its built-in `session` label when no override names it.
+    expect(statLine("ses", source, { labels })).toBe("session   ses_x");
+
+    // The segmented renderer's own label column: `caution` and `go` carry
+    // coloured runs, and their first segment is the label prefix.
+    const renaming = { ...labels, caution: "announce", go: "quota" };
+    expect(statSegments("caution", source, { labels: renaming })?.[0]?.text).toBe("announce  ");
+    expect(statSegments("go", source, { labels: renaming })?.[0]?.text).toBe("quota     ");
+  });
+
+  test("draws the family total with its subagent count, childless included", () => {
+    // No family data at all: the persist layer still owns the skeleton, so the
+    // row stays absent rather than inventing a figure.
     expect(statLine("total", { cost: 0.2 })).toBeUndefined();
-    expect(statLine("total", { cost: 0.2, tree: { cost: 0.2, count: 0 } })).toBeUndefined();
+    // A childless session's true family total is its own cost, and it reads
+    // `0 subagents` rather than blanking - the row must never have a hole.
+    expect(statLine("total", { cost: 0.2, tree: { cost: 0.2, count: 0 } })).toBe("total     $0.200 · 0 subagents");
     expect(statLine("total", { tree: { cost: 0.2447, count: 1 } })).toBe("total     $0.245 · 1 subagent");
     expect(statLine("total", { tree: { cost: 0.9, count: 3 } })).toContain("3 subagents");
   });

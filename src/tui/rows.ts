@@ -254,7 +254,8 @@ function cautionValueSegments(source: StatSource): StatSegment[] | undefined {
  * in `statRows`, which draws `skeletonValue` for a data-less known field.
  *
  * The field is canonicalized at entry (`session` renders as `ses`), and the
- * label is resolved through `fieldLabel`, so the `ses` row draws `session`.
+ * label is resolved through `fieldLabel` — which draws `layout.labels`' override
+ * for the row when one is set, else the built-in name.
  */
 export function statLine(
   field: string,
@@ -275,7 +276,8 @@ export function statLine(
   //
   // The label is resolved here rather than at each call site, so the `ses`
   // case keeps saying `row("ses", …)` while drawing `session`.
-  const row = (label: string, value: string): string => formatRow(fieldLabel(label), value, labelWidth);
+  const row = (label: string, value: string): string =>
+    formatRow(fieldLabel(label, layout.labels), value, labelWidth);
 
   switch (canonicalField(field)) {
     case "caution": {
@@ -351,12 +353,17 @@ export function statLine(
       return row("cost", `${formatCost(treeCost as number)} · ${family} ${plural}`);
     }
     case "total": {
-      // Only worth a row once a subagent has actually run: subagent sessions are
-      // separate, so the parent's `cost` alone understates what was spent.
+      // The family figure: this session plus its subagent sessions. Since 0.20.0
+      // it is drawn even when no subagent has run — the true family total is then
+      // the session's own cost, and the row reads `$0.000 · 0 subagents` rather
+      // than blanking, because the row the owner renames to `lifetime` must never
+      // have a hole in it. Still `undefined` when there is no family data at all,
+      // so the persist layer keeps its zero skeleton for a session with no record.
       const tree = asRecord(source.tree);
-      const count = asCount(tree?.count);
-      const cost = asCount(tree?.cost);
-      if (cost === undefined || count === undefined || count === 0) return undefined;
+      if (tree === undefined) return undefined;
+      const cost = asCount(tree.cost);
+      if (cost === undefined) return undefined;
+      const count = asCount(tree.count) ?? 0;
       const plural = count === 1 ? "subagent" : "subagents";
       return row("total", `${formatCost(cost)} · ${count} ${plural}`);
     }
@@ -494,7 +501,11 @@ export function statLine(
       const budget = Math.max(
         8,
         SES_PREVIEW_WIDTH -
-          Math.max(0, labelPrefix(fieldLabel("ses"), labelWidth).length - labelPrefix("ses", labelWidth).length),
+          Math.max(
+            0,
+            labelPrefix(fieldLabel("ses", layout.labels), labelWidth).length -
+              labelPrefix("ses", labelWidth).length,
+          ),
       );
       return id === undefined ? undefined : row("ses", clip(id, budget));
     }
@@ -530,12 +541,15 @@ export function statSegments(
   if (name === "caution") {
     const value = cautionValueSegments(source);
     if (value === undefined) return undefined;
-    return [{ text: labelPrefix(fieldLabel("caution"), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
+    return [
+      { text: labelPrefix(fieldLabel("caution", layout.labels), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) },
+      ...value,
+    ];
   }
   if (name !== "go") return undefined;
   const value = goValueSegments(source, layout);
   if (value === undefined) return undefined;
-  return [{ text: labelPrefix(fieldLabel("go"), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
+  return [{ text: labelPrefix(fieldLabel("go", layout.labels), layout.labelWidth ?? DEFAULT_LABEL_WIDTH) }, ...value];
 }
 
 /** Render every named field, in the given order.
@@ -574,7 +588,7 @@ export function statRows(
     // no placeholder — with nothing to say there is no row, and its silence
     // is the design.
     if (!persist || !isStatField(name) || name === "caution") continue;
-    rows.push(formatRow(fieldLabel(name), skeletonValue(name, hint) ?? placeholder, labelWidth));
+    rows.push(formatRow(fieldLabel(name, hint.labels), skeletonValue(name, hint) ?? placeholder, labelWidth));
   }
   return rows;
 }

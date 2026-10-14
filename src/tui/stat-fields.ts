@@ -130,8 +130,15 @@ export function canonicalField(name: string): string {
  * `ses` draws as `session`, which is what the row's value previews; every
  * other field draws its own name. Both renderers resolve through here, so the
  * plain-string view and the segmented view can never disagree on a label.
+ *
+ * `labels` is `layout.labels` — the per-row rename, keyed by the SAME canonical
+ * name `sidebar.rows` uses (`session` folded to `ses`), so one override lands
+ * on whichever spelling the row list carried. An absent map or an absent key
+ * draws the built-in label untouched.
  */
-export function fieldLabel(field: string): string {
+export function fieldLabel(field: string, labels?: Readonly<Record<string, string>>): string {
+  const override = labels?.[canonicalField(field)];
+  if (override !== undefined) return override;
   return field === "ses" ? "session" : field;
 }
 
@@ -160,6 +167,13 @@ export interface LayoutHint {
    * a property of `sidebar.rows`, not a separate setting to find.
    */
   readonly hasTotalRow?: boolean;
+  /**
+   * Per-row label overrides, keyed by the canonical row name (`ses`, not
+   * `session`). Carried here rather than read from config directly so both
+   * renderers resolve a row's label from the same place they already resolve
+   * its geometry.
+   */
+  readonly labels?: Readonly<Record<string, string>>;
   /**
    * When true, `statRows` renders one row per named field even when the host
    * has no data for it, using `skeletonValue` (a live-shaped zero) and falling

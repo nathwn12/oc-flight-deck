@@ -228,7 +228,7 @@ export interface FlightDeckConfig {
    * it is opt-in, so an install that never asks for it spends no timer on it.
    */
   readonly caution: CautionConfig;
-  /** Geometry of a row. Every value has a sane default. */
+  /** Geometry and wording of a row. Every value has a sane default. */
   readonly layout: LayoutConfig;
   /** How values are written on the rail, e.g. the `elapsed` duration style. */
   readonly format: FormatConfig;
@@ -262,7 +262,7 @@ export function cautionThresholds(config: CautionConfig): CautionThresholds {
   };
 }
 
-/** Pure cosmetics: the geometry of a row. */
+/** Pure cosmetics: the geometry and wording of a row. */
 interface LayoutConfig {
   /** Width of the row label column. Default `10`. */
   readonly labelWidth: number;
@@ -270,6 +270,18 @@ interface LayoutConfig {
   readonly barWidth: number;
   /** Samples drawn in the sparkline. Default `12`. */
   readonly sparkWidth: number;
+  /**
+   * Rename any rail row, keyed by the canonical row name (`ses`, not the
+   * `session` alias).
+   *
+   * `{ "cost": "session", "total": "lifetime" }` draws those two rows under the
+   * new labels; every row left out keeps its built-in label, so an absent key
+   * changes nothing and the shipped rail is byte-identical without this key.
+   * The label is only ever the label column — a row's value, and which figure it
+   * carries, is unchanged. An unknown row name, a non-string value, or an empty
+   * label is reported by path and that row falls back to the default label.
+   */
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -849,6 +861,48 @@ function readNumber(
   return Math.floor(value);
 }
 
+/**
+ * The per-row label overrides: `layout.labels`.
+ *
+ * Keyed by the canonical row name, so `session` and `ses` both land on the
+ * `ses` row exactly as `sidebar.rows` folds them. Absent means "no renames" and
+ * returns `undefined` rather than an empty map, so nothing downstream has to
+ * tell "no overrides" apart from "an empty object of overrides". An unknown
+ * name, a non-string value, or an empty label is reported by path and dropped,
+ * which leaves that row on its default label.
+ */
+function readLabels(value: unknown, issues: string[]): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    issues.push("layout.labels must be an object of row names to labels; using the default labels");
+    return undefined;
+  }
+  const labels: Record<string, string> = {};
+  for (const [rawName, rawLabel] of Object.entries(value)) {
+    const path = `layout.labels.${rawName}`;
+    const key = normalizeText(rawName, path, issues).trim().toLowerCase();
+    if (key.length === 0) {
+      issues.push(`${path} is empty; using the default label`);
+      continue;
+    }
+    if (!isStatField(key)) {
+      issues.push(`${path} is not a known row (${STAT_FIELDS.join(", ")}); using the default label`);
+      continue;
+    }
+    if (typeof rawLabel !== "string") {
+      issues.push(`${path} must be a string; using the default label`);
+      continue;
+    }
+    const label = normalizeText(rawLabel, path, issues).trim();
+    if (label.length === 0) {
+      issues.push(`${path} must not be empty; using the default label`);
+      continue;
+    }
+    labels[canonicalField(key)] = label;
+  }
+  return Object.keys(labels).length === 0 ? undefined : labels;
+}
+
 function readLayout(section: Record<string, unknown>, issues: string[]): LayoutConfig {
   return {
     // The label column has to fit "caution" plus a space, and must not eat the
@@ -856,6 +910,7 @@ function readLayout(section: Record<string, unknown>, issues: string[]): LayoutC
     labelWidth: readNumber(section["labelWidth"], DEFAULT_LAYOUT.labelWidth, "layout.labelWidth", issues, 6, 24),
     barWidth: readNumber(section["barWidth"], DEFAULT_LAYOUT.barWidth, "layout.barWidth", issues, 1, 40),
     sparkWidth: readNumber(section["sparkWidth"], DEFAULT_LAYOUT.sparkWidth, "layout.sparkWidth", issues, 2, 64),
+    labels: readLabels(section["labels"], issues),
   };
 }
 

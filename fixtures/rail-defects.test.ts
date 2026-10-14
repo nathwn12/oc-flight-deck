@@ -63,20 +63,40 @@ describe("treeTotals skips an unreadable member and rolls up tokens", () => {
     });
   });
 
-  test("an unreadable-only tree degrades to no total, not a throw", () => {
+  test("a root with no descendants still reports its own figure, count zero", () => {
     const reads = createSessionReads(
       stubContext({ root: "idle" }, { root: ["root", "bad"] }, {}),
     );
-    expect(reads.treeTotals("root", 7)).toBeUndefined();
+    // `root` itself is unreadable too, so only the caller's own cost survives:
+    // the family figure is the session's own cost against a count of zero.
+    expect(reads.treeTotals("root", 7)).toEqual({
+      cost: 7,
+      count: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    });
   });
 
-  test("no descendants means no tree, even with tokens on record", () => {
+  test("no descendants means count zero, not a missing tree", () => {
     const reads = createSessionReads(
       stubContext({ root: "idle" }, { root: ["root"] }, {
         root: { cost: 7, tokens: { input: 100, output: 50 } },
       }),
     );
-    expect(reads.treeTotals("root", 7)).toBeUndefined();
+    // The `total` row now draws this: the session's own cost, `0 subagents`.
+    expect(reads.treeTotals("root", 7)).toEqual({
+      cost: 7,
+      count: 0,
+      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+    });
+  });
+
+  test("a non-root session has no family figure of its own", () => {
+    const reads = createSessionReads(
+      stubContext({ root: "idle" }, {}, {}, {}, "parent"),
+    );
+    // `root()` answers with the parent, so this session's family is not its own
+    // to total — unchanged by the childless fix.
+    expect(reads.treeTotals("child", 1)).toBeUndefined();
   });
 });
 

@@ -127,7 +127,9 @@
     //              probed during this work — so there is no automatic creator
     //              link today. The `project` row is the surface that covers
     //              every session in the project, spawned included
-    //   total      the family total and subagent count on a row of its own
+    //   total      the family total and subagent count on a row of its own —
+    //              the session's own cost with `0 subagents` when it spawned
+    //              none, never a blank row
     //   project    every session in this project, not just the one on screen
     //   tokens     input and output, in the same family scope as `cost`: this
     //              conversation plus its subagent sessions when any exist,
@@ -283,7 +285,8 @@
   },
 
   // -- Layout ----------------------------------------------------------------
-  // Row geometry. Change these when your terminal is unusually narrow or wide.
+  // Row geometry and wording. Change these when your terminal is unusually
+  // narrow or wide, or when you want a row called something else.
   "layout": {
     // Width of the label column every row pads to. 10 fits "caution" plus a
     // space. Narrow it to fit more value on screen.
@@ -293,7 +296,17 @@
     // Samples drawn in the `spark` row. The newest turns are kept, so
     // narrowing this keeps the recent shape rather than the oldest. The row is
     // this many cells wide, so a large value is a wide row.
-    "sparkWidth": 12
+    "sparkWidth": 12,
+    // Rename any rail row, keyed by its row name exactly as `sidebar.rows`
+    // spells it (`session` is folded to `ses`). Empty by default, so every row
+    // keeps its built-in label; a row you leave out keeps it too. To call the
+    // session's own cost "session" and the family/lifetime total "lifetime":
+    //
+    //   "labels": { "cost": "session", "total": "lifetime" }
+    //
+    // An unknown row name, a non-string value, or an empty label is reported
+    // and that row keeps its default.
+    "labels": {}
   },
 
   // -- Format ----------------------------------------------------------------
