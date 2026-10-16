@@ -9,14 +9,14 @@
   <img src="https://img.shields.io/badge/platform-windows--linux-2b3137" alt="Platform" />
 </p>
 
-## Project Name and Description
+## Project name and description
 
 **oc-flight-deck** is an [OpenCode V2](https://opencode.ai) CLI plugin that renders live session telemetry as a panel in the sidebar: status, agent, model, cost, project, tokens, cache, context, permissions, elapsed time and throughput — every row read from the open session at render time. It is for anyone running agent sessions who wants the numbers where they are already looking.
 
 > [!NOTE]
 > Cost, tokens, cache and reasoning roll up the subagent tree through the host's `parentID` link, falling back to the session alone when there is none. A session's own cost excludes its subagents, so the reported figure understates real spend — one money row tells the truth.
 
-## Technology Stack
+## Technology stack
 
 | Technology | Version | Role |
 |------------|---------|------|
@@ -28,7 +28,7 @@
 | `solid-js` | `1.9.12` (peer `>=1.9.0`) | UI primitives, supplied by the host |
 | `string-width` | `7.2.0` | Cell-width measurement for the rail |
 
-## Project Architecture
+## Architecture
 
 Two entries, compiled to plain JS in `dist/` by `bun run compile` (`scripts/build.ts`); the host loads the compiled entries, never raw source. `src/index.ts` is a deliberately inert server-side entrypoint; all visible behavior lives in the TUI entry `src/tui/index.tsx`, which claims the host's `sidebar.content`, `sidebar.footer` and `prompt.footer.status` slots.
 
@@ -44,7 +44,7 @@ host session state ──► src/tui/session-reads.ts ──► src/tui/stats.ts
 
 The panel is read-only with one exception: clicking the opt-in `ses` row sends the full session id to the terminal clipboard as a best-effort OSC52 request (terminal-dependent, never reported as a confirmed copy). Bad config values are ignored with defaults restored plus a one-time toast naming the key, so a typo never breaks the TUI.
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
@@ -88,7 +88,7 @@ The config file is optional — with no file at all you get the defaults.
 }
 ```
 
-## Project Structure
+## Project structure
 
 ```text
 index.ts                  package root, re-exports the server entrypoint
@@ -110,7 +110,7 @@ assets/                   icon.svg, signature.svg
                           release.yml (compile + publish on `v*` tags)
 ```
 
-## Key Features
+## Key features
 
 - Live rows for `status`, `agent`, `model`, `cost`, `project`, `tokens`, `cache`, `context`, `perms`, `elapsed` and `tps`, plus opt-in rows: `caution`, `branch`, `total`, `spark`, `reasoning`, `turns`, `guard`, `go` and `ses`.
 - Family-scoped money: cost, tokens, cache and reasoning cover the conversation plus every subagent session in its tree; the `project` row covers every session in the project.
@@ -120,7 +120,7 @@ assets/                   icon.svg, signature.svg
 - `layout.labels` renames any row — `{ "cost": "session", "total": "lifetime" }` draws your own cost under `session` and the family total under `lifetime`.
 - The `go` row and `sidebar.footer.go` panel are opt-in and share one account-wide poll; the key resolves only from OpenCode's own credential sources and is never logged.
 
-## Development Workflow
+## Development workflow
 
 Branches are named `<type>/<slug>` and land only through a pull request, squash-merged, then the branch is deleted. Commit subjects follow Conventional Commits (`<type>: <subject>`). Keep `CHANGELOG.md` and the docs current with every user-visible change.
 
@@ -144,7 +144,7 @@ That installs a copy, not a symlink, so re-run the install after editing the che
 > [!WARNING]
 > `dist/` is gitignored and built at publish time — never publish from a stale or missing `dist/`, and never hand-edit it: change the source and recompile. Never add an npm script named `install`, `postinstall`, `preinstall`, `build`, `prepare` or `prepack`: a git install would re-trigger a dependency-preparation step that is not needed here.
 
-## Coding Standards
+## Coding standards
 
 TypeScript `strict` with `noUncheckedIndexedAccess`; JSX `preserve` with `@opentui/solid` as the import source. One module per concern under `src/tui/`; row rendering is pure (`statLine`/`statRows` in `rows.ts`) so the rail is trivially testable. Host-supplied strings pass through control-character flattening before drawing. Styling resolves through theme roles (`themeColor`/`attributeMask`), never ANSI escapes. Guardrail: keep the docs' publication claims true — if the install, build or publish story changes, update `README.md`, `INSTALL.md` and `AGENTS.md` together.
 
