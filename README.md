@@ -142,7 +142,7 @@ To load the plugin from a checkout while working on it, name the checkout as a g
 That installs a copy, not a symlink, so re-run the install after editing the checkout.
 
 > [!WARNING]
-> `dist/` is gitignored and built at publish time — never publish from a stale or missing `dist/`, and never hand-edit it: change the source and recompile. Never add an npm script named `install`, `postinstall`, `preinstall`, `build`, `prepare` or `prepack`: a git install would re-trigger a dependency-preparation step that is not needed here.
+> `dist/` is committed so a clone — and the `git+file://` install route that loads the built entry from the clone — works out of the box; the `release` workflow rebuilds it (`bun run compile`) before publishing. Never publish from a stale or missing `dist/`, and never hand-edit it: change the source and recompile. Never add an npm script named `install`, `postinstall`, `preinstall`, `build`, `prepare` or `prepack`: a git install would re-trigger a dependency-preparation step that is not needed here.
 
 ## Coding standards
 

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# dist/ stays committed: the git+file:// install route loads the built entry from the clone.
+!dist/
 coverage/
 *.log
 .env
