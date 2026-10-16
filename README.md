@@ -146,7 +146,7 @@ That installs a copy, not a symlink, so re-run the install after editing the che
 
 ## Coding standards
 
-TypeScript `strict` with `noUncheckedIndexedAccess`; JSX `preserve` with `@opentui/solid` as the import source. One module per concern under `src/tui/`; row rendering is pure (`statLine`/`statRows` in `rows.ts`) so the rail is trivially testable. Host-supplied strings pass through control-character flattening before drawing. Styling resolves through theme roles (`themeColor`/`attributeMask`), never ANSI escapes. Guardrail: keep the docs' publication claims true — if the install, build or publish story changes, update `README.md`, `INSTALL.md` and `AGENTS.md` together.
+TypeScript `strict` with `noUncheckedIndexedAccess`; JSX `preserve` with `@opentui/solid` as the import source. One module per concern under `src/tui/`; row rendering is pure (`statLine`/`statRows` in `rows.ts`) so the rail is trivially testable. Host-supplied strings pass through control-character flattening before drawing. Styling resolves through theme roles (`themeColor`/`attributeMask`), never ANSI escapes. Guardrail: keep the docs' publication claims true — if the install, build or publish story changes, update `README.md`, `INSTALL.md` and `AGENTS.md` together (`README.md` ships in the package; `INSTALL.md` and `AGENTS.md` are repo-only guides, not packaged).
 
 ## Testing
 
