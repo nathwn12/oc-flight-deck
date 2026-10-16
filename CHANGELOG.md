@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI entrypoint now consumes the host renderer instead of shipping its own `@opentui/*` copy: `@opentui/core` and `@opentui/solid` moved from `dependencies` to `peerDependencies`-only (`>=0.5.17`, matching the host), per the official CLI plugin contract. Opencode v2.0.30 refuses to load a plugin that ships and value-imports its own `@opentui/core`, so the vendored value imports are gone: the OSC52 fallback calls the host renderer's `copyToClipboardOSC52` structurally (same capability gating as before), and the text-attribute bits are pinned as local literals asserted against the vendored enum in tests. There is no sanctioned host clipboard surface, so without a renderer fallback the copy path reports `no-backend` instead of throwing. `@opencode/plugin` is pinned to the current host version `2.0.30`.
+
 ### Added
 
 - `layout.labels`: rename any rail row's label, keyed by the row name exactly as `sidebar.rows` spells it (`session` is folded to `ses`). `{ "cost": "session", "total": "lifetime" }` draws the session's own cost under `session` and the family total under `lifetime`; every row left out keeps its built-in label, so an install that never sets the key renders byte-identically to before. An unknown row name, a non-string value, or an empty label is reported as a config issue naming its path (`layout.labels.<name>`) and that row falls back to its default label. Both renderers resolve a row's label from the same map, so the plain-string view and the segmented (`style.rows`) view never disagree.

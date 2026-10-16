@@ -1,9 +1,25 @@
 // The host-clipboard seam, split from `./clipboard.ts` for one reason: the
 // render tests mount the real JSX in a real headless renderer, where mocking
-// all of `@opentui/core` would break the renderer itself. This module is the
+// the whole UI toolkit would break the renderer itself. This module is the
 // only thing those tests replace, so they can stand in a fake host write while
-// the renderer and the OSC52 adapter stay real.
+// the renderer stays real.
 //
-// Production always resolves to the real process host clipboard.
+// Production resolves to NO host backend: the plugin contract sanctions no
+// host clipboard surface, so this factory throws and the copy path degrades
+// cleanly to the OSC52/no-backend outcomes (which are never reported as a
+// verified copy). The `HostClipboardLike` shape is structural so a future
+// sanctioned backend can plug in without touching the call site.
 
-export { createHostClipboard } from "@opentui/core";
+/** The subset of a host clipboard service the copy path uses. */
+interface HostClipboardLike {
+  writeText(text: string): Promise<{ readonly status: string }>;
+}
+
+/**
+ * The default host clipboard factory: absent by design. Throwing (rather than
+ * returning a stub service) marks "no host service at all", so the copy path
+ * reports `no-backend` when no renderer can take the fallback either.
+ */
+export function createHostClipboard(): HostClipboardLike {
+  throw new Error("no sanctioned host clipboard backend");
+}

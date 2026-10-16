@@ -10,10 +10,27 @@
 // token has always done.
 //
 // Everything is a table lookup, so the config surface is trivial to test.
-// `attributeMask` is the one place that reads @opentui/core, because the bits
-// must be the vendored renderer's own constants — never re-derived, never ANSI.
+// `attributeMask` pins the host renderer's descriptor bits as local literals
+// rather than value-importing them: the plugin consumes the host's renderer
+// through the plugin context and must not ship or import a vendored copy, so
+// no `@opentui/*` import may appear here. The values are the host's
+// `TextAttributes` bits (NONE=0, BOLD=1, DIM=2, ITALIC=4, UNDERLINE=8,
+// BLINK=16, INVERSE=32, HIDDEN=64, STRIKETHROUGH=128); fixtures/style.test.ts
+// asserts them against the vendored enum, so a host change fails loudly
+// instead of desyncing silently.
 
-import { TextAttributes } from "@opentui/core";
+/** The host renderer's text-attribute bits, pinned as literals (see above). */
+const TextAttributes = {
+  NONE: 0,
+  BOLD: 1,
+  DIM: 2,
+  ITALIC: 4,
+  UNDERLINE: 8,
+  BLINK: 16,
+  INVERSE: 32,
+  HIDDEN: 64,
+  STRIKETHROUGH: 128,
+} as const;
 
 /** Colours a config may name. Roles, not raw theme tokens. */
 export const STYLE_COLORS = ["default", "subdued", "warning", "error", "success", "info"] as const;
@@ -108,8 +125,10 @@ export function themeColor(color: StyleColor, theme: ThemeLike): unknown {
 }
 
 /**
- * Renderer bits for each name, read from the vendored enum rather than
- * re-derived, so a renderer change cannot silently desync the config surface.
+ * Renderer bits for each name, pinned to the host's descriptor values so no
+ * vendored copy is imported; fixtures/style.test.ts asserts these literals
+ * against the vendored enum, so a renderer change fails loudly rather than
+ * desyncing silently.
  */
 const ATTRIBUTE_BITS: Readonly<Record<StyleAttribute, number>> = {
   bold: TextAttributes.BOLD,

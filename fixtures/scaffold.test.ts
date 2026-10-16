@@ -98,12 +98,17 @@ describe("flight deck plugin", () => {
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
     expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.26" });
-    // Deliberate exact pin: a supply-chain guard on the beta we build against.
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.30" });
+    // Deliberate exact pin: a supply-chain guard on the host version built against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
+    // Peers-only @opentui surface: the plugin consumes the host's renderer
+    // through the plugin context and must not ship its own copy, which the host
+    // refuses to load (opencode v2.0.30).
+    expect(packageJson.dependencies["@opentui/core"]).toBeUndefined();
+    expect(packageJson.dependencies["@opentui/solid"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({
-      "@opentui/core": ">=0.5.10",
-      "@opentui/solid": ">=0.5.10",
+      "@opentui/core": ">=0.5.17",
+      "@opentui/solid": ">=0.5.17",
       "solid-js": ">=1.9.0",
     });
     // These peers MUST NOT be optional. The render entrypoint imports

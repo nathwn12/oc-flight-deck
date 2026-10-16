@@ -6,22 +6,38 @@
 //      through the OS clipboard, it resolves asynchronously, and it can report
 //      `written` - a status that means the platform completed the copy. Only
 //      this transport may ever be reported to the user as a success.
-//   2. OSC52 through the renderer (`createRendererClipboardAdapter`). This is a
-//      fire-and-forget escape sequence emitted on the terminal's wire. Its
-//      `attempted` status confirms only that a local dispatch was issued - the
-//      terminal is free to ignore it, and on this machine's Windows Terminal it
-//      does, so an independent read still sees the old clipboard. It is kept as
-//      a best-effort fallback and is NEVER reported as a verified copy.
+//   2. OSC52 through the host renderer. This is a fire-and-forget escape
+//      sequence emitted on the terminal's wire. Its dispatch confirms only that
+//      a local call was issued - the terminal is free to ignore it, and on this
+//      machine's Windows Terminal it does, so an independent read still sees the
+//      old clipboard. It is kept as a best-effort fallback and is NEVER reported
+//      as a verified copy.
+//
+// The renderer is read structurally, never value-imported: the plugin consumes
+// the host's own renderer through the plugin context (`context.renderer`), so
+// no `@opentui/*` copy may ship with or be imported by this module.
 //
 // The gesture is still the one and only trigger: there is no render-time,
 // background, or automatic write, ever. And nothing here may throw out of the
 // caller's mouse handler: every backend call is wrapped, and a backend that is
 // missing, refuses, or throws degrades to a definite non-success result.
 
-import { createRendererClipboardAdapter } from "@opentui/core";
 import { createHostClipboard } from "./host-clipboard.js";
 
-type RendererBoundary = Parameters<typeof createRendererClipboardAdapter>[0];
+/**
+ * The OSC52 boundary the host renderer provides. Structural on purpose: the
+ * plugin must consume the host's renderer, never a vendored copy's adapter, so
+ * this mirrors the `{ capabilities, copyToClipboardOSC52 }` surface the host's
+ * `CliRenderer` implements (a direct call returning a boolean) without
+ * importing it.
+ */
+interface RendererOsc52Boundary {
+  readonly capabilities?: {
+    readonly remote?: boolean;
+    readonly osc52_support?: "supported" | "unsupported" | "unknown";
+  } | null;
+  copyToClipboardOSC52(text: string, ...args: never[]): boolean;
+}
 
 /**
  * The outcome of a copy gesture.
@@ -56,12 +72,18 @@ type HostClipboardFactory = () => HostClipboardLike;
  * Determine the OSC52 dispatch outcome for `text`, or `false` when the
  * renderer cannot take it. Kept separate so the renderer type can stay
  * `unknown` at the public boundary.
+ *
+ * This mirrors the gating the vendored adapter applies: a terminal that
+ * reports `osc52_support: "unsupported"` is never written to, and anything
+ * missing, refusing, or throwing degrades to `false`.
  */
 function dispatchOsc52(renderer: unknown, text: string): boolean {
   if (renderer === undefined || renderer === null) return false;
   try {
-    const terminal = createRendererClipboardAdapter(renderer as RendererBoundary);
-    return terminal.writeText(text, "clipboard").status === "attempted";
+    const boundary = renderer as Partial<RendererOsc52Boundary>;
+    if (boundary.capabilities?.osc52_support === "unsupported") return false;
+    if (typeof boundary.copyToClipboardOSC52 !== "function") return false;
+    return boundary.copyToClipboardOSC52.call(renderer, text) === true;
   } catch {
     return false;
   }
