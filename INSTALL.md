@@ -1,22 +1,16 @@
 # Install - oc-flight-deck
 
-Three routes. Plugin entries are bare strings in the `plugins` array of `opencode.jsonc`.
+Compatible with opencode 2.0.30.
 
-## NPM - stable, slow release (MEASURED: WORKS)
+Two routes. Plugin entries are bare strings in the `plugins` array of `opencode.jsonc`. The package is not published to npm: there is no `oc-flight-deck@x.y.z` npm install route.
 
-```jsonc
-{ "plugins": ["oc-flight-deck@0.19.0"] }
-```
-
-Stable default. Use this unless you have a reason not to. Measured working as npm version spec `"oc-flight-deck@0.19.0"`.
-
-## GITHUB - bleeding edge, experimental (MEASURED: WORKS as package spec)
+## GIT - remote install (MEASURED: WORKS as package spec)
 
 ```jsonc
-{ "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#main"] }
+{ "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#<full sha>"] }
 ```
 
-Experimental, unsupported, may be broken. Every commit is installable, so this route carries unreleased changes. Measured working as github PACKAGE spec `"oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#<full sha>"` (host log shows it loading).
+The default route. Pin a full commit sha, not a branch name, so the install stays put. Every commit is installable, so an unpinned entry carries unreleased changes. Measured working as github PACKAGE spec `"oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#<full sha>"` (host log shows it loading).
 
 ## NO-NPM (directory entry - local path MEASURED: WORKS; bare `github:` form MEASURED: DOES NOT WORK)
 
@@ -33,6 +27,5 @@ superpowers uses.
 
 ## Notes
 
-- Mounting by the git spec was MEASURED WORKING for the server half: the host provisions it through npm into `~/.cache/opencode/npm/git-<name>-<hash>/` and loads the entry resolved from `package.json` (`exports["."]`); the host log then records `msg="loading plugin" id=<spec> entrypoint=file:///… role=server`.
-- The npm route is unaffected and remains the stable default.
-- The TUI half has no direct observation surface in this build (`opencode plugin list` does not report TUI halves for the npm route either), so the TUI half is verified by its visible effect (the sidebar rendering), not by a command.
+- Mounting by the git spec was MEASURED WORKING for the server half: the host provisions it through npm into `~/.cache/opencode/npm/git-<name>-<hash>/` and loads the entry resolved from `package.json` (`exports["."]`); the host log then records `msg="loading plugin" id=<spec> entrypoint=file:///… role=server`. The shipped entries are the compiled `dist/` files (committed in the repo), not raw source.
+- The TUI half has no direct observation surface in this build (`opencode plugin list` does not report TUI halves for the git route either), so the TUI half is verified by its visible effect (the sidebar rendering), not by a command.

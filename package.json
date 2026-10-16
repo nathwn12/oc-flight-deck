@@ -1,6 +1,6 @@
 {
   "name": "oc-flight-deck",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Live OpenCode V2 session telemetry — agent, model, branch, cost, tokens, cache hit rate and context usage in your sidebar.",
   "keywords": [
     "opencode",
@@ -26,14 +26,15 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "import": "./dist/index.js"
     },
     "./tui": {
       "types": "./src/tui/index.tsx",
-      "import": "./src/tui/index.tsx"
+      "import": "./dist/tui/index.js"
     }
   },
   "files": [
+    "dist",
     "src",
     "flight-deck.example.jsonc",
     "flight-deck.schema.json",
@@ -48,6 +49,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "compile": "bun scripts/build.ts",
     "check": "bun run typecheck && bun test",
     "prepublishOnly": "bun run check"
   },
@@ -55,21 +57,19 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.26",
-    "@opentui/core": "0.5.17",
-    "@opentui/solid": "0.5.17"
+    "@opencode/plugin": "2.0.30"
   },
   "devDependencies": {
     "@opentui/core": "0.5.17",
     "@opentui/solid": "0.5.17",
     "@types/bun": "^1.4.2",
-    "solid-js": "1.9.15",
+    "solid-js": "1.9.12",
     "string-width": "7.2.0",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@opentui/core": ">=0.5.10",
-    "@opentui/solid": ">=0.5.10",
+    "@opentui/core": ">=0.5.17",
+    "@opentui/solid": ">=0.5.17",
     "solid-js": ">=1.9.0"
   }
 }

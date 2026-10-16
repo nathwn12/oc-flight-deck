@@ -161,7 +161,9 @@
     //              credential store. Available, off by default.
     //   ses        the open session id as a clipped preview, labelled `session`
     //              on the rail (never the full id). A mouse click on the row
-    //              copies the full id to the terminal clipboard. May be named
+    //              sends the full id to the terminal clipboard as a best-effort
+    //              OSC52 request: terminal-dependent (the terminal may ignore
+    //              it) and never reported as a confirmed copy. May be named
     //              `session` here — it is normalized to `ses`. The preview
     //              budget is 18 cells, reduced by however much the `session`
     //              label overflows `layout.labelWidth` below, floored at 8

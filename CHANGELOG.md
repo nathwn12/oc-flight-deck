@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI entrypoint now consumes the host renderer instead of shipping its own `@opentui/*` copy: `@opentui/core` and `@opentui/solid` moved from `dependencies` to `peerDependencies`-only (`>=0.5.17`, matching the host), per the official CLI plugin contract. Opencode v2.0.30 refuses to load a plugin that ships and value-imports its own `@opentui/core`, so the vendored value imports are gone: the OSC52 fallback calls the host renderer's `copyToClipboardOSC52` structurally (same capability gating as before), and the text-attribute bits are pinned as local literals asserted against the vendored enum in tests. There is no sanctioned host clipboard surface, so without a renderer fallback the copy path reports `no-backend` instead of throwing. `@opencode/plugin` is pinned to the current host version `2.0.30`.
+
 ### Added
 
 - `layout.labels`: rename any rail row's label, keyed by the row name exactly as `sidebar.rows` spells it (`session` is folded to `ses`). `{ "cost": "session", "total": "lifetime" }` draws the session's own cost under `session` and the family total under `lifetime`; every row left out keeps its built-in label, so an install that never sets the key renders byte-identically to before. An unknown row name, a non-string value, or an empty label is reported as a config issue naming its path (`layout.labels.<name>`) and that row falls back to its default label. Both renderers resolve a row's label from the same map, so the plain-string view and the segmented (`style.rows`) view never disagree.
@@ -15,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The `total` row draws the real family figure for a childless session: its own cost with `0 subagents`, instead of the persist layer's live-shaped `$0.000`. `treeTotals` now records a family of one as the session's own cost against a count of zero rather than returning nothing, and the row renders whenever a family figure exists — so a session that spawned no subagents still reads its lifetime figure under that row. `total` stays absent, and the unchanged skeleton draws, only when there is genuinely no tree or cost data at all (a session with no record yet), and a child session still has no `total` of its own. A session with subagents sums them exactly as before.
+
+### Fixed
+
+- Opencode 2.0.30 compatibility: the shipped entries are now plain compiled JS in `dist/` (`bun run compile`), not raw source. A raw `.tsx` entry under `node_modules` falls back to Bun's native JSX transform on this host, whose injected `jsx-dev-runtime` import bypasses the rewrite loader and fails to resolve — so the TUI entry ships with explicit `jsx`/`jsxs` imports from `@opentui/solid/jsx-runtime` and no raw JSX. `package.json` `exports` (`"."` and `"./tui"`) and `files` point at `dist/` (`src` stays for types and dev), `@opentui/*` and `solid-js`/`solid-js/store` stay external with nothing bundled or copied, and `dist/` is committed because the git install route loads the entry from the clone. The package is not published to npm: install from the git package spec or a local directory entry (see INSTALL.md).
 
 ## [0.19.0] - 2026-10-11
 

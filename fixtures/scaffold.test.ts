@@ -94,16 +94,28 @@ describe("flight deck plugin", () => {
       peerDependencies: Record<string, string>;
       peerDependenciesMeta?: Record<string, unknown>;
       scripts: Record<string, string>;
+      files: string[];
     };
     expect(Object.keys(packageJson.exports)).toEqual([".", "./tui"]);
-    expect(packageJson.exports["."]).toMatchObject({ import: "./src/index.ts" });
-    expect(packageJson.exports["./tui"]).toMatchObject({ import: "./src/tui/index.tsx" });
-    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.26" });
-    // Deliberate exact pin: a supply-chain guard on the beta we build against.
+    // The shipped entries are plain compiled JS: raw TSX under `node_modules`
+    // falls back to Bun's native JSX transform on opencode v2.0.30, whose
+    // injected `jsx-dev-runtime` import fails to resolve. `types` still reads
+    // the source; `src` stays in `files` for types and dev.
+    expect(packageJson.exports["."]).toMatchObject({ import: "./dist/index.js" });
+    expect(packageJson.exports["./tui"]).toMatchObject({ import: "./dist/tui/index.js" });
+    expect(packageJson.files).toContain("dist");
+    expect(packageJson.scripts.compile).toContain("scripts/build");
+    expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.30" });
+    // Deliberate exact pin: a supply-chain guard on the host version built against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
+    // Peers-only @opentui surface: the plugin consumes the host's renderer
+    // through the plugin context and must not ship its own copy, which the host
+    // refuses to load (opencode v2.0.30).
+    expect(packageJson.dependencies["@opentui/core"]).toBeUndefined();
+    expect(packageJson.dependencies["@opentui/solid"]).toBeUndefined();
     expect(packageJson.peerDependencies).toMatchObject({
-      "@opentui/core": ">=0.5.10",
-      "@opentui/solid": ">=0.5.10",
+      "@opentui/core": ">=0.5.17",
+      "@opentui/solid": ">=0.5.17",
       "solid-js": ">=1.9.0",
     });
     // These peers MUST NOT be optional. The render entrypoint imports

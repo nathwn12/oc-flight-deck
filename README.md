@@ -24,23 +24,22 @@ A session's own cost excludes its subagents, so the reported figure understates 
 - Elapsed time recomputed from the assistant-turn spans the host recorded, so a restart returns the same value instead of resetting.
 - Live throughput over `sidebar.tps.scope` (`family` or `session`, default `family`), reading `0 tok/s` whenever the scope is not generating.
 - Stable rail: with `sidebar.persist` every named row draws a zero skeleton until the host has data, while caution stays silent until something stops moving.
-- Reads only while the opt-in guard and go surfaces stay off: no telemetry, nothing on disk, no network calls; the single write is a click on the opt-in ses row copying the full session id to the terminal clipboard. Enabling the opt-in `go` row or `sidebar.footer.go` panel polls `https://opencode.ai/zen/go/v1/usage` every 60 seconds, and only with `FLIGHT_DECK_GO_LOG=1` appends one observation line per poll to `tmpdir()/opencode/flight-deck-go.log` (never the key).
+- Reads only while the opt-in guard and go surfaces stay off: no telemetry, nothing on disk, no network calls; the single write is a click on the opt-in ses row sending the full session id to the terminal clipboard as a best-effort OSC52 request — terminal-dependent (the terminal may ignore it) and never reported as a confirmed copy. Enabling the opt-in `go` row or `sidebar.footer.go` panel polls `https://opencode.ai/zen/go/v1/usage` every 60 seconds, and only with `FLIGHT_DECK_GO_LOG=1` appends one observation line per poll to `tmpdir()/opencode/flight-deck-go.log` (never the key).
 - A bad config value is ignored with its default restored and a one-time toast naming the key, so a typo never breaks the TUI.
 
 ## Install
 
-1. Add the plugin to the `plugins` array in your `opencode.jsonc` (stable):
-   ```jsonc
-   { "plugins": ["oc-flight-deck@0.19.0"] }
-   ```
-   For bleeding edge instead of stable, not in addition:
+Compatible with opencode 2.0.30. The package is not published to npm, so install from git:
+
+1. Add the plugin to the `plugins` array in your `opencode.jsonc`:
    ```jsonc
    { "plugins": ["oc-flight-deck@git+https://github.com/nathwn12/oc-flight-deck.git#<full sha>"] }
    ```
+   Pin a full commit sha, not a branch name, so the install stays put.
 2. Restart OpenCode.
 3. Verify: the panel appears beside an open session.
 
-See [INSTALL.md](INSTALL.md) for the three routes: pinned npm, the github package spec, and a no-npm local directory entry. To uninstall, remove the entry from `opencode.jsonc`, restart, and delete your `flight-deck.jsonc` if you made one.
+See [INSTALL.md](INSTALL.md) for the two routes: the git package spec above, and a no-npm local directory entry. To uninstall, remove the entry from `opencode.jsonc`, restart, and delete your `flight-deck.jsonc` if you made one.
 
 ## Usage
 
@@ -90,7 +89,7 @@ bun install
 bun run check
 ```
 
-`bun run check` typechecks and runs the suite, including headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters that come out. To load the plugin from a checkout while working on it, name the checkout as a git file URL in the `opencode.jsonc` of the project you run OpenCode in:
+`bun run check` typechecks and runs the suite, including headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters that come out. The shipped entries are compiled, not raw source: `bun run compile` emits plain JS to `dist/` with explicit `jsx-runtime` imports for the host (required on opencode 2.0.30, which cannot resolve a raw `.tsx` entry under `node_modules`). `dist/` is committed, since the git install route loads the entry from the clone. To load the plugin from a checkout while working on it, name the checkout as a git file URL in the `opencode.jsonc` of the project you run OpenCode in:
 
 ```jsonc
 {
@@ -98,11 +97,11 @@ bun run check
 }
 ```
 
-That installs a copy, not a symlink, so re-run the install after editing the checkout. Built against `@opencode/plugin` 2.0.26 on the official [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
+That installs a copy, not a symlink, so re-run the install after editing the checkout. Built against `@opencode/plugin` 2.0.30 on the official [OpenCode V2 CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli).
 
 ## Docs
 
-- [INSTALL.md](INSTALL.md) — the three install routes.
+- [INSTALL.md](INSTALL.md) — the two install routes.
 - [flight-deck.example.jsonc](flight-deck.example.jsonc) — every option, documented inline.
 - [flight-deck.schema.json](flight-deck.schema.json) — types, defaults and allowed values.
 - [CHANGELOG.md](CHANGELOG.md) — release history.

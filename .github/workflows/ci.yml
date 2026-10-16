@@ -42,6 +42,6 @@ jobs:
             npm install
           fi
       - name: Build
-        run: npm run build --if-present
+        run: npm run compile --if-present
       - name: Test
         run: npm test --if-present

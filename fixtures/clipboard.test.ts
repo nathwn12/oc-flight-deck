@@ -139,6 +139,19 @@ describe("the session-id copy path", () => {
     expect(result.outcome).toBe("unsupported");
     expect(writes).toEqual([]);
   });
+
+  test("the production default has no host backend: OSC52-only fallback, unmocked", async () => {
+    // No factory passed, so this exercises the real default
+    // (`createHostClipboard`, explicitly absent): the only transport left is
+    // the OSC52 dispatch through the renderer, which is never verified.
+    const { renderer, writes } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id);
+    expect(result.verified).toBe(false);
+    expect(result.outcome).toBe("osc52-dispatched");
+    expect(writes).toEqual([id]);
+    // And with no renderer either, the default path reports no backend.
+    expect(await copyToClipboard(undefined, id)).toEqual({ verified: false, outcome: "no-backend" });
+  });
 });
 
 // The click's confirmation is derived from the result, never assumed. These pin
