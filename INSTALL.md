@@ -27,5 +27,5 @@ superpowers uses.
 
 ## Notes
 
-- Mounting by the git spec was MEASURED WORKING for the server half: the host provisions it through npm into `~/.cache/opencode/npm/git-<name>-<hash>/` and loads the entry resolved from `package.json` (`exports["."]`); the host log then records `msg="loading plugin" id=<spec> entrypoint=file:///… role=server`. The shipped entries are the compiled `dist/` files (committed in the repo), not raw source.
+- Mounting by the git spec was MEASURED WORKING for the server half: the host provisions it through npm into `~/.cache/opencode/npm/git-<name>-<hash>/` and loads the entry resolved from `package.json` (`exports["."]`); the host log then records `msg="loading plugin" id=<spec> entrypoint=file:///… role=server`. The shipped entries are the compiled `dist/` files (gitignored, built at publish time), not raw source.
 - The TUI half has no direct observation surface in this build (`opencode plugin list` does not report TUI halves for the git route either), so the TUI half is verified by its visible effect (the sidebar rendering), not by a command.
