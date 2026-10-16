@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2026-10-16
+
+### Fixed
+
+- The README and INSTALL no longer claim the package is unpublished: the `0.19.1` tarball shipped that stale text (corrected in docs after the tag), so this release ships the corrected wording.
+
 ## [0.19.1] - 2026-10-16
 
 ### Changed
