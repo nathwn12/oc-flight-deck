@@ -66,7 +66,7 @@ interface HostClipboardLike {
 }
 
 /** A factory for the host clipboard; injectable so tests can stand in a fake. */
-type HostClipboardFactory = () => HostClipboardLike;
+type HostClipboardFactory = () => HostClipboardLike | undefined;
 
 /**
  * Determine the OSC52 dispatch outcome for `text`, or `false` when the
@@ -113,10 +113,20 @@ export async function copyToClipboard(
   createHost: HostClipboardFactory = createHostClipboard,
 ): Promise<CopyResult> {
   // 1. The verified path: a real host write that can report back `written`.
+  // The production backend is explicitly absent (`undefined`), so this step
+  // is skipped outside tests that inject a fake.
   let hostReached = true;
   let hostStatus: string = "failed";
+  let host: HostClipboardLike | undefined;
   try {
-    const host = createHost();
+    host = createHost();
+  } catch {
+    // The factory itself threw: there is no host service at all.
+    host = undefined;
+  }
+  if (host === undefined) {
+    hostReached = false;
+  } else {
     try {
       const result = await host.writeText(text);
       hostStatus = result.status;
@@ -125,9 +135,6 @@ export async function copyToClipboard(
       // host failure, never an exception out of this call.
       hostStatus = "failed";
     }
-  } catch {
-    // The factory itself threw: there is no host service at all.
-    hostReached = false;
   }
   if (hostStatus === "written") return { verified: true, outcome: "written" };
 

@@ -167,8 +167,28 @@ describe("style role descriptors", () => {
     expect(themeColor("default", {})).toBeUndefined();
   });
 
-  test("maps configured attributes to the renderer's descriptor bits", () => {
+  test("pins each text-attribute bit to its renderer descriptor literal", () => {
     expect(attributeMask([])).toBeUndefined();
+    // Each of the 8 attribute bits, individually: the local literal must match
+    // the vendored renderer's enum member, and the enum member its numeric
+    // bit — so a renderer change fails loudly instead of desyncing silently.
+    expect(attributeMask(["bold"])).toBe(TextAttributes.BOLD);
+    expect(TextAttributes.BOLD).toBe(1);
+    expect(attributeMask(["dim"])).toBe(TextAttributes.DIM);
+    expect(TextAttributes.DIM).toBe(2);
+    expect(attributeMask(["italic"])).toBe(TextAttributes.ITALIC);
+    expect(TextAttributes.ITALIC).toBe(4);
+    expect(attributeMask(["underline"])).toBe(TextAttributes.UNDERLINE);
+    expect(TextAttributes.UNDERLINE).toBe(8);
+    expect(attributeMask(["blink"])).toBe(TextAttributes.BLINK);
+    expect(TextAttributes.BLINK).toBe(16);
+    expect(attributeMask(["inverse"])).toBe(TextAttributes.INVERSE);
+    expect(TextAttributes.INVERSE).toBe(32);
+    expect(attributeMask(["hidden"])).toBe(TextAttributes.HIDDEN);
+    expect(TextAttributes.HIDDEN).toBe(64);
+    expect(attributeMask(["strikethrough"])).toBe(TextAttributes.STRIKETHROUGH);
+    expect(TextAttributes.STRIKETHROUGH).toBe(128);
+    // Combined bits still OR together.
     expect(attributeMask(["bold", "italic", "strikethrough"])).toBe(
       TextAttributes.BOLD | TextAttributes.ITALIC | TextAttributes.STRIKETHROUGH,
     );

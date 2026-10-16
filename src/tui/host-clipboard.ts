@@ -5,10 +5,10 @@
 // the renderer stays real.
 //
 // Production resolves to NO host backend: the plugin contract sanctions no
-// host clipboard surface, so this factory throws and the copy path degrades
-// cleanly to the OSC52/no-backend outcomes (which are never reported as a
-// verified copy). The `HostClipboardLike` shape is structural so a future
-// sanctioned backend can plug in without touching the call site.
+// host clipboard surface, so this factory returns `undefined` and the copy
+// path degrades cleanly to the OSC52/no-backend outcomes (which are never
+// reported as a verified copy). The `HostClipboardLike` shape is structural so
+// a future sanctioned backend can plug in without touching the call site.
 
 /** The subset of a host clipboard service the copy path uses. */
 interface HostClipboardLike {
@@ -16,10 +16,11 @@ interface HostClipboardLike {
 }
 
 /**
- * The default host clipboard factory: absent by design. Throwing (rather than
- * returning a stub service) marks "no host service at all", so the copy path
- * reports `no-backend` when no renderer can take the fallback either.
+ * The default host clipboard factory: explicitly absent. Returning
+ * `undefined` (rather than throwing) marks "no host service at all", so the
+ * copy path reports `no-backend` when no renderer can take the OSC52 fallback
+ * either.
  */
-export function createHostClipboard(): HostClipboardLike {
-  throw new Error("no sanctioned host clipboard backend");
+export function createHostClipboard(): HostClipboardLike | undefined {
+  return undefined;
 }

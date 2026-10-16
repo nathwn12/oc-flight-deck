@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `total` row draws the real family figure for a childless session: its own cost with `0 subagents`, instead of the persist layer's live-shaped `$0.000`. `treeTotals` now records a family of one as the session's own cost against a count of zero rather than returning nothing, and the row renders whenever a family figure exists — so a session that spawned no subagents still reads its lifetime figure under that row. `total` stays absent, and the unchanged skeleton draws, only when there is genuinely no tree or cost data at all (a session with no record yet), and a child session still has no `total` of its own. A session with subagents sums them exactly as before.
 
+### Fixed
+
+- Opencode 2.0.30 compatibility: the shipped entries are now plain compiled JS in `dist/` (`bun run build`), not raw source. A raw `.tsx` entry under `node_modules` falls back to Bun's native JSX transform on this host, whose injected `jsx-dev-runtime` import bypasses the rewrite loader and fails to resolve — so the TUI entry ships with explicit `jsx`/`jsxs` imports from `@opentui/solid/jsx-runtime` and no raw JSX. `package.json` `exports` (`"."` and `"./tui"`) and `files` point at `dist/` (`src` stays for types and dev), `@opentui/*` and `solid-js`/`solid-js/store` stay external with nothing bundled or copied, and `dist/` is committed because the git install route loads the entry from the clone. The package is not published to npm: install from the git package spec or a local directory entry (see INSTALL.md).
+
 ## [0.19.0] - 2026-10-11
 
 ### Added
