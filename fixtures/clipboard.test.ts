@@ -159,14 +159,7 @@ describe("the session-id copy path", () => {
 // that every other outcome is a distinct, honest non-success.
 describe("the copy confirmation", () => {
   const id = "ses_f07dc9b3bffeVWC5RUrFGCbyo0";
-  const outcomes = [
-    "unsupported",
-    "cancelled",
-    "timed-out",
-    "failed",
-    "osc52-dispatched",
-    "no-backend",
-  ] as const;
+  const errorOutcomes = ["unsupported", "cancelled", "timed-out", "failed", "no-backend"] as const;
 
   test("reports only a verified write as a success naming the full id", () => {
     const fb = copyFeedback({ verified: true, outcome: "written" }, id);
@@ -175,10 +168,10 @@ describe("the copy confirmation", () => {
     expect(fb.message).toContain(id);
   });
 
-  test("every non-written outcome is an error that never claims the id was copied", () => {
+  test("every genuine failure is an error that never claims the id was copied", () => {
     const success = copyFeedback({ verified: true, outcome: "written" }, id);
     const seen = new Set<string>([success.message]);
-    for (const outcome of outcomes) {
+    for (const outcome of errorOutcomes) {
       const fb = copyFeedback({ verified: false, outcome } satisfies CopyResult, id);
       expect(fb.ok).toBe(false);
       expect(fb.variant).toBe("error");
@@ -189,5 +182,20 @@ describe("the copy confirmation", () => {
       expect(seen.has(fb.message)).toBe(false);
       seen.add(fb.message);
     }
+  });
+
+  test("an osc52 dispatch is advisory, never an error and never a verified copy", async () => {
+    const fb = copyFeedback({ verified: false, outcome: "osc52-dispatched" }, id);
+    expect(fb.ok).toBe(false);
+    expect(fb.variant).toBe("warning");
+    // Truthful wording: sent, but unconfirmable - and never naming the id.
+    expect(fb.message).not.toContain(id);
+    expect(fb.message).not.toBe(copyFeedback({ verified: true, outcome: "written" }, id).message);
+    // End to end on the production path (no host backend): the dispatch still
+    // never reports a verified copy.
+    const { renderer } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
+    expect(copyFeedback(result, id).variant).toBe("warning");
   });
 });

@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The `ses` row's unconfirmed OSC52 dispatch no longer reports as an error: the bytes were sent but no backend can confirm the terminal acted on them, so it is now an advisory `warning` ("paste to verify") instead of a failure. The five genuine failures stay `error`, and only a confirmed host `written` ever reports a verified copy.
+
 ## [0.19.2] - 2026-10-16
 
 ### Fixed
