@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/icon.svg" width="128" height="128" alt="oc-flight-deck icon" />
+  <img src="assets/icon.svg" width="120" height="120" alt="oc-flight-deck icon" />
 </p>
 <h1 align="center">oc-flight-deck</h1>
-<p align="center"><strong>Live session telemetry in your OpenCode sidebar.</strong></p>
+<p align="center"><strong>Render live session telemetry for OpenCode users — TypeScript.</strong></p>
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/nathwn12/oc-flight-deck" alt="License" /></a>
   <img src="https://img.shields.io/github/languages/top/nathwn12/oc-flight-deck" alt="Language" />
