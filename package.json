@@ -51,7 +51,7 @@
     "test": "bun test",
     "compile": "bun scripts/build.ts",
     "check": "bun run typecheck && bun test",
-    "prepublishOnly": "bun run check"
+    "prepublishOnly": "bun run check && bun run compile"
   },
   "publishConfig": {
     "access": "public"
