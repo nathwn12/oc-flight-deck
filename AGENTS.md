@@ -50,13 +50,13 @@ bun run check
 
 - Releases are cut by pushing an annotated tag `v<version>`; the `release` workflow then compiles and publishes to the public registry.
 - This workflow has no tag-versus-manifest guard, so make sure the tag and the manifest version agree before pushing.
-- `dist/` is gitignored and built at publish time — the workflow compiles before publishing.
+- `dist/` is committed so a clone — and the git-install route — works; the `release` workflow rebuilds it (`bun run compile`) before publishing.
 - The changelog lives in `CHANGELOG.md` (Keep a Changelog, Semantic Versioning).
 - Two tracks: the registry is the slow/stable track (tagged releases only); a git install spec at any commit is the fast/experimental track (every commit installable).
 
 ## Guardrails
 
 - Never add an npm script named `install`, `postinstall`, `preinstall`, `build`, `prepare`, or `prepack`: a git install would then re-trigger a dependency-preparation step that is not needed here.
-- `dist/` is gitignored, so it must be built (`bun run compile`) before any package is published — never publish from a stale or missing `dist/`.
+- `dist/` is committed, so rebuild it (`bun run compile`) before any package is published — never publish from a stale or missing `dist/`.
 - Keep the docs' publication claims true: if the install, build, or publish story changes, update `README.md`, `INSTALL.md` and this guide together.
 - Do not hand-edit `dist/`: it is generated output; change the source and recompile.
