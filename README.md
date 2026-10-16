@@ -100,7 +100,7 @@ src/tui/                  one module per concern: rows, config, file-config, sta
                           go-panel / go-look, guard (+tokens), clipboard,
                           host-clipboard, ticker, throughput, coerce
 scripts/build.ts          compile script behind `bun run compile`
-fixtures/                 test suite (`*.test.ts`, 22 files)
+fixtures/                 test suite (`*.test.ts`, 21 files)
 flight-deck.example.jsonc every option, documented inline
 flight-deck.schema.json   types, defaults and allowed values
 INSTALL.md                the two install routes
@@ -150,7 +150,7 @@ TypeScript `strict` with `noUncheckedIndexedAccess`; JSX `preserve` with `@opent
 
 ## Testing
 
-`bun run check` = `tsc --noEmit` + `bun test`. The suite (`fixtures/*.test.ts`, 22 files) includes headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters rendered, plus coverage for config/file-config/schema, formatting, elapsed, stats, tps, caution, persist, guard, go usage/panel/look, clipboard, ticker, toast cadence, width and rail defects. CI runs typecheck plus tests on `main` pushes and pull requests (`check.yml`); `ci.yml` compiles plus tests on push/PR.
+`bun run check` = `tsc --noEmit` + `bun test`. The suite (`fixtures/*.test.ts`, 21 files) includes headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters rendered, plus coverage for config/file-config/schema, formatting, elapsed, stats, tps, caution, persist, guard, go usage/panel/look, clipboard, ticker, toast cadence, width and rail defects. CI runs typecheck plus tests on `main` pushes and pull requests (`check.yml`); `ci.yml` compiles plus tests on push/PR.
 
 ## Contributing
 
