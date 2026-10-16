@@ -2,7 +2,7 @@
 
 Compatible with opencode 2.0.30.
 
-Two routes. Plugin entries are bare strings in the `plugins` array of `opencode.jsonc`. The package is not published to npm: there is no `oc-flight-deck@x.y.z` npm install route.
+Two routes. Plugin entries are bare strings in the `plugins` array of `opencode.jsonc`. The package is published to npm as `oc-flight-deck@x.y.z`.
 
 ## GIT - remote install (MEASURED: WORKS as package spec)
 

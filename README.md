@@ -29,7 +29,7 @@ A session's own cost excludes its subagents, so the reported figure understates 
 
 ## Install
 
-Compatible with opencode 2.0.30. The package is not published to npm, so install from git:
+Compatible with opencode 2.0.30. The package is published to npm, and installable from git:
 
 1. Add the plugin to the `plugins` array in your `opencode.jsonc`:
    ```jsonc
