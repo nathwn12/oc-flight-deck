@@ -159,17 +159,18 @@ export async function copyToClipboard(
  *
  * Split from {@link copyToClipboard} so the wordings are pure and tested
  * directly. Success is claimed ONLY for a verified host write, and only then
- * does the message name the full `id`. Every other outcome - an OSC52 dispatch
- * included - is a distinct non-success that does not claim the id is on the
- * clipboard: it is better to say the copy could not be confirmed than to imply
- * one that was never verified.
+ * does the message name the full `id`. An OSC52 dispatch is advisory
+ * (`warning`): the bytes were sent but no backend can confirm the terminal
+ * acted on them. Every other outcome is a genuine failure (`error`). No
+ * non-success claims the id is on the clipboard: it is better to say the copy
+ * could not be confirmed than to imply one that was never verified.
  */
 export function copyFeedback(
   result: CopyResult,
   id: string,
 ): {
   readonly ok: boolean;
-  readonly variant: "success" | "error";
+  readonly variant: "success" | "warning" | "error";
   readonly message: string;
 } {
   if (result.verified) {
@@ -179,8 +180,8 @@ export function copyFeedback(
     case "osc52-dispatched":
       return {
         ok: false,
-        variant: "error",
-        message: "Sent the session id to the terminal, but could not confirm it was copied.",
+        variant: "warning",
+        message: "Sent the session id to the terminal; the terminal does not confirm copies, so paste to verify.",
       };
     case "unsupported":
       return { ok: false, variant: "error", message: "This terminal cannot copy to the clipboard." };
