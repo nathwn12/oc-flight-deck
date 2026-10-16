@@ -49,7 +49,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "build": "bun scripts/build.ts",
+    "compile": "bun scripts/build.ts",
     "check": "bun run typecheck && bun test",
     "prepublishOnly": "bun run check"
   },

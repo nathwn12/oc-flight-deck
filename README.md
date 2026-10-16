@@ -89,7 +89,7 @@ bun install
 bun run check
 ```
 
-`bun run check` typechecks and runs the suite, including headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters that come out. The shipped entries are compiled, not raw source: `bun run build` emits plain JS to `dist/` with explicit `jsx-runtime` imports for the host (required on opencode 2.0.30, which cannot resolve a raw `.tsx` entry under `node_modules`). `dist/` is committed, since the git install route loads the entry from the clone. To load the plugin from a checkout while working on it, name the checkout as a git file URL in the `opencode.jsonc` of the project you run OpenCode in:
+`bun run check` typechecks and runs the suite, including headless OpenTUI render tests that mount the panel in a real renderer and assert the exact characters that come out. The shipped entries are compiled, not raw source: `bun run compile` emits plain JS to `dist/` with explicit `jsx-runtime` imports for the host (required on opencode 2.0.30, which cannot resolve a raw `.tsx` entry under `node_modules`). `dist/` is committed, since the git install route loads the entry from the clone. To load the plugin from a checkout while working on it, name the checkout as a git file URL in the `opencode.jsonc` of the project you run OpenCode in:
 
 ```jsonc
 {

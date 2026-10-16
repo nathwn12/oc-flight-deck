@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Opencode 2.0.30 compatibility: the shipped entries are now plain compiled JS in `dist/` (`bun run build`), not raw source. A raw `.tsx` entry under `node_modules` falls back to Bun's native JSX transform on this host, whose injected `jsx-dev-runtime` import bypasses the rewrite loader and fails to resolve — so the TUI entry ships with explicit `jsx`/`jsxs` imports from `@opentui/solid/jsx-runtime` and no raw JSX. `package.json` `exports` (`"."` and `"./tui"`) and `files` point at `dist/` (`src` stays for types and dev), `@opentui/*` and `solid-js`/`solid-js/store` stay external with nothing bundled or copied, and `dist/` is committed because the git install route loads the entry from the clone. The package is not published to npm: install from the git package spec or a local directory entry (see INSTALL.md).
+- Opencode 2.0.30 compatibility: the shipped entries are now plain compiled JS in `dist/` (`bun run compile`), not raw source. A raw `.tsx` entry under `node_modules` falls back to Bun's native JSX transform on this host, whose injected `jsx-dev-runtime` import bypasses the rewrite loader and fails to resolve — so the TUI entry ships with explicit `jsx`/`jsxs` imports from `@opentui/solid/jsx-runtime` and no raw JSX. `package.json` `exports` (`"."` and `"./tui"`) and `files` point at `dist/` (`src` stays for types and dev), `@opentui/*` and `solid-js`/`solid-js/store` stay external with nothing bundled or copied, and `dist/` is committed because the git install route loads the entry from the clone. The package is not published to npm: install from the git package spec or a local directory entry (see INSTALL.md).
 
 ## [0.19.0] - 2026-10-11
 

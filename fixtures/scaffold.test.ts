@@ -104,7 +104,7 @@ describe("flight deck plugin", () => {
     expect(packageJson.exports["."]).toMatchObject({ import: "./dist/index.js" });
     expect(packageJson.exports["./tui"]).toMatchObject({ import: "./dist/tui/index.js" });
     expect(packageJson.files).toContain("dist");
-    expect(packageJson.scripts.build).toContain("scripts/build");
+    expect(packageJson.scripts.compile).toContain("scripts/build");
     expect(packageJson.dependencies).toMatchObject({ "@opencode/plugin": "2.0.30" });
     // Deliberate exact pin: a supply-chain guard on the host version built against.
     expect(packageJson.dependencies["jsonc-parser"]).toBeUndefined();
