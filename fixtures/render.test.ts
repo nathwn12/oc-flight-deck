@@ -774,7 +774,7 @@ test("reads tps as the session's own live generation rate, integer and reasoning
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
@@ -805,14 +805,14 @@ test("reads tps as the session's own live generation rate, integer and reasoning
   expect(frame).not.toContain("1100 tok/s");
 });
 
-test("reads the family rate by default while the root idles and a child streams", async () => {
-  // The shipped default (`sidebar.tps.scope` absent means `"family"`): the
-  // numerator sums generation tokens across the root and its subagents, and
-  // the denominator is the union of all their streaming spans — concurrent
+test("reads the settled-turn average by default while the root idles and a child streams", async () => {
+  // The shipped default (`sidebar.tps.display` absent means `"avg"`): the
+  // numerator sums generation tokens over settled turns in the family scope,
+  // and the denominator is the union of their streaming spans — concurrent
   // decoders share wall clock, so overlaps merge instead of adding. The
-  // root's own turn is frozen; only the child's advances. Two polls through
-  // the real panel: the first only sets the tracker's baselines and draws
-  // nothing (persist: false hides the zero).
+  // root's own turn is frozen; only the child's advances. Settled turns
+  // divide on the first poll, so the row draws immediately — no baselines to
+  // set, and no second poll to wait for. Two polls through the real panel.
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
@@ -837,16 +837,91 @@ test("reads the family rate by default while the root idles and a child streams"
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  // 1,400 generation tokens (the root's 1,100 plus the child's 300) over the
+  // 5 s union of their settled spans: 280 tok/s on the first poll. The
+  // session records' lifetime totals (60,000 over 600 s = 100) must not leak in.
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       280 tok/s");
   // Past the reader's 1 s cache, so the second render re-derives.
   await Bun.sleep(1_100);
   messagesBySession.ses_child = [
     { type: "assistant", time: { created: now - 60_000, streamed: now - 54_000 }, tokens: { output: 1300 } },
   ];
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // The child's +1,000 generation tokens over the 1 s wider union: the
-  // family rate, not the root's frozen zero.
-  expect(frame).toContain("tps       1000 tok/s");
+  // The child's +1,000 generation tokens over the 1 s wider union: 2,400
+  // over 6 s. The live figure would read 1000 tok/s here instead.
+  expect(frame).toContain("tps       400 tok/s");
+  expect(frame).not.toContain("1000 tok/s");
+});
+
+test("draws both figures on one line when the display asks for both", async () => {
+  // `sidebar.tps.display: "both"`: the live half is still on its first poll
+  // (no delta yet, so zero) while the settled average already divides — one
+  // line carrying both, `0 live · 550 avg`.
+  const now = Date.now();
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "both" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 0 } },
+    {
+      messages: [
+        {
+          type: "assistant",
+          time: { created: now - 60_000, streamed: now - 58_000 },
+          tokens: { output: 200, reasoning: 900 },
+        },
+      ],
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       0 live · 550 avg");
+});
+
+test("both mode degrades to hiding when nothing settled and nothing generates", async () => {
+  // An in-flight turn only: no `streamed` rung, so the average is unknown —
+  // and the live half is on its first poll, so zero. Without either figure
+  // there is no row, which persist: false keeps hidden.
+  const now = Date.now();
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "both" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 0 } },
+    {
+      messages: [{ type: "assistant", time: { created: now - 500 }, tokens: { output: 50 } }],
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  expect(frame).not.toContain("tok/s");
+  expect(frame).not.toContain("live");
+});
+
+test("the average excludes the in-flight turn's tokens and time together", async () => {
+  // A settled 1,100 tokens over 2 s beside a turn still decoding with 5,000
+  // fresh output tokens: the mean stays 550. Counting the open turn would
+  // fold its tokens over its open span and read past 2,400.
+  const now = Date.now();
+  const { context, claims } = harness(
+    { sidebar: { rows: ["tps"], persist: false } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 0 } },
+    {
+      messages: [
+        {
+          type: "assistant",
+          time: { created: now - 60_000, streamed: now - 58_000 },
+          tokens: { output: 200, reasoning: 900 },
+        },
+        { type: "assistant", time: { created: now - 500 }, tokens: { output: 5_000 } },
+      ],
+    },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const frame = await frameOf(sidebar!.render, 40, 6);
+  expect(frame).toContain("tps       550 tok/s");
+  expect(frame).not.toContain("2440");
 });
 
 test('scope "session" keeps the per-session figure on the same family fixture', async () => {
@@ -868,7 +943,7 @@ test('scope "session" keeps the per-session figure on the same family fixture', 
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
@@ -909,7 +984,7 @@ test("reads the session's own active turn spans, not the family's or the wall cl
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
     workspace(),
     // A lifetime figure of 30,000 / 600 s = 50 tok/s: a different metric, so it
     // must not be what is drawn.
@@ -946,7 +1021,7 @@ test("reads zero when the host goes idle instead of holding the settled figure",
     { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 500 } },
     { messagesBySession: { ses_test: turns } },
@@ -975,7 +1050,7 @@ test("a long gap between turns does not lower the figure", async () => {
     { type: "assistant", time: { created: now - 100_000, completed: now - 99_000 }, tokens: { output: 100 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 200 } },
     { messagesBySession: { ses_test: turns } },
@@ -1012,7 +1087,7 @@ test("ends a turn at streamed, then completed, and never at created", async () =
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     { messagesBySession },
@@ -1054,7 +1129,7 @@ test("counts a turn's reasoning in the numerator", async () => {
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     { messagesBySession },
@@ -1091,7 +1166,7 @@ test("keeps reasoning on its own row while tps counts generation", async () => {
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps", "reasoning"], persist: false } },
+    { sidebar: { rows: ["tps", "reasoning"], persist: false, tps: { display: "live" } } },
     workspace(),
     // The reasoning rung lives on the session record (the row's source); the
     // tps numerator reads generation off the turns. Same host state, two rows.
@@ -1120,9 +1195,9 @@ test("keeps reasoning on its own row while tps counts generation", async () => {
 test("counts a stamped turn that produced no tokens in the denominator", async () => {
   const now = Date.now();
   // The reviewer's two-turn shape: 100 tokens streamed over 2 s, then a second
-  // stamped turn that streamed for 2 s and produced nothing. The union divides
-  // by both spans. Either way the first poll only sets the baselines and draws
-  // nothing (persist: false hides the zero) — no rate exists before a delta.
+  // stamped turn that streamed for 2 s and produced nothing. The average
+  // divides by both spans — settled turns draw on the first poll, so this is
+  // the figure, not a hidden-until-delta live rate.
   const messages = [
     { type: "assistant", time: { created: now - 4_000, streamed: now - 2_000 }, tokens: { output: 100 } },
     { type: "assistant", time: { created: now - 2_000, streamed: now }, tokens: { output: 0 } },
@@ -1136,7 +1211,10 @@ test("counts a stamped turn that produced no tokens in the denominator", async (
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).not.toContain("tok/s");
+  // 100 tokens over the 4 s both turns cover: dropping the empty turn's span
+  // would read 50 instead.
+  expect(frame).toContain("tps       25 tok/s");
+  expect(frame).not.toContain("50 tok/s");
 });
 
 test("hides an in-flight turn on first sight, before any delta exists", async () => {
@@ -1221,7 +1299,7 @@ test("never falls back once the host is known to stamp, even if a read fails", a
     { type: "assistant", time: { created: now - 3_000, completed: now - 1_000 }, tokens: { output: 60 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     {
@@ -1270,7 +1348,7 @@ test("a subagent session keeps its own spans, not its family's", async () => {
     ],
   };
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session" } } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
     workspace(),
     // The rendered session is a CHILD: `root()` names someone else, so the host
     // keys `family()` by that root and returns ancestors plus siblings.
@@ -1515,7 +1593,7 @@ test("reads 0 tok/s on an idle session through the real panel", async () => {
     { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"] } },
+    { sidebar: { rows: ["tps"], tps: { display: "live" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 500 } },
     { messages, status: () => "idle" },

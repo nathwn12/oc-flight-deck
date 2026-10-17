@@ -248,6 +248,25 @@ export function tpsNeedsRepaint(displayed: number | undefined, smoothed: number)
 }
 
 /**
+ * The settled-turn average generation rate over already-accepted spans.
+ *
+ * The caller passes only turns that recorded `streamed` — settled work, so
+ * in-flight turns never enter either side — and this divides their generation
+ * tokens by the union of their spans, in seconds. Weighted by provider-active
+ * duration the way the official TUI weights it: each turn's tokens count once
+ * and overlapping spans merge, so concurrent decoders share wall clock. This
+ * is the `avg` the `tps` row draws by default: `undefined` when no settled
+ * turn exists (or their spans cover no time), so the row hides rather than
+ * dividing by zero. A zero-token settled history divides cleanly to zero,
+ * which the row hides through its existing rounded-zero rule.
+ */
+export function settledAverageRate(spans: readonly ThroughputSpan[]): number | undefined {
+  const { tokens, unionMs } = unionSpanTotals(spans);
+  if (unionMs <= 0) return undefined;
+  return tokens / (unionMs / 1_000);
+}
+
+/**
  * Generation tokens and generating time for the TPS numerator: output plus
  * reasoning, the same pair the official TUI divides.
  *

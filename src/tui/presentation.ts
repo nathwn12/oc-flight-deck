@@ -43,11 +43,14 @@ export function railLines(config: FlightDeckConfig, source: StatSource = {}): re
 
   // The display side of the config, which the row renderer reads alongside its
   // geometry. `format` is a top-level section, so it is mapped here.
+  // `tpsDisplay` is the `tps` row's view of `sidebar.tps.display`: which of
+  // the pair's figures draws (the settled-turn average by default).
   const layout = {
     ...config.layout,
     persist: config.sidebar.persist,
     placeholder: config.sidebar.placeholder,
     durationStyle: config.format.duration,
+    tpsDisplay: config.sidebar.tps.display,
     // Decided from the whole row list, the way `statRows` decides it: `cost`
     // folds the subagent total into itself only when no `total` row was asked
     // for, even if the cap later drops that row.

@@ -39,11 +39,13 @@ export interface StatSource {
   readonly busy?: unknown;
   readonly perms?: unknown;
   /**
-   * Session output rate, drawn whole. A near-instantaneous figure: the delta
-   * of output tokens between successive polls over the delta of generating
-   * time (streaming spans, or the busy-gated active clock), smoothed and held
-   * through noise, frozen while idle, hidden until a minimum sample is on
-   * record. Derived from state the host already holds.
+   * Session generation speed: the pair the reader hands over.
+   *
+   * `live` is the near-instantaneous EWMA figure (zero while idle), `avg`
+   * the settled-turn average over the same scope (`undefined` when no
+   * settled turn exists). Both are unknown at this boundary, so the row
+   * re-coerces them like every other field. Which one draws is
+   * `LayoutHint.tpsDisplay` (default `"avg"`).
    */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;
@@ -175,6 +177,17 @@ export interface LayoutHint {
    */
   readonly labels?: Readonly<Record<string, string>>;
   /**
+   * Which figure the `tps` row draws: the settled-turn average (`"avg"`, the
+   * default), the near-instantaneous rate (`"live"`), or both on one line
+   * (`"both"`). Carried here rather than read from config directly so the row
+   * stays a pure function of its inputs, exactly like `labels` above.
+   *
+   * Structurally typed — a string union, never the config's own type: like
+   * every other hint here this must not import the config module, which
+   * imports this one.
+   */
+  readonly tpsDisplay?: "avg" | "live" | "both";
+  /**
    * When true, `statRows` renders one row per named field even when the host
    * has no data for it, using `skeletonValue` (a live-shaped zero) and falling
    * back to `placeholder` for the fields that have no skeleton. Default off
@@ -227,7 +240,10 @@ export function skeletonValue(field: string, layout: LayoutHint): string | undef
     case "elapsed":
       return formatDuration(0, layout.durationStyle);
     case "tps":
-      return "0 tok/s";
+      // The skeleton follows the display mode: `both` draws both figures on
+      // one line, the single-figure modes draw the one shape either would
+      // read as a zero.
+      return layout.tpsDisplay === "both" ? "0 live · 0 avg" : "0 tok/s";
     case "spark":
       return "▁".repeat(Math.max(0, Math.floor(layout.sparkWidth ?? DEFAULT_SPARK_WIDTH)));
     case "reasoning":

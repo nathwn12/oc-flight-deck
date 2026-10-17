@@ -33,7 +33,7 @@ interface SidebarConfig {
   readonly footer: SidebarFooterConfig;
   /** Live session fields to render, top to bottom. Default `DEFAULT_SIDEBAR_ROWS`. */
   readonly rows: readonly string[];
-  /** Which sessions the `tps` row paces. Default `{ scope: DEFAULT_TPS_SCOPE }`. */
+  /** Which sessions the `tps` row paces, and which figure it draws. Default `{ scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY }`. */
   readonly tps: TpsConfig;
   /**
    * Render every named row even when the host has no data for it, using
@@ -131,6 +131,16 @@ export const DEFAULT_GO_PANEL_LOOK: GoPanelLook = {
 export type TpsScope = "family" | "session";
 
 /**
+ * Which figure the `tps` row draws.
+ *
+ * `"avg"` is the settled-turn average: generation tokens over assistant
+ * turns that recorded `streamed`, divided by the union of their
+ * `streamed - created` spans. `"live"` is the near-instantaneous EWMA rate,
+ * reading zero while nothing generates. `"both"` draws both on one line.
+ */
+export type TpsDisplay = "avg" | "live" | "both";
+
+/**
  * The shipped `tps` scope: `"family"`.
  *
  * The one default for this knob, so flipping the shipped behaviour is one
@@ -141,9 +151,23 @@ export type TpsScope = "family" | "session";
  */
 export const DEFAULT_TPS_SCOPE: TpsScope = "family";
 
+/**
+ * The shipped `tps` figure: `"avg"`.
+ *
+ * The one default for this knob, so flipping the shipped behaviour is one
+ * line here. The average ships because it answers the question the row is
+ * really asked — how fast is this session producing — instead of what the
+ * decoder is doing in this exact poll: an idle gap between turns reads as a
+ * steady figure rather than as zero, while `live` stays one edit away for
+ * the moment-to-moment view.
+ */
+export const DEFAULT_TPS_DISPLAY: TpsDisplay = "avg";
+
 interface TpsConfig {
   /** Which sessions the `tps` row paces. Default `DEFAULT_TPS_SCOPE`. */
   readonly scope: TpsScope;
+  /** Which figure the `tps` row draws. Default `DEFAULT_TPS_DISPLAY`. */
+  readonly display: TpsDisplay;
 }
 
 interface SidebarFooterConfig {
@@ -460,7 +484,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
     lines: DEFAULT_SIDEBAR_LINES,
     footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES, go: false },
     rows: DEFAULT_SIDEBAR_ROWS,
-    tps: { scope: DEFAULT_TPS_SCOPE },
+    tps: { scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY },
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
     maxLines: MAX_LINES,
@@ -755,6 +779,20 @@ function readTpsScope(value: unknown, issues: string[]): TpsScope {
 }
 
 /**
+ * Which figure the `tps` row draws, as one of a fixed trio of strings.
+ *
+ * Like the scope, there is no sensible repair for a misspelled display: the
+ * default comes back and the key is named, like every other invalid option.
+ * An absent key falls back silently.
+ */
+function readTpsDisplay(value: unknown, issues: string[]): TpsDisplay {
+  if (value === undefined) return DEFAULT_TPS_DISPLAY;
+  if (value === "avg" || value === "live" || value === "both") return value;
+  issues.push(`sidebar.tps.display must be "avg", "live" or "both"; using "avg"`);
+  return DEFAULT_TPS_DISPLAY;
+}
+
+/**
  * Which sessions the `tps` row paces.
  *
  * A malformed section falls back whole and is reported, like
@@ -765,10 +803,10 @@ function readTps(section: Record<string, unknown>, issues: string[]): TpsConfig 
   const raw = section["tps"];
   if (raw !== undefined && !isRecord(raw)) {
     issues.push("sidebar.tps must be an object; using defaults");
-    return { scope: DEFAULT_TPS_SCOPE };
+    return { scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY };
   }
   const tps = isRecord(raw) ? raw : {};
-  return { scope: readTpsScope(tps["scope"], issues) };
+  return { scope: readTpsScope(tps["scope"], issues), display: readTpsDisplay(tps["display"], issues) };
 }
 
 /**

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `notifications` section (`enabled`, `config`, `copy`, `caution`, all default `true`): the silencing layer over every toast the plugin can raise — the invalid-config warning, the copy outcome, and the opt-in caution toast. `"notifications": { "enabled": false }` is the one-line silence switch; each per-kind flag silences only its kind. `caution.toast` stays the feature opt-in (default `false`); the new section only ever silences, never enables.
 
+- `sidebar.tps.display` (`"avg"`, `"live"` or `"both"`, default `"avg"`): which figure the `tps` row draws. `avg` is the settled-turn average — generation tokens (output plus reasoning) over assistant turns that recorded `streamed`, divided by the union of their `streamed − created` spans — so an idle gap reads as a steady figure instead of zero and in-flight turns never dilute it. `live` is the near-instantaneous EWMA rate, reading zero while nothing generates. `both` draws both on one line (`106 live · 41 avg`), degrading to the live half alone when nothing settled yet. An unknown value falls back to `"avg"` and is reported.
+
+### Changed
+
+- The `tps` row now defaults to the settled-turn average (`sidebar.tps.display: "avg"`) instead of the near-instantaneous rate: the row holds steady through idle gaps between turns and draws on the first poll with no baselines to set. `live` keeps the previous per-poll behaviour byte-identically.
+
 ### Fixed
 
 - The session-id copy is now really verified: the plugin uses the host-served clipboard (`createHostClipboard` from `@opentui/core`, resolved to the host's own core instance) instead of no backend, and an OSC52 dispatch is confirmed by reading the OS clipboard back (up to 5 attempts, 60ms apart) before it counts — `osc52-confirmed` stays silent like every verified copy, while an unconfirmed dispatch keeps its advisory warning.

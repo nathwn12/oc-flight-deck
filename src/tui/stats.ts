@@ -22,6 +22,7 @@ export type { StatSource } from "./stat-fields.js";
 export {
   createInstantTps,
   instantTpsRate,
+  settledAverageRate,
   smoothTpsRate,
   TPS_EWMA_ALPHA,
   TPS_REPAINT_ABS,
