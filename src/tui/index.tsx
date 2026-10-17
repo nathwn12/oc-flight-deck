@@ -22,6 +22,7 @@ import { startGoBridge } from "./go.js";
 import { startTicker } from "./ticker.js";
 import { asCount, asRecord, type SessionLike } from "./coerce.js";
 import { createProjectTotals } from "./project-totals.js";
+import { createRealtimeTps } from "./realtime-tps.js";
 import { createSessionReads, locationOf } from "./session-reads.js";
 import { createTpsReader } from "./session-tps.js";
 
@@ -70,6 +71,14 @@ export default Plugin.define({
 
     const footer = footerLine(config);
     const releases: Array<() => void> = [];
+
+    // The plugin's first host subscription: the realtime TPS tracker listens
+    // to the host's streaming delta events from here on, so the `tps` row can
+    // watch a turn stream instead of only seeing its tokens after it settles.
+    // A host with no subscription surface degrades the tracker to a zero
+    // reader rather than failing setup, and disposal below drops the
+    // subscriptions so nothing leaks on unload.
+    const realtime = createRealtimeTps(context);
 
     // One themed line, in the exact form the sidebar draws: the line resolves
     // its own look from `config.style` (fixed lines use `style.lines`, every
@@ -182,6 +191,7 @@ export default Plugin.define({
         elapsedMsOf: (id, now) => sessionElapsed(id, now),
       },
       config.sidebar.tps.scope,
+      realtime,
     );
 
     // Recent turn sizes, oldest first. Drawn from messages the host already
@@ -468,6 +478,7 @@ export default Plugin.define({
     return () => {
       if (watchTimer !== undefined) clearInterval(watchTimer);
       watchTimer = undefined;
+      realtime.dispose();
       ticker?.dispose();
       bridge?.dispose();
       goBridge?.dispose();

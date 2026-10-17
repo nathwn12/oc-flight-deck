@@ -129,16 +129,38 @@ interface HarnessExtras {
   readonly renderer?: unknown;
 }
 
+type DeltaHandler = (event: unknown) => void;
+
 function harness(options: unknown, directory: string, session: unknown = undefined, extras: HarnessExtras = {}) {
   const claims: Claim[] = [];
   const toasts: string[] = [];
   const counts = { sessionList: 0, modelList: 0 };
+  // The fake host event bus for the realtime tracker: `emit` delivers one
+  // delta event on the host's own clock, so tests inject a stream without
+  // sleeping.
+  const deltaHandlers = new Map<string, DeltaHandler[]>();
+  const emit = (type: string, sessionID: string, delta: string, at: number) => {
+    for (const handler of deltaHandlers.get(type) ?? []) {
+      handler({ data: { sessionID, assistantMessageID: "msg_1", ordinal: 0, delta }, created: at });
+    }
+  };
   const context = {
     options,
     location: { directory },
     renderer: extras.renderer,
     theme: { text: { default: "#ffffff", subdued: "#888888" } },
     data: {
+      on: (type: string, handler: DeltaHandler) => {
+        const known = deltaHandlers.get(type) ?? [];
+        known.push(handler);
+        deltaHandlers.set(type, known);
+        return () => {
+          deltaHandlers.set(
+            type,
+            (deltaHandlers.get(type) ?? []).filter((entry) => entry !== handler),
+          );
+        };
+      },
       location: {
         default: () => ({ directory }),
         vcs: {
@@ -192,7 +214,7 @@ function harness(options: unknown, directory: string, session: unknown = undefin
       },
     },
   };
-  return { context: context as unknown as Parameters<typeof flightDeck.setup>[0], claims, toasts, counts };
+  return { context: context as unknown as Parameters<typeof flightDeck.setup>[0], claims, toasts, counts, emit };
 }
 
 async function frameOf(render: Render, width: number, height: number, sessionID = "ses_test"): Promise<string> {
@@ -753,30 +775,25 @@ test("a subagent total is still summed for the family root", async () => {
   expect(frame).toContain("cost      $0.211 · 1 subagent");
 });
 
-test("reads tps as the session's own live generation rate, integer and reasoning-inclusive", async () => {
-  // Scope `session`: today's per-session behaviour, pinned. Two polls through
-  // the real panel. The first only sets the tracker's
-  // baselines and draws nothing (persist: false hides the zero); the second
-  // divides the session's own delta. The parent's turn gains 100 generation
-  // tokens over 1 new second while the subagent's wider advancing turn stays
-  // under its own row; the session records' lifetime totals must not leak in.
-  const now = Date.now();
+test("reads rt as the session's own realtime estimate", async () => {
+  // Scope `session`: the parent's own delta stream divides alone — 100
+  // estimated tokens over a 1 s window — while the subagent's wider stream
+  // stays under its own row. Completed-only turns prove the host stamps but
+  // settle nothing, so the average stays unknown and the realtime figure
+  // asserts alone. The session records' lifetime totals must not leak in.
+  const at = Date.now() - 1_000;
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
-      {
-        type: "assistant",
-        time: { created: now - 60_000, streamed: now - 58_000 },
-        tokens: { output: 200, reasoning: 900 },
-      },
+      { type: "assistant", time: { created: at - 59_000, completed: at - 58_000 }, tokens: { output: 200, reasoning: 900 } },
     ],
     ses_child: [
-      { type: "assistant", time: { created: now - 60_000, streamed: now - 55_000 }, tokens: { output: 300 } },
+      { type: "assistant", time: { created: at - 59_000, completed: at - 55_000 }, tokens: { output: 300 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "rt" } } },
     workspace(),
-    { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
+    { time: { created: at - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
       family: ["ses_test", "ses_child"],
       messagesBySession,
@@ -784,23 +801,13 @@ test("reads tps as the session's own live generation rate, integer and reasoning
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
+  // No deltas yet: nothing streams, so no row (persist: false hides the zero).
   expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  // Past the reader's 1 s cache, so the second render re-derives.
-  await Bun.sleep(1_100);
-  messagesBySession.ses_test = [
-    {
-      type: "assistant",
-      time: { created: now - 60_000, streamed: now - 57_000 },
-      tokens: { output: 300, reasoning: 900 },
-    },
-  ];
-  messagesBySession.ses_child = [
-    { type: "assistant", time: { created: now - 60_000, streamed: now - 54_000 }, tokens: { output: 1300 } },
-  ];
+  emit("session.text.delta", "ses_test", "x".repeat(500), at);
+  emit("session.text.delta", "ses_child", "x".repeat(5000), at);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  // The parent's own delta is 100 generation tokens over 1 new second.
-  // Folding the child's advancing turn in would add its 1,000 new tokens to
-  // a 1 s wider union and read 1100 tok/s instead.
+  // The parent's own 100 tokens over its 1 s window. Folding the child's
+  // stream in would pace 1100 tokens over the same wall clock instead.
   expect(frame).toContain("tps       100 tok/s");
   expect(frame).not.toContain("1100 tok/s");
 });
@@ -848,17 +855,18 @@ test("reads the settled-turn average by default while the root idles and a child
   ];
   const frame = await frameOf(sidebar!.render, 40, 6);
   // The child's +1,000 generation tokens over the 1 s wider union: 2,400
-  // over 6 s. The live figure would read 1000 tok/s here instead.
+  // over 6 s. A poll-delta figure would read 1000 tok/s here instead; the
+  // average holds the whole scope's mean.
   expect(frame).toContain("tps       400 tok/s");
   expect(frame).not.toContain("1000 tok/s");
 });
 
 test("draws both figures on one line when the display asks for both", async () => {
-  // `sidebar.tps.display: "both"`: the live half is still on its first poll
-  // (no delta yet, so zero) while the settled average already divides — one
-  // line carrying both, `0 live · 550 avg`.
+  // `sidebar.tps.display: "both"`: a fresh 100-token delta a second ago
+  // draws the realtime half immediately, while the settled 1,100 tokens over
+  // 2 s draw the 550 average — one line carrying both, `100 rt · 550 avg`.
   const now = Date.now();
-  const { context, claims } = harness(
+  const { context, claims, emit } = harness(
     { sidebar: { rows: ["tps"], persist: false, tps: { display: "both" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
@@ -874,13 +882,14 @@ test("draws both figures on one line when the display asks for both", async () =
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       0 live · 550 avg");
+  emit("session.text.delta", "ses_test", "x".repeat(500), Date.now() - 1_000);
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       100 rt · 550 avg");
 });
 
 test("both mode degrades to hiding when nothing settled and nothing generates", async () => {
   // An in-flight turn only: no `streamed` rung, so the average is unknown —
-  // and the live half is on its first poll, so zero. Without either figure
-  // there is no row, which persist: false keeps hidden.
+  // and no delta streamed, so the realtime half is zero. Without either
+  // figure there is no row, which persist: false keeps hidden.
   const now = Date.now();
   const { context, claims } = harness(
     { sidebar: { rows: ["tps"], persist: false, tps: { display: "both" } } },
@@ -894,7 +903,7 @@ test("both mode degrades to hiding when nothing settled and nothing generates", 
   const { sidebar } = railClaims(claims);
   const frame = await frameOf(sidebar!.render, 40, 6);
   expect(frame).not.toContain("tok/s");
-  expect(frame).not.toContain("live");
+  expect(frame).not.toContain("rt");
 });
 
 test("the average excludes the in-flight turn's tokens and time together", async () => {
@@ -924,26 +933,22 @@ test("the average excludes the in-flight turn's tokens and time together", async
   expect(frame).not.toContain("2440");
 });
 
-test('scope "session" keeps the per-session figure on the same family fixture', async () => {
-  // Same host state as above — the root frozen, the child advancing — but
-  // `sidebar.tps.scope: "session"` restores the per-session figure: the
-  // root's own generating time never advances, so the row reads zero, which
+test('scope "session" hides the row while only a child streams', async () => {
+  // Same host state — the root frozen, the child streaming — but
+  // `sidebar.tps.scope: "session"` paces the root alone: its own stream is
+  // silent and nothing settled, so rt is 0 and the average unknown, which
   // persist: false hides rather than serving the family's rate.
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
-      {
-        type: "assistant",
-        time: { created: now - 60_000, streamed: now - 58_000 },
-        tokens: { output: 200, reasoning: 900 },
-      },
+      { type: "assistant", time: { created: now - 60_000, completed: now - 58_000 }, tokens: { output: 200 } },
     ],
     ses_child: [
-      { type: "assistant", time: { created: now - 60_000, streamed: now - 55_000 }, tokens: { output: 300 } },
+      { type: "assistant", time: { created: now - 60_000, completed: now - 55_000 }, tokens: { output: 300 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
+  const sessionHarness = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "rt" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
     {
@@ -951,44 +956,53 @@ test('scope "session" keeps the per-session figure on the same family fixture', 
       messagesBySession,
     },
   );
-  flightDeck.setup(context);
-  const { sidebar } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  // Past the reader's 1 s cache, so the second render re-derives rather than
-  // re-reading the cache: the idle root must read zero, not the family rate.
-  await Bun.sleep(1_100);
-  messagesBySession.ses_child = [
-    { type: "assistant", time: { created: now - 60_000, streamed: now - 54_000 }, tokens: { output: 1300 } },
-  ];
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  flightDeck.setup(sessionHarness.context);
+  const sessionSidebar = railClaims(sessionHarness.claims).sidebar;
+  sessionHarness.emit("session.text.delta", "ses_child", "x".repeat(500), Date.now() - 1_000);
+  expect(await frameOf(sessionSidebar!.render, 40, 6)).not.toContain("tok/s");
+  // Family scope on the same streams paces the child.
+  const familyHarness = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "rt" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 30_000, reasoning: 30_000 } },
+    {
+      family: ["ses_test", "ses_child"],
+      messagesBySession,
+    },
+  );
+  flightDeck.setup(familyHarness.context);
+  const familySidebar = railClaims(familyHarness.claims).sidebar;
+  familyHarness.emit("session.text.delta", "ses_child", "x".repeat(500), Date.now() - 1_000);
+  expect(await frameOf(familySidebar!.render, 40, 6)).toContain("tps       100 tok/s");
 });
 
 // The tps row is selected by host CAPABILITY - are assistant messages stamped? -
-// and never by the momentary state of the session. A stamped host takes the
-// live generation rate: per-poll generation deltas over the union of the turns' own
-// spans, so idle between turns is never billed and the figure freezes when
-// work stops.
+// and never by the momentary state of the session. A stamped host divides the
+// settled-turn average over the union of the turns' own spans, so idle between
+// turns is never billed; the realtime estimate beside it comes from delta
+// events and reads zero while nothing streams.
 
-test("reads the session's own active turn spans, not the family's or the wall clock", async () => {
-  // Scope `session`: the family's spans stay out even though the host lists
-  // them under their own sessions.
-  const now = Date.now();
+test("reads the session's own delta stream, not the family's or the lifetime record", async () => {
+  // Scope `session`: only the rendered session's deltas divide — 100
+  // estimated tokens over a 1 s window. The subagent's wider stream and the
+  // session record's lifetime figure (30,000 / 600 s = 50 tok/s) must not
+  // leak in. Completed-only turns prove the host stamps but settle nothing.
+  const at = Date.now() - 1_000;
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
-      // A turn an hour earlier: the idle gap to the rest must not be billed.
-      { type: "assistant", time: { created: now - 3_600_000, completed: now - 3_599_000 }, tokens: { output: 30 } },
-      { type: "assistant", time: { created: now - 10_000, completed: now - 9_000 }, tokens: { output: 90 } },
+      { type: "assistant", time: { created: at - 3_600_000, completed: at - 3_599_000 }, tokens: { output: 30 } },
+      { type: "assistant", time: { created: at - 10_000, completed: at - 9_000 }, tokens: { output: 90 } },
     ],
     ses_child: [
-      { type: "assistant", time: { created: now - 9_500, completed: now - 8_000 }, tokens: { output: 180 } },
+      { type: "assistant", time: { created: at - 9_500, completed: at - 8_000 }, tokens: { output: 180 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "rt" } } },
     workspace(),
-    // A lifetime figure of 30,000 / 600 s = 50 tok/s: a different metric, so it
-    // must not be what is drawn.
-    { time: { created: now - 600_000 }, tokens: { output: 30_000 } },
+    // A lifetime figure of 30,000 / 600 s = 50 tok/s: a different metric, so
+    // it must not be what is drawn.
+    { time: { created: at - 600_000 }, tokens: { output: 30_000 } },
     {
       family: ["ses_test", "ses_child"],
       messagesBySession,
@@ -996,111 +1010,92 @@ test("reads the session's own active turn spans, not the family's or the wall cl
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws nothing.
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  // Only the parent's recent turn advances: +200 tokens over +1 s. The
-  // subagent's overlapping turn stays frozen under its own row — merging it
-  // would leave the union unmoved while adding its tokens, reading zero.
-  messagesBySession.ses_test = [
-    { type: "assistant", time: { created: now - 3_600_000, completed: now - 3_599_000 }, tokens: { output: 30 } },
-    { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 290 } },
-  ];
-  const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       200 tok/s");
-  expect(frame).not.toContain("50 tok/s");
-});
-
-test("reads zero when the host goes idle instead of holding the settled figure", async () => {
-  const now = Date.now();
-  // Three polls: the first sets the baselines, the advancing second paints
-  // 300 tok/s, and the third finds the spans frozen — the session is not
-  // generating right now — so it reports 0, which persist: false hides rather
-  // than serving the stale rate.
-  const turns: unknown[] = [
-    { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
-  ];
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
-    workspace(),
-    { time: { created: now - 600_000 }, tokens: { output: 500 } },
-    { messagesBySession: { ses_test: turns } },
-  );
-  flightDeck.setup(context);
-  const { sidebar } = railClaims(claims);
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  turns[0] = {
-    type: "assistant",
-    time: { created: now - 120_000, completed: now - 117_000 },
-    tokens: { output: 800 },
-  };
-  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       300 tok/s");
-  // Past the reader's 1 s cache, so the third render re-derives rather than
-  // re-reading the cache: the stalled poll must read zero, not hold or decay.
-  await Bun.sleep(1_100);
-  const last = await frameOf(sidebar!.render, 40, 6);
-  expect(last).not.toContain("300 tok/s");
-  expect(last).not.toContain("tok/s");
-});
-
-test("a long gap between turns does not lower the figure", async () => {
-  const now = Date.now();
-  const turns: unknown[] = [
-    { type: "assistant", time: { created: now - 100_000, completed: now - 99_000 }, tokens: { output: 100 } },
-  ];
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
-    workspace(),
-    { time: { created: now - 600_000 }, tokens: { output: 200 } },
-    { messagesBySession: { ses_test: turns } },
-  );
-  flightDeck.setup(context);
-  const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws nothing.
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  // A second turn an idle ~95 s later: the delta is 100 tokens over the 1 s
-  // the new turn actually ran. Billing the idle between them would read 2 tok/s.
-  turns.push(
-    { type: "assistant", time: { created: now - 5_000, completed: now - 4_000 }, tokens: { output: 100 } },
-  );
+  emit("session.text.delta", "ses_test", "x".repeat(500), at);
+  emit("session.text.delta", "ses_child", "x".repeat(5000), at);
   const frame = await frameOf(sidebar!.render, 40, 6);
   expect(frame).toContain("tps       100 tok/s");
-  expect(frame).not.toContain("2 tok/s");
+  expect(frame).not.toContain("50 tok/s");
+  expect(frame).not.toContain("1100 tok/s");
 });
 
-test("ends a turn at streamed, then completed, and never at created", async () => {
+test("reads zero when the stream goes stale instead of holding the figure", async () => {
+  // A delta from ten seconds ago is pruned from the window: nothing fresh
+  // streams, so the row reads zero rather than holding a rate. A fresh delta
+  // then paints immediately — recovery needs no second poll.
+  const now = Date.now();
+  const messages = [
+    { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
+  ];
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "rt" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 500 } },
+    { messages },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  emit("session.text.delta", "ses_test", "x".repeat(500), now - 10_000);
+  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  emit("session.text.delta", "ses_test", "x".repeat(500), Date.now() - 1_000);
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       100 tok/s");
+});
+
+test("simultaneous bursts accumulate over their shared coverage", async () => {
+  // Two deltas on the same instant are additive: 200 estimated tokens over
+  // the one shared second, not two separate figures. Deltas only ever add —
+  // there is no backwards counter to rebaseline.
+  const now = Date.now();
+  const messages = [
+    { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
+  ];
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "rt" } } },
+    workspace(),
+    { time: { created: now - 600_000 }, tokens: { output: 200 } },
+    { messages },
+  );
+  flightDeck.setup(context);
+  const { sidebar } = railClaims(claims);
+  const at = Date.now() - 1_000;
+  emit("session.text.delta", "ses_test", "x".repeat(500), at);
+  emit("session.text.delta", "ses_test", "x".repeat(500), at);
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       200 tok/s");
+});
+
+test("the average ends a turn at streamed while the realtime figure needs no stamps", async () => {
+  // The average divides settled work only: 60 tokens over the 2 s the first
+  // turn streamed. The second turn's advancing `completed` never enters the
+  // average — only `streamed` ends decoding — and the realtime figure,
+  // drawn from delta events, never consults these stamps at all.
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
       // Both rungs present: `streamed` decides the end, `completed` does not.
-      // 60 tokens over the 2 s the provider streamed. `completed` (5 s) would
-      // settle the turn after its tools ran and read a slower rate instead.
+      // 60 tokens over the 2 s the provider streamed.
       {
         type: "assistant",
         time: { created: now - 60_000, streamed: now - 58_000, completed: now - 55_000 },
         tokens: { output: 60 },
       },
-      // No `streamed`: `completed` decides the end the same way.
+      // No `streamed`: the tools-settling turn never enters the average,
+      // however far its `completed` advances.
       { type: "assistant", time: { created: now - 20_000, completed: now - 18_000 }, tokens: { output: 60 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     { messagesBySession },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws nothing.
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
+  // The average draws on the first poll: settled work needs no delta.
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       30 tok/s");
+  // Past the reader's 1 s cache, so the second render re-derives: the second
+  // turn's `completed` advances, but with no `streamed` it still counts
+  // for nothing and the mean holds at 30.
   await Bun.sleep(1_100);
-  // Only `completed` advances now — the decoding clock stands still for the
-  // first turn — while the second turn gains 100 tokens over 1 new second.
-  // Ending the first turn at `completed` would add 5 idle-settling seconds to
-  // the delta and read 17 tok/s instead of 100.
   messagesBySession.ses_test = [
     {
       type: "assistant",
@@ -1109,52 +1104,35 @@ test("ends a turn at streamed, then completed, and never at created", async () =
     },
     { type: "assistant", time: { created: now - 20_000, completed: now - 17_000 }, tokens: { output: 160 } },
   ];
-  const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       100 tok/s");
-  expect(frame).not.toContain("17 tok/s");
+  emit("session.text.delta", "ses_test", "x".repeat(500), Date.now() - 1_000);
+  // The default display draws the average: the fresh delta moves only the
+  // realtime half, so the row still reads 30.
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       30 tok/s");
 });
 
-test("counts a turn's reasoning in the numerator", async () => {
+test("counts a reasoning delta in the realtime figure", async () => {
+  // A 100-token delta on the reasoning channel paces the decoder exactly
+  // like a text delta. A text-only numerator would see nothing streaming and
+  // draw no row.
   const now = Date.now();
-  // One message carrying both timestamps and both token counts, the shape a
-  // real host hands over: `streamed` is the decoding clock, `completed` settles
-  // the turn 28 s later once its tools have run.
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
-      {
-        type: "assistant",
-        time: { created: now - 60_000, streamed: now - 58_000, completed: now - 30_000 },
-        tokens: { output: 60, reasoning: 40 },
-      },
+      { type: "assistant", time: { created: now - 60_000, completed: now - 58_000 }, tokens: { output: 60, reasoning: 40 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "rt" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     { messagesBySession },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws nothing.
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  // The turn gains 200 generation tokens over 2 new seconds of streaming:
-  // 100 tok/s. The old output-only numerator would see half the delta and
-  // read 50; the old `completed` denominator would read almost nothing.
-  messagesBySession.ses_test = [
-    {
-      type: "assistant",
-      time: { created: now - 60_000, streamed: now - 56_000, completed: now - 30_000 },
-      tokens: { output: 160, reasoning: 140 },
-    },
-  ];
-  const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       100 tok/s");
-  expect(frame).not.toContain("tps       50 tok/s");
+  emit("session.reasoning.delta", "ses_test", "x".repeat(500), Date.now() - 1_000);
+  expect(await frameOf(sidebar!.render, 40, 6)).toContain("tps       100 tok/s");
 });
 
-test("keeps reasoning on its own row while tps counts generation", async () => {
+test("keeps reasoning on its own row while rt paces the stream", async () => {
   const now = Date.now();
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_test: [
@@ -1165,28 +1143,21 @@ test("keeps reasoning on its own row while tps counts generation", async () => {
       },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps", "reasoning"], persist: false, tps: { display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps", "reasoning"], persist: false, tps: { display: "rt" } } },
     workspace(),
     // The reasoning rung lives on the session record (the row's source); the
-    // tps numerator reads generation off the turns. Same host state, two rows.
+    // realtime figure counts the stream instead. Same host state, two rows.
     { time: { created: now - 600_000 }, tokens: { output: 60, reasoning: 174857 } },
     { messagesBySession },
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws no tps line.
+  // No deltas yet: the realtime figure is zero, which persist: false hides.
   expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  // The turn gains 1,000 output tokens over 1 new second while reasoning
-  // holds: 1000 tok/s, and the reasoning tokens still ride their own row.
-  messagesBySession.ses_test = [
-    {
-      type: "assistant",
-      time: { created: now - 60_000, streamed: now - 57_000 },
-      tokens: { output: 1060, reasoning: 174857 },
-    },
-  ];
+  // A 1,000-token output delta a second ago paints 1000 tok/s, and the
+  // reasoning tokens still ride their own row.
+  emit("session.text.delta", "ses_test", "x".repeat(5000), Date.now() - 1_000);
   const frame = await frameOf(sidebar!.render, 40, 6);
   expect(frame).toContain("tps       1000 tok/s");
   expect(frame).toContain("reasoning 175k");
@@ -1197,7 +1168,7 @@ test("counts a stamped turn that produced no tokens in the denominator", async (
   // The reviewer's two-turn shape: 100 tokens streamed over 2 s, then a second
   // stamped turn that streamed for 2 s and produced nothing. The average
   // divides by both spans — settled turns draw on the first poll, so this is
-  // the figure, not a hidden-until-delta live rate.
+  // the figure, not a hidden-until-streamed estimate.
   const messages = [
     { type: "assistant", time: { created: now - 4_000, streamed: now - 2_000 }, tokens: { output: 100 } },
     { type: "assistant", time: { created: now - 2_000, streamed: now }, tokens: { output: 0 } },
@@ -1299,7 +1270,7 @@ test("never falls back once the host is known to stamp, even if a read fails", a
     { type: "assistant", time: { created: now - 3_000, completed: now - 1_000 }, tokens: { output: 60 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { display: "live" } } },
+    { sidebar: { rows: ["tps"], persist: false, tps: { display: "rt" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 0 } },
     {
@@ -1332,27 +1303,29 @@ test("never falls back once the host is known to stamp, even if a read fails", a
   expect(second).not.toContain("500 tok/s");
 });
 
-test("a subagent session keeps its own spans, not its family's", async () => {
+test("a subagent session paces its own stream, not its family's", async () => {
   // Scope `session`: the rendered session is a child, and the host keys
-  // `family()` by the root — only its own turn may enter the rate.
-  const now = Date.now();
+  // `family()` by the root — only its own deltas may enter the rate. The
+  // sibling streams 1,000 tokens over the same second; folding the family in
+  // would pace 1100 instead of 100.
+  const at = Date.now() - 1_000;
   const messagesBySession: Record<string, readonly unknown[]> = {
     ses_root: [
-      { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 6_000 } },
+      { type: "assistant", time: { created: at - 10_000, completed: at - 8_000 }, tokens: { output: 6_000 } },
     ],
     ses_test: [
-      { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 120 } },
+      { type: "assistant", time: { created: at - 10_000, completed: at - 8_000 }, tokens: { output: 120 } },
     ],
     ses_sibling: [
-      { type: "assistant", time: { created: now - 10_000, completed: now - 8_000 }, tokens: { output: 6_000 } },
+      { type: "assistant", time: { created: at - 10_000, completed: at - 8_000 }, tokens: { output: 6_000 } },
     ],
   };
-  const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "live" } } },
+  const { context, claims, emit } = harness(
+    { sidebar: { rows: ["tps"], persist: false, tps: { scope: "session", display: "rt" } } },
     workspace(),
     // The rendered session is a CHILD: `root()` names someone else, so the host
     // keys `family()` by that root and returns ancestors plus siblings.
-    { time: { created: now - 600_000 }, tokens: { output: 120 } },
+    { time: { created: at - 600_000 }, tokens: { output: 120 } },
     {
       family: ["ses_root", "ses_test", "ses_sibling"],
       messagesBySession,
@@ -1361,21 +1334,11 @@ test("a subagent session keeps its own spans, not its family's", async () => {
   );
   flightDeck.setup(context);
   const { sidebar } = railClaims(claims);
-  // The first poll only sets the baselines and draws nothing.
-  expect(await frameOf(sidebar!.render, 40, 6)).not.toContain("tok/s");
-  await Bun.sleep(1_100);
-  // Only the child's own turn advances: +200 tokens over +1 s. The sibling
-  // advances too, under its own row — merging the family would add its 1,000
-  // tokens to the same wider union and read 1200 tok/s.
-  messagesBySession.ses_test = [
-    { type: "assistant", time: { created: now - 10_000, completed: now - 7_000 }, tokens: { output: 320 } },
-  ];
-  messagesBySession.ses_sibling = [
-    { type: "assistant", time: { created: now - 10_000, completed: now - 7_000 }, tokens: { output: 7_000 } },
-  ];
+  emit("session.text.delta", "ses_test", "x".repeat(500), at);
+  emit("session.text.delta", "ses_sibling", "x".repeat(5000), at);
   const frame = await frameOf(sidebar!.render, 40, 6);
-  expect(frame).toContain("tps       200 tok/s");
-  expect(frame).not.toContain("1200 tok/s");
+  expect(frame).toContain("tps       100 tok/s");
+  expect(frame).not.toContain("1100 tok/s");
 });
 
 // The `ses` row is opt-in and draws a SHORT PRUNED PREVIEW of the id (clipped
@@ -1593,7 +1556,7 @@ test("reads 0 tok/s on an idle session through the real panel", async () => {
     { type: "assistant", time: { created: now - 120_000, completed: now - 118_000 }, tokens: { output: 500 } },
   ];
   const { context, claims } = harness(
-    { sidebar: { rows: ["tps"], tps: { display: "live" } } },
+    { sidebar: { rows: ["tps"], tps: { display: "rt" } } },
     workspace(),
     { time: { created: now - 600_000 }, tokens: { output: 500 } },
     { messages, status: () => "idle" },

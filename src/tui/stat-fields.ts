@@ -39,11 +39,13 @@ export interface StatSource {
   readonly busy?: unknown;
   readonly perms?: unknown;
   /**
-   * Session generation speed: the pair the reader hands over.
+   * Session generation speed: the figures the reader hands over.
    *
-   * `live` is the near-instantaneous EWMA figure (zero while idle), `avg`
-   * the settled-turn average over the same scope (`undefined` when no
-   * settled turn exists). Both are unknown at this boundary, so the row
+   * `rt` is the realtime estimate from the host's streaming delta events
+   * (zero while nothing streams), `avg` the settled-turn average over the
+   * same scope (`undefined` when no settled turn exists), `ttft` the mean
+   * time to first token in seconds (`undefined` while no step with a first
+   * delta is on record). All are unknown at this boundary, so the row
    * re-coerces them like every other field. Which one draws is
    * `LayoutHint.tpsDisplay` (default `"avg"`).
    */
@@ -178,15 +180,16 @@ export interface LayoutHint {
   readonly labels?: Readonly<Record<string, string>>;
   /**
    * Which figure the `tps` row draws: the settled-turn average (`"avg"`, the
-   * default), the near-instantaneous rate (`"live"`), or both on one line
-   * (`"both"`). Carried here rather than read from config directly so the row
-   * stays a pure function of its inputs, exactly like `labels` above.
+   * default), the realtime estimate from the host's streaming delta events
+   * (`"rt"`), or both on one line (`"both"`). Carried here rather than read
+   * from config directly so the row stays a pure function of its inputs,
+   * exactly like `labels` above.
    *
    * Structurally typed — a string union, never the config's own type: like
    * every other hint here this must not import the config module, which
    * imports this one.
    */
-  readonly tpsDisplay?: "avg" | "live" | "both";
+  readonly tpsDisplay?: "avg" | "rt" | "both";
   /**
    * When true, `statRows` renders one row per named field even when the host
    * has no data for it, using `skeletonValue` (a live-shaped zero) and falling
@@ -243,7 +246,7 @@ export function skeletonValue(field: string, layout: LayoutHint): string | undef
       // The skeleton follows the display mode: `both` draws both figures on
       // one line, the single-figure modes draw the one shape either would
       // read as a zero.
-      return layout.tpsDisplay === "both" ? "0 live · 0 avg" : "0 tok/s";
+      return layout.tpsDisplay === "both" ? "0 rt · 0 avg" : "0 tok/s";
     case "spark":
       return "▁".repeat(Math.max(0, Math.floor(layout.sparkWidth ?? DEFAULT_SPARK_WIDTH)));
     case "reasoning":
