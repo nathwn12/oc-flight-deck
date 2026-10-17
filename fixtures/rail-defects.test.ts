@@ -349,12 +349,18 @@ describe("family rt sums concurrent decoders and degrades with the average", () 
     const delta = (sessionID: string, messageID: string, at: number) => {
       step("session.text.delta", sessionID, messageID, { ordinal: 0, delta: "x" }, at);
     };
+    const settle = (sessionID: string, messageID: string, at: number) => {
+      step("session.step.ended", sessionID, messageID, { finish: "stop" }, at);
+    };
     // Dispatch at 0, first token a second later in the root; three seconds
-    // later in the child. The mean rides the both line beside rt and avg.
+    // later in the child. Steps finalize at end — the mean rides the both
+    // line beside rt and avg.
     step("session.step.started", "root", "m1", { started: 0 }, 0);
     delta("root", "m1", 1_000);
+    settle("root", "m1", 1_500);
     step("session.step.started", "child", "m2", { started: 0 }, 0);
     delta("child", "m2", 3_000);
+    settle("child", "m2", 3_500);
     expect(family.sessionTps("root", { time: { created: 0 } }).ttft).toBe(2);
     expect(session.sessionTps("root", { time: { created: 0 } }).ttft).toBe(1);
     expect(family.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: undefined, ttft: 2 });

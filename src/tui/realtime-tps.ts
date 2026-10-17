@@ -15,15 +15,17 @@
 // estimate tokens from delta bytes.
 //
 // ESTIMATE, not a measurement: the host publishes real counts only at step
-// end. Each delta is estimated at `max(1, ceil(bytes / 5))` tokens; the
-// settled average beside it stays the real figure.
+// end. Each non-empty delta is estimated at `max(1, ceil(bytes / 5))` tokens
+// (an empty delta carries nothing: 0); the settled average beside it stays
+// the real figure.
 //
 // Pure except for the subscription itself: samples are timestamped with an
 // injectable clock so tests pin the window without sleeping.
 
 // In-memory for the plugin's lifetime only: steps observed while the plugin
-// ran. A restart forgets every total — the same limitation as oc-tps, whose
-// averages the host never persisted either.
+// ran. A restart forgets every ring — the same limitation as oc-tps, whose
+// averages the host never persisted either. The mean covers finalized steps:
+// a step's TTFT appears once that step settles, never while it streams.
 
 import type { Plugin } from "@opencode/plugin/tui";
 import { asCount, asRecord, asText } from "./coerce.js";
@@ -42,6 +44,15 @@ export const RT_SAMPLE_WINDOW_MS = 5_000;
  * turns or done, so there is nothing to pace.
  */
 export const RT_STALE_MS = 1_500;
+
+/**
+ * The maximum finalized step values retained per session. The TTFT mean
+ * covers the most recent finalized steps, so the ring drops whole values
+ * oldest-first — a mean over retained values can never be negative or
+ * fabricated, unlike adjustments against an aggregate that can be evicted
+ * and recreated underneath a pending correction.
+ */
+export const RT_MAX_STEPS = 100;
 
 /**
  * Bound on the per-session sample map, mirroring the old poll tracker's
@@ -103,16 +114,19 @@ export interface RealtimeTps {
    * The mean time to first token over `ids`, in seconds — the oc-tps third
    * figure, reachable from the same event stream.
    *
-   * Per step: the first `session.text.delta` / `session.reasoning.delta` for
-   * its `assistantMessageID`, its event time minus the step's `started`
-   * ("Request dispatch time, before waiting for provider output"), clamped
-   * at 0. Later deltas never re-count; a step that ends or fails without any
-   * delta contributes nothing. Scope `"session"` means the displayed
-   * session's own steps; `"family"` pools every member's steps into one mean.
-   * `undefined` while no step with a first delta is on record — the both
-   * line omits the segment rather than inventing one.
+   * The mean covers the most recent finalized steps observed while the
+   * plugin ran (in-memory lifetime): per step, the earliest text/reasoning
+   * delta's event time for its `assistantMessageID` minus the step's
+   * `started` ("Request dispatch time, before waiting for provider
+   * output"), clamped at 0, pushed into the session's ring when the step
+   * ends or fails. A step's TTFT appears once that step settles — never
+   * while it streams — and a step that settles without any delta contributes
+   * nothing. Scope `"session"` means the displayed session's own ring;
+   * `"family"` pools every member's rings into one mean. `undefined` while
+   * no finalized value is retained — the both line omits the segment rather
+   * than inventing one.
    *
-   * Fresh on every call: it divides the running totals, never a held value.
+   * Fresh on every call: it means the retained values, never a held figure.
    */
   ttft(ids: readonly string[]): number | undefined;
   /** Drop the host subscriptions and the samples. Idempotent. */
@@ -133,14 +147,15 @@ export function createRealtimeTps(
   const now = opts?.now ?? Date.now;
   const samples = new Map<string, RealtimeSample[]>();
   const shown = new Map<string, { smoothed: number | undefined; displayed: number | undefined }>();
-  // TTFT state, same lifetime as the samples: pending dispatch stamps keyed
-  // by `assistantMessageID`, and running totals keyed by session. Both
-  // bounded with eviction like the sample ring — a host that starts steps it
-  // never ends must not grow these maps forever. A pending step keeps the
-  // earliest delta timestamp seen so far: delivery order is not trusted, so a
-  // later-received delta carrying an earlier stamp corrects the step.
-  const pendingStarts = new Map<string, { sessionID: string; started: number; best: number | undefined }>();
-  const ttftTotals = new Map<string, { totalMs: number; count: number }>();
+  // TTFT state, same lifetime as the samples: pending steps keyed by
+  // `assistantMessageID`, and per-session rings of finalized step values.
+  // Corrections happen ONLY inside the pending entry — the earliest delta
+  // stamp seen — so no session-level arithmetic can drift: the mean derives
+  // from retained values on read, and eviction drops whole values. Both maps
+  // are bounded: pending steps by the sample ring's bound, rings by session
+  // count and per-session value count.
+  const pendingStarts = new Map<string, { sessionID: string; started: number; earliest: number | undefined }>();
+  const ttftRings = new Map<string, number[]>();
   let disposed = false;
   let active = false;
   const releases: Array<() => void> = [];
@@ -186,60 +201,24 @@ export function createRealtimeTps(
     const reading = readDelta(event);
     if (reading === undefined) return;
     remember(reading.sessionID, { at: reading.at, tokens: estimateDeltaTokens(reading.delta) });
-    measureFirstToken(event, reading.at);
+    noteDelta(event, reading.at);
   };
 
   /**
-   * Fold one step's delta into its session's TTFT totals.
+   * Record one step's delta timestamp while the step is pending.
    *
-   * While the step is pending, every delta's own event time is a candidate:
-   * the earliest wins, so a later-received delta carrying an earlier stamp
-   * corrects the step's contribution in place (the session total moves by
-   * the delta between old and new). A delta at or after the best stamp is a
-   * duplicate, never a re-count. The step stays live — its ttft shows as
-   * soon as its first delta arrives and improves if an earlier-stamped delta
-   * lands later — until `session.step.ended` / `session.step.failed`
-   * finalizes it. The per-step figure is the delta's event time minus the
-   * step's `started`, clamped at 0 so a skewed clock can never subtract
-   * time. A step that settles without any delta leaves nothing behind.
+   * Delivery order is not trusted: the earliest stamp wins, so a
+   * later-received delta carrying an earlier time corrects the step in place.
+   * A delta at or after the best stamp is a duplicate, never a re-count. No
+   * session-level arithmetic happens here — the mean derives from finalized
+   * values on read, so a correction can never drift or negate a total.
    */
-  const measureFirstToken = (event: unknown, at: number): void => {
+  const noteDelta = (event: unknown, at: number): void => {
     const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined) return;
     const pending = pendingStarts.get(messageID);
     if (pending === undefined) return;
-    const step = Math.max(0, at - pending.started);
-    const prev = pending.best;
-    // A delta at or after the best stamp adds nothing — duplicates and
-    // later tokens never re-count.
-    if (prev !== undefined && step >= prev) return;
-    const adjust = prev === undefined ? step : step - prev;
-    pending.best = step;
-    const total = ttftTotals.get(pending.sessionID);
-    if (total !== undefined) {
-      ttftTotals.delete(pending.sessionID);
-      ttftTotals.set(pending.sessionID, {
-        totalMs: total.totalMs + adjust,
-        count: total.count + (prev === undefined ? 1 : 0),
-      });
-      return;
-    }
-    // The session's total is missing: evicted after this step was first
-    // measured, or never seeded because the session's history aged out. Seed
-    // from the step's own corrected value — never from a subtraction against
-    // a total that is no longer there, which would fabricate a zero from a
-    // negative adjust. This seed is sufficient (no need to shield sessions
-    // with pending steps from eviction): `pending.best` always carries this
-    // step's corrected measurement locally, so the seed is exact for the
-    // step itself, and totals eviction by design already concedes older
-    // history. Neither map can grow from it — both stay under their bound.
-    if (ttftTotals.size >= RT_MAX_SESSIONS) {
-      for (const oldest of ttftTotals.keys()) {
-        ttftTotals.delete(oldest);
-        break;
-      }
-    }
-    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+    if (pending.earliest === undefined || at < pending.earliest) pending.earliest = at;
   };
 
   const stepStarted = (event: unknown): void => {
@@ -260,17 +239,38 @@ export function createRealtimeTps(
         break;
       }
     }
-    pendingStarts.set(messageID, { sessionID, started, best: undefined });
+    pendingStarts.set(messageID, { sessionID, started, earliest: undefined });
   };
 
   const stepSettled = (event: unknown): void => {
     if (disposed) return;
     const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined) return;
-    // Finalize: the step's contribution stands as measured, and a step that
-    // settled without any delta leaves nothing behind — its pending start is
-    // dropped rather than left to linger.
+    const pending = pendingStarts.get(messageID);
+    // Finalize: the pending entry is always dropped. A step that settled
+    // without any delta contributes nothing; otherwise its single value —
+    // the earliest delta's event time minus dispatch, clamped at 0 — is
+    // pushed into the session's ring. The ring drops whole values
+    // oldest-first when full, so eviction can only omit steps, never invent
+    // or negate them.
     pendingStarts.delete(messageID);
+    if (pending === undefined || pending.earliest === undefined) return;
+    const value = Math.max(0, pending.earliest - pending.started);
+    const ring = ttftRings.get(pending.sessionID);
+    if (ring !== undefined) {
+      ttftRings.delete(pending.sessionID);
+      ring.push(value);
+      if (ring.length > RT_MAX_STEPS) ring.splice(0, ring.length - RT_MAX_STEPS);
+      ttftRings.set(pending.sessionID, ring);
+      return;
+    }
+    if (ttftRings.size >= RT_MAX_SESSIONS) {
+      for (const oldest of ttftRings.keys()) {
+        ttftRings.delete(oldest);
+        break;
+      }
+    }
+    ttftRings.set(pending.sessionID, [value]);
   };
 
   // Each subscription stands on its own: the release is retained the moment
@@ -399,13 +399,15 @@ export function createRealtimeTps(
     for (const id of ids) {
       if (typeof id !== "string" || seen.has(id)) continue;
       seen.add(id);
-      const total = ttftTotals.get(id);
-      if (total === undefined) continue;
-      totalMs += total.totalMs;
-      count += total.count;
+      const ring = ttftRings.get(id);
+      if (ring === undefined) continue;
+      for (const value of ring) {
+        totalMs += value;
+        count += 1;
+      }
     }
-    // No step with a first delta on record: unknown, never a guess — the
-    // both line omits the segment rather than inventing one.
+    // No finalized value retained: unknown, never a guess — the both line
+    // omits the segment rather than inventing one.
     if (count === 0) return undefined;
     return totalMs / count / 1_000;
   };
@@ -424,7 +426,7 @@ export function createRealtimeTps(
     samples.clear();
     shown.clear();
     pendingStarts.clear();
-    ttftTotals.clear();
+    ttftRings.clear();
   };
 
   return { get active() { return active && !disposed; }, rate, ttft, dispose };

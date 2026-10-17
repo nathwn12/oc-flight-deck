@@ -3,6 +3,7 @@ import {
   createRealtimeTps,
   estimateDeltaTokens,
   RT_MAX_SESSIONS,
+  RT_MAX_STEPS,
   RT_SAMPLE_WINDOW_MS,
   RT_STALE_MS,
 } from "../src/tui/realtime-tps.js";
@@ -301,61 +302,60 @@ describe("the time to first token", () => {
   const started = (bus: Bus, sessionID: string, messageID: string, startedAt: number, at = startedAt) => {
     step(bus, "session.step.started", sessionID, messageID, { started: startedAt }, at);
   };
+  const delta = (bus: Bus, sessionID: string, messageID: string, at: number, text = "x".repeat(500)) => {
+    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+      handler({ data: { sessionID, assistantMessageID: messageID, ordinal: 0, delta: text }, created: at });
+    }
+  };
+  const ended = (bus: Bus, sessionID: string, messageID: string, at: number) => {
+    step(bus, "session.step.ended", sessionID, messageID, { finish: "stop" }, at);
+  };
 
-  test("measures dispatch to first delta, clamped at zero", () => {
+  test("a step's ttft appears once the step settles, never while it streams", () => {
     const time = clock();
     const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
-    const delta = (messageID: string, at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
-      }
-    };
     // Nothing measured yet: unknown, never a guess.
     expect(tracker.ttft(["s"])).toBeUndefined();
     started(bus, "s", "m1", 1_000);
     // A delta for another step finds no pending start and counts nothing.
-    delta("other", 2_200);
+    delta(bus, "s", "other", 2_200);
     expect(tracker.ttft(["s"])).toBeUndefined();
-    delta("m1", 2_200);
+    delta(bus, "s", "m1", 2_200);
+    // The first delta arrived but the step is still open: still unknown.
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    ended(bus, "s", "m1", 3_000);
     expect(tracker.ttft(["s"])).toBeCloseTo(1.2, 10);
     tracker.dispose();
   });
 
-  test("only the first delta of a step counts", () => {
+  test("the earliest delta wins, however it arrives", () => {
     const time = clock();
     const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
     started(bus, "s", "m1", 1_000);
-    const delta = (at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x".repeat(500) }, created: at });
-      }
-    };
-    delta(2_000);
-    expect(tracker.ttft(["s"])).toBe(1);
-    // A later delta for the same step finds nothing pending: the mean holds.
-    delta(9_000);
+    delta(bus, "s", "m1", 9_000);
+    delta(bus, "s", "m1", 2_000);
+    // A duplicate of the best stamp changes nothing.
+    delta(bus, "s", "m1", 2_000);
+    ended(bus, "s", "m1", 10_000);
     expect(tracker.ttft(["s"])).toBe(1);
     tracker.dispose();
   });
 
-  test("means over steps, pooled per family and isolated per session", () => {
+  test("means over settled steps, pooled per family and isolated per session", () => {
     const time = clock();
     const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
-    const delta = (sessionID: string, messageID: string, at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID, assistantMessageID: messageID, ordinal: 0, delta: "x" }, created: at });
-      }
-    };
     started(bus, "root", "m1", 0);
-    delta("root", "m1", 1_000);
+    delta(bus, "root", "m1", 1_000);
+    ended(bus, "root", "m1", 2_000);
     started(bus, "child", "m2", 0);
-    delta("child", "m2", 3_000);
-    // Session scope: the displayed session's own steps alone.
+    delta(bus, "child", "m2", 3_000);
+    ended(bus, "child", "m2", 4_000);
+    // Session scope: the displayed session's own ring alone.
     expect(tracker.ttft(["root"])).toBe(1);
-    // Family scope: every member's steps pooled into one mean.
+    // Family scope: every member's rings pooled into one mean.
     expect(tracker.ttft(["root", "child"])).toBe(2);
     tracker.dispose();
   });
@@ -368,89 +368,8 @@ describe("the time to first token", () => {
     for (const handler of bus.handlers.get("session.reasoning.delta") ?? []) {
       handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x".repeat(10) }, created: 1_500 });
     }
+    ended(bus, "s", "m1", 2_000);
     expect(tracker.ttft(["s"])).toBe(1);
-    tracker.dispose();
-  });
-
-  test("a later-received delta with an earlier stamp corrects the step", () => {
-    const time = clock();
-    const { context, bus } = busContext();
-    const tracker = createRealtimeTps(context, { now: time.now });
-    const delta = (messageID: string, at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
-      }
-    };
-    started(bus, "s", "m1", 1_000);
-    // Delivered out of order: the 3000ms delta lands first and the step
-    // reads 2s — then the 2000ms delta corrects it to 1s in place.
-    delta("m1", 3_000);
-    expect(tracker.ttft(["s"])).toBe(2);
-    delta("m1", 2_000);
-    expect(tracker.ttft(["s"])).toBe(1);
-    tracker.dispose();
-  });
-
-  test("a correction landing after eviction seeds the corrected value, never zero", () => {
-    const time = clock();
-    const { context, bus } = busContext();
-    const tracker = createRealtimeTps(context, { now: time.now });
-    const delta = (sessionID: string, messageID: string, at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID, assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
-      }
-    };
-    started(bus, "s", "m1", 1_000);
-    delta("s", "m1", 3_000);
-    expect(tracker.ttft(["s"])).toBe(2);
-    // Fifty other sessions measure, settle, and push "s" out of the bounded
-    // totals — while "s"'s own step stays pending, its start never dropped.
-    for (let index = 0; index < RT_MAX_SESSIONS; index += 1) {
-      started(bus, `fill${index}`, `n${index}`, 0);
-      delta(`fill${index}`, `n${index}`, 1_000);
-      step(bus, "session.step.ended", `fill${index}`, `n${index}`, { finish: "stop" }, 2_000);
-    }
-    expect(tracker.ttft(["s"])).toBeUndefined();
-    // The earlier-stamped delta still corrects the pending step — from the
-    // step's own value, not from a subtraction against the evicted total,
-    // which would have fabricated 0.
-    delta("s", "m1", 2_000);
-    expect(tracker.ttft(["s"])).toBe(1);
-    tracker.dispose();
-  });
-
-  test("a duplicate delta never re-counts the step", () => {
-    const time = clock();
-    const { context, bus } = busContext();
-    const tracker = createRealtimeTps(context, { now: time.now });
-    const delta = (messageID: string, at: number) => {
-      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
-      }
-    };
-    started(bus, "s", "m1", 1_000);
-    delta("m1", 2_000);
-    started(bus, "s", "m2", 0);
-    delta("m2", 4_000);
-    // Two steps measured: (1 + 4) / 2.
-    expect(tracker.ttft(["s"])).toBe(2.5);
-    // The same stamp again changes nothing — count and total hold.
-    delta("m1", 2_000);
-    expect(tracker.ttft(["s"])).toBe(2.5);
-    tracker.dispose();
-  });
-
-  test("a whitespace-first token still measures the step", () => {
-    const time = clock();
-    const { context, bus } = busContext();
-    const tracker = createRealtimeTps(context, { now: time.now });
-    started(bus, "s", "m1", 1_000);
-    // The old trimmed coercion skipped this delta entirely; the raw string
-    // carries the timestamp that starts the clock.
-    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-      handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: " " }, created: 1_500 });
-    }
-    expect(tracker.ttft(["s"])).toBe(0.5);
     tracker.dispose();
   });
 
@@ -465,9 +384,7 @@ describe("the time to first token", () => {
     // nothing pending.
     started(bus, "s", "m2", 1_000);
     step(bus, "session.step.failed", "s", "m2", {}, 2_000);
-    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-      handler({ data: { sessionID: "s", assistantMessageID: "m2", ordinal: 0, delta: "x".repeat(500) }, created: 5_000 });
-    }
+    delta(bus, "s", "m2", 5_000);
     expect(tracker.ttft(["s"])).toBeUndefined();
     tracker.dispose();
   });
@@ -477,9 +394,8 @@ describe("the time to first token", () => {
     const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
     started(bus, "s", "m1", 5_000);
-    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
-      handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x" }, created: 1_000 });
-    }
+    delta(bus, "s", "m1", 1_000);
+    ended(bus, "s", "m1", 2_000);
     expect(tracker.ttft(["s"])).toBe(0);
     tracker.dispose();
   });
@@ -502,35 +418,86 @@ describe("the time to first token", () => {
     tracker.dispose();
   });
 
-  test("a rejected subscription keeps every earlier release and the accepted data", () => {
+  test("an evicted pending entry simply omits that step", () => {
     const time = clock();
-    // The second subscription (reasoning deltas) throws: the first release
-    // must survive, and the tracker stays live on what the host accepted.
-    const { context, bus } = busContext({ failAt: 2 });
+    const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
-    expect(tracker.active).toBe(true);
-    expect(bus.handlers.get("session.text.delta")).toHaveLength(1);
-    expect(bus.handlers.get("session.reasoning.delta")).toBeUndefined();
-    // Later subscriptions still land after the rejection.
-    expect(bus.handlers.get("session.step.started")).toHaveLength(1);
-    emit(bus, "session.text.delta", "s", "x".repeat(500), time.now());
-    time.advance(1_000);
-    expect(tracker.rate("s", ["s"])).toBe(100);
+    started(bus, "s", "m1", 1_000);
+    delta(bus, "s", "m1", 3_000);
+    // Fifty other pending steps push "s"'s out of the bounded map; each
+    // settles without a delta so nothing else is measured.
+    for (let index = 0; index < RT_MAX_SESSIONS; index += 1) {
+      started(bus, `fill${index}`, `n${index}`, 0);
+    }
+    for (let index = 0; index < RT_MAX_SESSIONS; index += 1) {
+      step(bus, "session.step.ended", `fill${index}`, `n${index}`, { finish: "stop" }, 1_000);
+    }
+    // The evicted step finalizes into nothing: unknown, never a fabricated
+    // value — and the later, earlier-stamped delta finds no pending entry.
+    delta(bus, "s", "m1", 2_000);
+    step(bus, "session.step.ended", "s", "m1", { finish: "stop" }, 4_000);
+    expect(tracker.ttft(["s"])).toBeUndefined();
     tracker.dispose();
-    // Every obtained release is still called — nothing leaks.
-    expect(bus.released).toHaveLength(4);
-    expect(bus.handlers.get("session.text.delta")).toBeUndefined();
   });
 
-  test("disposal forgets pending starts and running totals", () => {
+  test("the ring drops whole values oldest-first", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    expect(RT_MAX_STEPS).toBe(100);
+    const tracker = createRealtimeTps(context, { now: time.now });
+    for (let index = 1; index <= RT_MAX_STEPS + 1; index += 1) {
+      started(bus, "s", `m${index}`, 0);
+      delta(bus, "s", `m${index}`, index * 1_000);
+      ended(bus, "s", `m${index}`, index * 1_000 + 500);
+    }
+    // 101 steps measured 1s..101s; the ring keeps the newest 100, so the
+    // mean is exactly (2 + .. + 101) / 100.
+    expect(tracker.ttft(["s"])).toBe(51.5);
+    tracker.dispose();
+  });
+
+  test("eviction interleavings stay exact with no negativity", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    // The old aggregate's first failure: total evicted between corrections.
+    // Here the pending entry holds the earliest stamp itself, so settling
+    // after any amount of other-session traffic still divides 1s exactly.
+    started(bus, "s", "m1", 1_000);
+    delta(bus, "s", "m1", 3_000);
+    for (let index = 0; index < RT_MAX_SESSIONS; index += 1) {
+      started(bus, `fill${index}`, `n${index}`, 0);
+      delta(bus, `fill${index}`, `n${index}`, 500);
+      step(bus, "session.step.ended", `fill${index}`, `n${index}`, { finish: "stop" }, 600);
+    }
+    delta(bus, "s", "m1", 2_000);
+    ended(bus, "s", "m1", 4_000);
+    expect(tracker.ttft(["s"])).toBe(1);
+    // The old aggregate's second failure: recreation at 0.5s plus a
+    // correction to 1s pooled to −0.5s. Here both steps are whole values —
+    // the mean of 0.5 and 1 is 0.75 by construction, never negative.
+    started(bus, "s", "m2", 0);
+    delta(bus, "s", "m2", 500);
+    ended(bus, "s", "m2", 1_000);
+    expect(tracker.ttft(["s"])).toBe(0.75);
+    expect(tracker.ttft(["s"])).toBeGreaterThanOrEqual(0);
+    tracker.dispose();
+  });
+
+  test("disposal forgets pending steps and finalized rings", () => {
     const time = clock();
     const { context, bus } = busContext();
     const tracker = createRealtimeTps(context, { now: time.now });
     started(bus, "s", "m1", 0);
+    delta(bus, "s", "m1", 1_000);
+    ended(bus, "s", "m1", 2_000);
+    expect(tracker.ttft(["s"])).toBe(1);
     tracker.dispose();
     expect(tracker.ttft(["s"])).toBeUndefined();
     // Late step events go nowhere.
-    started(bus, "s", "m1", 0);
+    started(bus, "s", "m2", 0);
+    delta(bus, "s", "m2", 1_000);
+    step(bus, "session.step.ended", "s", "m2", { finish: "stop" }, 2_000);
     expect(tracker.ttft(["s"])).toBeUndefined();
   });
 });

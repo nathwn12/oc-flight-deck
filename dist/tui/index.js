@@ -1203,6 +1203,7 @@ function settledAverageRate(spans) {
 // src/tui/realtime-tps.ts
 var RT_SAMPLE_WINDOW_MS = 5000;
 var RT_STALE_MS = 1500;
+var RT_MAX_STEPS = 100;
 var RT_MAX_SESSIONS = 50;
 function estimateDeltaTokens(delta) {
   const bytes = Buffer.byteLength(delta, "utf8");
@@ -1213,7 +1214,7 @@ function createRealtimeTps(context, opts) {
   const samples = new Map;
   const shown = new Map;
   const pendingStarts = new Map;
-  const ttftTotals = new Map;
+  const ttftRings = new Map;
   let disposed = false;
   let active = false;
   const releases = [];
@@ -1251,37 +1252,17 @@ function createRealtimeTps(context, opts) {
     if (reading === undefined)
       return;
     remember(reading.sessionID, { at: reading.at, tokens: estimateDeltaTokens(reading.delta) });
-    measureFirstToken(event, reading.at);
+    noteDelta(event, reading.at);
   };
-  const measureFirstToken = (event, at) => {
+  const noteDelta = (event, at) => {
     const messageID = asText2(asRecord2(asRecord2(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined)
       return;
     const pending = pendingStarts.get(messageID);
     if (pending === undefined)
       return;
-    const step = Math.max(0, at - pending.started);
-    const prev = pending.best;
-    if (prev !== undefined && step >= prev)
-      return;
-    const adjust = prev === undefined ? step : step - prev;
-    pending.best = step;
-    const total = ttftTotals.get(pending.sessionID);
-    if (total !== undefined) {
-      ttftTotals.delete(pending.sessionID);
-      ttftTotals.set(pending.sessionID, {
-        totalMs: total.totalMs + adjust,
-        count: total.count + (prev === undefined ? 1 : 0)
-      });
-      return;
-    }
-    if (ttftTotals.size >= RT_MAX_SESSIONS) {
-      for (const oldest of ttftTotals.keys()) {
-        ttftTotals.delete(oldest);
-        break;
-      }
-    }
-    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+    if (pending.earliest === undefined || at < pending.earliest)
+      pending.earliest = at;
   };
   const stepStarted = (event) => {
     if (disposed)
@@ -1299,7 +1280,7 @@ function createRealtimeTps(context, opts) {
         break;
       }
     }
-    pendingStarts.set(messageID, { sessionID, started, best: undefined });
+    pendingStarts.set(messageID, { sessionID, started, earliest: undefined });
   };
   const stepSettled = (event) => {
     if (disposed)
@@ -1307,7 +1288,27 @@ function createRealtimeTps(context, opts) {
     const messageID = asText2(asRecord2(asRecord2(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined)
       return;
+    const pending = pendingStarts.get(messageID);
     pendingStarts.delete(messageID);
+    if (pending === undefined || pending.earliest === undefined)
+      return;
+    const value = Math.max(0, pending.earliest - pending.started);
+    const ring = ttftRings.get(pending.sessionID);
+    if (ring !== undefined) {
+      ttftRings.delete(pending.sessionID);
+      ring.push(value);
+      if (ring.length > RT_MAX_STEPS)
+        ring.splice(0, ring.length - RT_MAX_STEPS);
+      ttftRings.set(pending.sessionID, ring);
+      return;
+    }
+    if (ttftRings.size >= RT_MAX_SESSIONS) {
+      for (const oldest of ttftRings.keys()) {
+        ttftRings.delete(oldest);
+        break;
+      }
+    }
+    ttftRings.set(pending.sessionID, [value]);
   };
   try {
     const on = context.data?.on;
@@ -1419,11 +1420,13 @@ function createRealtimeTps(context, opts) {
       if (typeof id !== "string" || seen.has(id))
         continue;
       seen.add(id);
-      const total = ttftTotals.get(id);
-      if (total === undefined)
+      const ring = ttftRings.get(id);
+      if (ring === undefined)
         continue;
-      totalMs += total.totalMs;
-      count += total.count;
+      for (const value of ring) {
+        totalMs += value;
+        count += 1;
+      }
     }
     if (count === 0)
       return;
@@ -1442,7 +1445,7 @@ function createRealtimeTps(context, opts) {
     samples.clear();
     shown.clear();
     pendingStarts.clear();
-    ttftTotals.clear();
+    ttftRings.clear();
   };
   return { get active() {
     return active && !disposed;
