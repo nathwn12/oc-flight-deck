@@ -733,7 +733,7 @@ function skeletonValue(field, layout) {
     case "elapsed":
       return formatDuration(0, layout.durationStyle);
     case "tps":
-      return layout.tpsDisplay === "both" ? "0 live \xB7 0 avg" : "0 tok/s";
+      return layout.tpsDisplay === "both" ? "0 rt \xB7 0 avg" : "0 tok/s";
     case "spark":
       return "\u2581".repeat(Math.max(0, Math.floor(layout.sparkWidth ?? DEFAULT_SPARK_WIDTH)));
     case "reasoning":
@@ -996,11 +996,11 @@ function statLine(field, source, layout = {}) {
     }
     case "tps": {
       const pair = asRecord2(source.tps);
-      const live = asCount2(pair?.["live"]);
+      const rt = asCount2(pair?.["rt"]);
       const avg = asCount2(pair?.["avg"]);
       const display = layout.tpsDisplay ?? "avg";
-      if (display === "live") {
-        const rounded = live === undefined ? undefined : Math.round(live);
+      if (display === "rt") {
+        const rounded = rt === undefined ? undefined : Math.round(rt);
         if (rounded === undefined || rounded <= 0)
           return;
         return row("tps", `${rounded} tok/s`);
@@ -1009,10 +1009,10 @@ function statLine(field, source, layout = {}) {
         if (avg !== undefined) {
           if (Math.round(avg) <= 0)
             return;
-          return row("tps", `${live === undefined ? 0 : Math.round(live)} live \xB7 ${Math.round(avg)} avg`);
+          return row("tps", `${rt === undefined ? 0 : Math.round(rt)} rt \xB7 ${Math.round(avg)} avg`);
         }
-        if (live !== undefined && Math.round(live) > 0)
-          return row("tps", `${Math.round(live)} live`);
+        if (rt !== undefined && Math.round(rt) > 0)
+          return row("tps", `${Math.round(rt)} rt`);
         return;
       }
       if (avg === undefined || Math.round(avg) <= 0)
@@ -1198,59 +1198,161 @@ function settledAverageRate(spans) {
     return;
   return tokens / (unionMs / 1000);
 }
-function unionGenerationTotals(spans) {
-  const seen = new Set;
-  const accepted = [];
-  let tokens = 0;
-  for (const span of spans) {
-    const key = asText2(span.key);
-    if (key === undefined || seen.has(key))
-      continue;
-    const start = asCount2(span.start);
-    const end = asCount2(span.end);
-    if (start === undefined || end === undefined)
-      continue;
-    const output = asCount2(span.tokens);
-    const reasoning = asCount2(span.reasoning);
-    seen.add(key);
-    accepted.push({ start, end: Math.max(start, end) });
-    tokens += (output ?? 0) + (reasoning ?? 0);
-  }
-  return { tokens, unionMs: mergedSpanMs(accepted) };
+// src/tui/realtime-tps.ts
+var RT_SAMPLE_WINDOW_MS = 5000;
+var RT_STALE_MS = 1500;
+var RT_MAX_SESSIONS = 50;
+function estimateDeltaTokens(delta) {
+  return Math.max(1, Math.ceil(Buffer.byteLength(delta, "utf8") / 5));
 }
-function createInstantTps(alpha = TPS_EWMA_ALPHA) {
-  let prevTokens;
-  let prevGenMs;
-  let smoothed;
-  let displayed;
-  return function sample(totalTokens, totalGenMs) {
-    const tokens = asCount2(totalTokens);
-    const genMs = asCount2(totalGenMs);
-    if (tokens === undefined || genMs === undefined)
-      return displayed;
-    if (prevTokens === undefined || prevGenMs === undefined) {
-      prevTokens = tokens;
-      prevGenMs = genMs;
-      return 0;
+function createRealtimeTps(context, opts) {
+  const now = opts?.now ?? Date.now;
+  const samples = new Map;
+  const shown = new Map;
+  let disposed = false;
+  let active = false;
+  const releases = [];
+  const remember = (sessionID, sample) => {
+    const known = samples.get(sessionID);
+    if (known !== undefined) {
+      samples.delete(sessionID);
+      known.push(sample);
+      samples.set(sessionID, known);
+      return;
     }
-    const deltaTokens = tokens - prevTokens;
-    const deltaMs = genMs - prevGenMs;
-    if (deltaTokens < 0 || deltaMs < 0) {
-      prevTokens = tokens;
-      prevGenMs = genMs;
-      smoothed = undefined;
-      return 0;
+    if (samples.size >= RT_MAX_SESSIONS) {
+      for (const oldest of samples.keys()) {
+        samples.delete(oldest);
+        break;
+      }
     }
-    prevTokens = tokens;
-    prevGenMs = genMs;
-    if (deltaMs <= 0)
-      return 0;
-    const instant = deltaTokens / (deltaMs / 1000);
-    smoothed = smoothTpsRate(smoothed, instant, alpha);
-    if (tpsNeedsRepaint(displayed, smoothed))
-      displayed = smoothed;
-    return displayed;
+    samples.set(sessionID, [sample]);
   };
+  const readDelta = (event) => {
+    const record = asRecord2(event);
+    const data = asRecord2(record?.["data"]);
+    const sessionID = asText2(data?.["sessionID"]);
+    const delta = asText2(data?.["delta"]);
+    if (sessionID === undefined || delta === undefined)
+      return;
+    const at = asCount2(record?.["created"]) ?? now();
+    return { sessionID, delta, at };
+  };
+  const ingest = (event) => {
+    if (disposed)
+      return;
+    const reading = readDelta(event);
+    if (reading === undefined)
+      return;
+    remember(reading.sessionID, { at: reading.at, tokens: estimateDeltaTokens(reading.delta) });
+  };
+  try {
+    const on = context.data?.on;
+    if (typeof on === "function") {
+      const subscribe = on;
+      releases.push(subscribe("session.text.delta", ingest), subscribe("session.reasoning.delta", ingest));
+      active = true;
+    }
+  } catch {
+    active = false;
+  }
+  const coverageMs = (ordered, at) => {
+    const first = ordered[0];
+    if (first === undefined)
+      return 0;
+    if (ordered.length === 1) {
+      return Math.min(Math.max(at - first.at, 250), 1000);
+    }
+    let duration = 0;
+    for (let index = 1;index < ordered.length; index += 1) {
+      duration += Math.max(0, (ordered[index]?.at ?? 0) - (ordered[index - 1]?.at ?? 0));
+    }
+    duration += Math.max(0, at - (ordered[ordered.length - 1]?.at ?? at));
+    return duration;
+  };
+  const shownOf = (displayedSessionID) => {
+    const known = shown.get(displayedSessionID);
+    if (known !== undefined) {
+      shown.delete(displayedSessionID);
+      shown.set(displayedSessionID, known);
+      return known;
+    }
+    const fresh = { smoothed: undefined, displayed: undefined };
+    if (shown.size >= RT_MAX_SESSIONS) {
+      for (const oldest of shown.keys()) {
+        shown.delete(oldest);
+        break;
+      }
+    }
+    shown.set(displayedSessionID, fresh);
+    return fresh;
+  };
+  const rate = (displayedSessionID, ids) => {
+    if (!active || disposed)
+      return 0;
+    const at = now();
+    const seen = new Set;
+    const windowed = [];
+    let newest = Number.NEGATIVE_INFINITY;
+    for (const id of ids) {
+      if (typeof id !== "string" || seen.has(id))
+        continue;
+      seen.add(id);
+      const ring = samples.get(id);
+      if (ring === undefined)
+        continue;
+      const kept = ring.filter((sample) => at - sample.at <= RT_SAMPLE_WINDOW_MS);
+      if (kept.length !== ring.length) {
+        if (kept.length === 0)
+          samples.delete(id);
+        else
+          samples.set(id, kept);
+      }
+      let idNewest = Number.NEGATIVE_INFINITY;
+      for (const sample of kept) {
+        if (sample.at > idNewest)
+          idNewest = sample.at;
+      }
+      if (kept.length === 0 || at - idNewest > RT_STALE_MS)
+        continue;
+      for (const sample of kept) {
+        windowed.push(sample);
+        if (sample.at > newest)
+          newest = sample.at;
+      }
+    }
+    if (windowed.length === 0 || at - newest > RT_STALE_MS)
+      return 0;
+    windowed.sort((a, b) => a.at - b.at);
+    const durationMs = coverageMs(windowed, at);
+    if (!(durationMs > 0))
+      return 0;
+    const tokens = windowed.reduce((sum, sample) => sum + sample.tokens, 0);
+    const instant = tokens / (durationMs / 1000);
+    if (!Number.isFinite(instant) || instant <= 0)
+      return 0;
+    const state = shownOf(displayedSessionID);
+    state.smoothed = smoothTpsRate(state.smoothed, instant, TPS_EWMA_ALPHA);
+    if (tpsNeedsRepaint(state.displayed, state.smoothed))
+      state.displayed = state.smoothed;
+    return state.displayed ?? 0;
+  };
+  const dispose = () => {
+    if (disposed)
+      return;
+    disposed = true;
+    for (const release of releases) {
+      try {
+        release();
+      } catch {}
+    }
+    releases.length = 0;
+    samples.clear();
+    shown.clear();
+  };
+  return { get active() {
+    return active && !disposed;
+  }, rate, dispose };
 }
 // src/tui/style.ts
 var TextAttributes = {
@@ -1592,9 +1694,9 @@ function readTpsScope(value, issues) {
 function readTpsDisplay(value, issues) {
   if (value === undefined)
     return DEFAULT_TPS_DISPLAY;
-  if (value === "avg" || value === "live" || value === "both")
+  if (value === "avg" || value === "rt" || value === "both")
     return value;
-  issues.push(`sidebar.tps.display must be "avg", "live" or "both"; using "avg"`);
+  issues.push(`sidebar.tps.display must be "avg", "rt" or "both"; using "avg"`);
   return DEFAULT_TPS_DISPLAY;
 }
 function readTps(section, issues) {
@@ -3550,37 +3652,18 @@ function createSessionReads(context) {
 }
 
 // src/tui/session-tps.ts
-function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
+function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE, realtime) {
   const TPS_CACHE_MS = 1000;
   let hostStamps;
   let tpsCache;
-  const MAX_TRACKERS = 50;
-  const trackers = new Map;
-  const trackerOf = (sessionID) => {
-    const known = trackers.get(sessionID);
-    if (known !== undefined) {
-      trackers.delete(sessionID);
-      trackers.set(sessionID, known);
-      return known;
-    }
-    const fresh = createInstantTps();
-    if (trackers.size >= MAX_TRACKERS) {
-      for (const oldest of trackers.keys()) {
-        trackers.delete(oldest);
-        break;
-      }
-    }
-    trackers.set(sessionID, fresh);
-    return fresh;
-  };
+  const tracker = realtime ?? createRealtimeTps(context);
   const scanMessages = (id, now) => {
     let messages;
     try {
       messages = context.data.session.message.list(id) ?? [];
     } catch {
-      return { ok: false, assistant: 0, stamped: 0, spans: [], settled: [] };
+      return { ok: false, assistant: 0, stamped: 0, settled: [] };
     }
-    const spans = [];
     const settled = [];
     let assistant = 0;
     let stamped = 0;
@@ -3610,11 +3693,10 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
         reasoning,
         ...span
       };
-      spans.push(turn);
       if (streamed !== undefined)
         settled.push(turn);
     }
-    return { ok: true, assistant, stamped, spans, settled };
+    return { ok: true, assistant, stamped, settled };
   };
   const familyIds = (sessionID) => {
     const ids = [sessionID];
@@ -3631,19 +3713,16 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     let ok = true;
     let assistant = 0;
     let stamped = 0;
-    const spans = [];
     const settled = [];
     for (const id of ids) {
       const scan = scanMessages(id, now);
       ok = ok && scan.ok;
       assistant += scan.assistant;
       stamped += scan.stamped;
-      for (const span of scan.spans)
-        spans.push({ ...span, key: `${id} ${String(span.key)}` });
       for (const span of scan.settled)
         settled.push({ ...span, key: `${id} ${String(span.key)}` });
     }
-    return { ok, assistant, stamped, spans, settled };
+    return { ok, assistant, stamped, settled };
   };
   const recordGeneration = (session) => {
     const tokens = asRecord2(session?.tokens);
@@ -3663,11 +3742,11 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     }
     return { ok, generation };
   };
-  const computeTps = (sessionID, session) => {
+  const computeAvg = (sessionID, session) => {
     const time = asRecord2(session?.time);
     const created = asCount2(time?.["created"]);
     const now = Date.now();
-    const scan = hostStamps === false ? { ok: true, assistant: 0, stamped: 0, spans: [], settled: [] } : scope === "family" ? scanScope(familyIds(sessionID), now) : scanMessages(sessionID, now);
+    const scan = hostStamps === false ? { ok: true, assistant: 0, stamped: 0, settled: [] } : scope === "family" ? scanScope(familyIds(sessionID), now) : scanMessages(sessionID, now);
     if (hostStamps === undefined) {
       if (scan.stamped > 0)
         hostStamps = true;
@@ -3676,20 +3755,17 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
       else
         return;
     }
-    const tracker = trackerOf(sessionID);
     if (hostStamps === true) {
       if (scope === "family" && scan.ok === false)
-        return { live: 0, avg: undefined };
-      const { tokens } = unionGenerationTotals(scan.spans);
-      const genMs = unionSpanMs(scan.spans);
-      return { live: tracker(tokens, genMs) ?? 0, avg: settledAverageRate(scan.settled) };
+        return;
+      return settledAverageRate(scan.settled);
     }
     const family = scope === "family" ? familyGeneration(sessionID, session) : undefined;
     if (family !== undefined && family.ok === false)
-      return { live: 0, avg: undefined };
+      return;
     const generation = family?.generation ?? recordGeneration(session);
     if (created === undefined && scope === "session") {
-      return { live: tracker(recordGeneration(session), 0) ?? 0, avg: undefined };
+      return;
     }
     let genMs = 0;
     try {
@@ -3697,16 +3773,22 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     } catch {
       genMs = 0;
     }
-    return { live: tracker(generation, genMs) ?? 0, avg: genMs > 0 ? generation / (genMs / 1000) : undefined };
+    return genMs > 0 ? generation / (genMs / 1000) : undefined;
   };
   const sessionTps = (sessionID, session) => {
+    let rt = 0;
+    try {
+      rt = tracker.rate(sessionID, scope === "family" ? familyIds(sessionID) : [sessionID]);
+    } catch {
+      rt = 0;
+    }
     const cached = tpsCache;
     if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
-      return cached.value;
+      return { rt, avg: cached.avg };
     }
-    const value = computeTps(sessionID, session) ?? { live: 0, avg: undefined };
-    tpsCache = { sessionID, at: Date.now(), value };
-    return value;
+    const avg = computeAvg(sessionID, session);
+    tpsCache = { sessionID, at: Date.now(), avg };
+    return { rt, avg };
   };
   return { sessionTps };
 }
@@ -3734,6 +3816,7 @@ var tui_default = Plugin.define({
     }
     const footer = footerLine(config);
     const releases = [];
+    const realtime = createRealtimeTps(context);
     const themedLine = (line, copyId) => {
       const style = railLineStyle(config.style, line);
       const lineFg = themeColor(style.color, context.theme);
@@ -3795,7 +3878,7 @@ var tui_default = Plugin.define({
     });
     const { sessionTps } = createTpsReader(context, {
       elapsedMsOf: (id, now) => sessionElapsed(id, now)
-    }, config.sidebar.tps.scope);
+    }, config.sidebar.tps.scope, realtime);
     const sparkValues = (sessionID) => {
       const sizes = [];
       for (const entry of messagesOf(sessionID)) {
@@ -3938,6 +4021,7 @@ var tui_default = Plugin.define({
       if (watchTimer !== undefined)
         clearInterval(watchTimer);
       watchTimer = undefined;
+      realtime.dispose();
       ticker?.dispose();
       bridge?.dispose();
       goBridge?.dispose();

@@ -27,7 +27,7 @@ const FULL: StatSource = {
   status: "running",
   busy: true,
   perms: { count: 1, action: "shell", resource: "npm publish" },
-  tps: { live: 87, avg: 41 },
+  tps: { rt: 87, avg: 41 },
   elapsedMs: 840000,
   turns: 48,
   spark: [1, 2, 3, 4, 5, 6, 7, 8],

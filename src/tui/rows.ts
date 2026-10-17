@@ -448,39 +448,40 @@ export function statLine(
       return row("elapsed", formatDuration(ms, layout.durationStyle));
     }
     case "tps": {
-      // The pair the reader hands over: `live` the near-instantaneous EWMA
-      // figure, `avg` the settled-turn average — both unknown at this
-      // boundary, so both re-coerced like every other field. Which one draws
-      // is `layout.tpsDisplay` (the row's view of `sidebar.tps.display`,
-      // default `"avg"`); presentation.ts feeds it from the resolved config.
+      // The pair the reader hands over: `rt` the realtime estimate from the
+      // host's streaming delta events, `avg` the settled-turn average — both
+      // unknown at this boundary, so both re-coerced like every other field.
+      // Which one draws is `layout.tpsDisplay` (the row's view of
+      // `sidebar.tps.display`, default `"avg"`); presentation.ts feeds it from
+      // the resolved config.
       const pair = asRecord(source.tps);
-      const live = asCount(pair?.["live"]);
+      const rt = asCount(pair?.["rt"]);
       const avg = asCount(pair?.["avg"]);
       const display = layout.tpsDisplay ?? "avg";
-      if (display === "live") {
-        // Today's behaviour byte-identical: whole tokens/second, honestly
-        // rounded — the value is already an EWMA of per-poll deltas, so a
-        // decimal would fake a precision the samples never had. Anything
-        // below half a token/second hides rather than printing "0 tok/s".
-        const rounded = live === undefined ? undefined : Math.round(live);
+      if (display === "rt") {
+        // Whole tokens/second, honestly rounded — the value is already an
+        // EWMA over estimated delta samples, so a decimal would fake a
+        // precision the samples never had. Anything below half a
+        // token/second hides rather than printing "0 tok/s".
+        const rounded = rt === undefined ? undefined : Math.round(rt);
         if (rounded === undefined || rounded <= 0) return undefined;
         return row("tps", `${rounded} tok/s`);
       }
       if (display === "both") {
-        // Both figures on one line when the average stands — the live half
-        // may round to zero while the average stands (`0 live · 41 avg`).
-        // The live-alone degrade is only for a missing average; a present
+        // Both figures on one line when the average stands — the realtime
+        // half may round to zero while the average stands (`0 rt · 41 avg`).
+        // The realtime-alone degrade is only for a missing average; a present
         // average that rounds to zero hides the whole row, like the avg
         // mode's own hide rule. Without either figure there is no row.
         if (avg !== undefined) {
           if (Math.round(avg) <= 0) return undefined;
-          return row("tps", `${live === undefined ? 0 : Math.round(live)} live · ${Math.round(avg)} avg`);
+          return row("tps", `${rt === undefined ? 0 : Math.round(rt)} rt · ${Math.round(avg)} avg`);
         }
-        if (live !== undefined && Math.round(live) > 0) return row("tps", `${Math.round(live)} live`);
+        if (rt !== undefined && Math.round(rt) > 0) return row("tps", `${Math.round(rt)} rt`);
         return undefined;
       }
       // The default: the settled-turn average over the scope, honestly
-      // rounded. The hide rule is the live row's own: at or below half a
+      // rounded. The hide rule is the realtime row's own: at or below half a
       // token/second it hides rather than printing "0 tok/s".
       if (avg === undefined || Math.round(avg) <= 0) return undefined;
       return row("tps", `${Math.round(avg)} tok/s`);

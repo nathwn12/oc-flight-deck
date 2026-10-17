@@ -8,10 +8,12 @@
 // Two pieces live here. The union helpers sum generation tokens (output plus
 // reasoning, the same pair the official TUI divides) and merge the assistant
 // turns' own streaming spans, so idle time is never in the denominator and the
-// figure freezes once everything settles. `createInstantTps` is the live row's
-// tracker: generation-token per-poll deltas over generating-time deltas, smoothed
-// with an EWMA and repainted through hysteresis, so the rail shows what the
-// decoder is doing now instead of everything the session ever did.
+// figure freezes once everything settles. The realtime figure beside them
+// lives in ./realtime-tps.js: it estimates tokens from the host's streaming
+// delta events, because a poll of the message list can only see a turn's
+// tokens after it settles. The EWMA smoother and the repaint hysteresis below
+// are shared by that tracker, so the rail bends toward new samples instead of
+// flickering on them.
 
 import { asCount, asText } from "./coerce.js";
 
@@ -271,7 +273,8 @@ export function settledAverageRate(spans: readonly ThroughputSpan[]): number | u
  * reasoning, the same pair the official TUI divides.
  *
  * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`.
- * Only the live TPS path uses this.
+ * Kept for the union arithmetic it pins (see fixtures): the realtime figure
+ * no longer polls spans, so no reader divides through this anymore.
  */
 export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTotals {
   const seen = new Set<string>();
@@ -294,70 +297,4 @@ export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTot
   }
 
   return { tokens, unionMs: mergedSpanMs(accepted) };
-}
-
-/**
- * Near-instantaneous generation rate for one displayed session scope.
- *
- * The caller feeds each poll's cumulative generation tokens and cumulative
- * generating milliseconds (the streaming-span union, which excludes idle by
- * construction) and gets back the figure to draw. The rule is per-session and
- * honest about idle: the first sample only sets the baselines and reads as
- * zero — no rate is known yet, and a session deep into its life must not flash
- * its lifetime average as if it were live. A poll whose generating time did
- * not advance means the session is not generating right now: it reads as zero
- * with the smoother untouched, so the next poll that does add generating time
- * resumes from the held smoothed figure rather than from zero. A backwards
- * counter rebaselines (baselines and smoother alike, since the pre-reset
- * average belongs to another era) and reads as zero. Otherwise the
- * instantaneous rate is the delta of generation tokens over the delta of
- * generating milliseconds, smoothed by the EWMA and held through the
- * hysteresis. Deltas between successive polls are the rate, so a pause can
- * never sag the figure — it reads as zero while it lasts.
- */
-export function createInstantTps(alpha: number = TPS_EWMA_ALPHA) {
-  let prevTokens: number | undefined;
-  let prevGenMs: number | undefined;
-  let smoothed: number | undefined;
-  let displayed: number | undefined;
-
-  return function sample(totalTokens: unknown, totalGenMs: unknown): number | undefined {
-    const tokens = asCount(totalTokens);
-    const genMs = asCount(totalGenMs);
-    if (tokens === undefined || genMs === undefined) return displayed;
-
-    // First sight sets the baselines. No rate is known yet — not even the
-    // cumulative lifetime average, which would flash a whole session's history
-    // as if it were live — so the row reads as zero until the next poll
-    // brings a delta to divide.
-    if (prevTokens === undefined || prevGenMs === undefined) {
-      prevTokens = tokens;
-      prevGenMs = genMs;
-      return 0;
-    }
-
-    const deltaTokens = tokens - prevTokens;
-    const deltaMs = genMs - prevGenMs;
-    // Counters must not step backwards; a reset rebaselines - baselines and
-    // smoother alike, since the pre-reset average belongs to another era -
-    // instead of dividing a negative delta into a nonsense rate.
-    if (deltaTokens < 0 || deltaMs < 0) {
-      prevTokens = tokens;
-      prevGenMs = genMs;
-      smoothed = undefined;
-      return 0;
-    }
-    prevTokens = tokens;
-    prevGenMs = genMs;
-
-    // No new generating time: the session is not generating right now, so the
-    // rate is zero — and the smoother is left untouched, so the next poll that
-    // does add generating time resumes from the held smoothed figure rather
-    // than from zero.
-    if (deltaMs <= 0) return 0;
-    const instant = deltaTokens / (deltaMs / 1_000);
-    smoothed = smoothTpsRate(smoothed, instant, alpha);
-    if (tpsNeedsRepaint(displayed, smoothed)) displayed = smoothed;
-    return displayed;
-  };
 }

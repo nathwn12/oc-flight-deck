@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { clip, formatCost, formatCount, formatDuration, fuelBar, isStatField, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanTotals } from "../src/tui/stats.js";
 import { canonicalField } from "../src/tui/stat-fields.js";
-import { createInstantTps, instantTpsRate, settledAverageRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
+import { instantTpsRate, settledAverageRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -218,56 +218,56 @@ describe("flight deck live rows", () => {
     expect(statLine("project", {})).toBeUndefined();
   });
 
-  test("reports measured throughput in live mode, byte for byte like before", () => {
-    // Whole tokens/second, honestly rounded: the value is already an EWMA of
-    // per-poll deltas, so a decimal would fake a precision the samples never
-    // had. No fractional rendering, ever.
-    expect(statLine("tps", { tps: { live: 106.3, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
-    expect(statLine("tps", { tps: { live: 106, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
-    expect(statLine("tps", { tps: { live: 106.5, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       107 tok/s");
-    expect(statLine("tps", { tps: { live: 0, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
-    // The average beside it never leaks into the live figure.
-    expect(statLine("tps", { tps: { live: 106, avg: 999 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
+  test("reports the realtime estimate in rt mode", () => {
+    // Whole tokens/second, honestly rounded: the value is already an EWMA
+    // over estimated delta samples, so a decimal would fake a precision the
+    // samples never had. No fractional rendering, ever.
+    expect(statLine("tps", { tps: { rt: 106.3, avg: 41 } }, { tpsDisplay: "rt" })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: { rt: 106, avg: 41 } }, { tpsDisplay: "rt" })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: { rt: 106.5, avg: 41 } }, { tpsDisplay: "rt" })).toBe("tps       107 tok/s");
+    expect(statLine("tps", { tps: { rt: 0, avg: 41 } }, { tpsDisplay: "rt" })).toBeUndefined();
+    // The average beside it never leaks into the realtime figure.
+    expect(statLine("tps", { tps: { rt: 106, avg: 999 } }, { tpsDisplay: "rt" })).toBe("tps       106 tok/s");
   });
 
   test("draws the settled-turn average by default", () => {
-    // No layout hint: the shipped default is the average, not the live rate.
-    expect(statLine("tps", { tps: { live: 106, avg: 41.4 } })).toBe("tps       41 tok/s");
-    expect(statLine("tps", { tps: { live: 106, avg: 41.5 } })).toBe("tps       42 tok/s");
-    // The live half never leaks into the average figure.
-    expect(statLine("tps", { tps: { live: 999, avg: 41 } })).toBe("tps       41 tok/s");
+    // No layout hint: the shipped default is the average, not the realtime rate.
+    expect(statLine("tps", { tps: { rt: 106, avg: 41.4 } })).toBe("tps       41 tok/s");
+    expect(statLine("tps", { tps: { rt: 106, avg: 41.5 } })).toBe("tps       42 tok/s");
+    // The realtime half never leaks into the average figure.
+    expect(statLine("tps", { tps: { rt: 999, avg: 41 } })).toBe("tps       41 tok/s");
   });
 
   test("draws both figures on one line in both mode", () => {
-    expect(statLine("tps", { tps: { live: 106.4, avg: 41.4 } }, { tpsDisplay: "both" })).toBe(
-      "tps       106 live · 41 avg",
+    expect(statLine("tps", { tps: { rt: 106.4, avg: 41.4 } }, { tpsDisplay: "both" })).toBe(
+      "tps       106 rt · 41 avg",
     );
-    // The live half may round to zero while the average stands: idle right
+    // The realtime half may round to zero while the average stands: idle right
     // now does not erase the session's mean speed.
-    expect(statLine("tps", { tps: { live: 0.4, avg: 41 } }, { tpsDisplay: "both" })).toBe("tps       0 live · 41 avg");
-    // Without an average the live half stands alone — and only then: a
+    expect(statLine("tps", { tps: { rt: 0.4, avg: 41 } }, { tpsDisplay: "both" })).toBe("tps       0 rt · 41 avg");
+    // Without an average the realtime half stands alone — and only then: a
     // present average that rounds to zero hides the whole row, like the
     // avg mode's own hide rule.
-    expect(statLine("tps", { tps: { live: 106, avg: undefined } }, { tpsDisplay: "both" })).toBe("tps       106 live");
-    expect(statLine("tps", { tps: { live: 106, avg: 0.4 } }, { tpsDisplay: "both" })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 106, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 106, avg: undefined } }, { tpsDisplay: "both" })).toBe("tps       106 rt");
+    expect(statLine("tps", { tps: { rt: 106, avg: 0.4 } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 106, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
     // Without either figure there is no row.
-    expect(statLine("tps", { tps: { live: undefined, avg: undefined } }, { tpsDisplay: "both" })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 0, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: undefined, avg: undefined } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 0, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
   });
 
   test("hides the tps row rather than printing a zero rate, in every mode", () => {
-    expect(statLine("tps", { tps: { live: 0, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: Number.NaN, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 0, avg: 41 } }, { tpsDisplay: "rt" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: Number.NaN, avg: 41 } }, { tpsDisplay: "rt" })).toBeUndefined();
     // Below half a token/second rounds to zero, which hides rather than
     // printing "0 tok/s".
-    expect(statLine("tps", { tps: { live: 0.4, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 0.5, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       1 tok/s");
+    expect(statLine("tps", { tps: { rt: 0.4, avg: 41 } }, { tpsDisplay: "rt" })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 0.5, avg: 41 } }, { tpsDisplay: "rt" })).toBe("tps       1 tok/s");
     // The average hides the same way: unknown, zero, or below half a token.
-    expect(statLine("tps", { tps: { live: 106, avg: undefined } })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 106, avg: 0 } })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 106, avg: 0.4 } })).toBeUndefined();
-    expect(statLine("tps", { tps: { live: 106, avg: 0.5 } })).toBe("tps       1 tok/s");
+    expect(statLine("tps", { tps: { rt: 106, avg: undefined } })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 106, avg: 0 } })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 106, avg: 0.4 } })).toBeUndefined();
+    expect(statLine("tps", { tps: { rt: 106, avg: 0.5 } })).toBe("tps       1 tok/s");
     // A bare number is no longer a figure: the reader hands over the pair.
     expect(statLine("tps", { tps: 106 })).toBeUndefined();
     expect(statLine("tps", {})).toBeUndefined();
@@ -669,15 +669,13 @@ describe("active-work throughput", () => {
   });
 });
 
-// The live `tps` row is a NEAR-INSTANTANEOUS generation rate, not an average:
-// the delta of generation tokens (output plus reasoning) between successive
-// polls over the delta of generating time (the streaming-span union, which
-// excludes idle by construction), smoothed with an EWMA (alpha 0.3) and
-// repainted only on a move of >= 1 tok/s or >= 10%. The first poll only sets
-// the baselines and reads as zero; a poll whose generating time did not
-// advance reads as zero with the smoother untouched; rendering is whole
-// tokens/second, never fractional.
-describe("instantaneous tps", () => {
+// The realtime `rt` figure is estimated from the host's streaming delta
+// events (see fixtures/realtime-tps.test.ts): the per-poll delta tracker below
+// is gone because a poll of the message list can only see a turn's tokens
+// after it settles. What remains here is the shared arithmetic — the delta
+// division, the EWMA, the hysteresis — plus the settled-span union the
+// average divides through.
+describe("shared tps arithmetic", () => {
   test("divides deltas, never idle-inclusive totals", () => {
     expect(instantTpsRate(100, 2_000)).toBe(50);
     expect(instantTpsRate(0, 2_000)).toBe(0);
@@ -757,50 +755,6 @@ describe("instantaneous tps", () => {
     // A turn that finished decoding (`streamed` recorded, tools unsettled) has
     // a final output count too: same start, different totals stay distinct.
     expect(turnKey(undefined, 1, undefined, 200, 2)).not.toBe(turnKey(undefined, 1, undefined, 300, 2));
-  });
-
-  test("reads zero on first sight, never a seeded cumulative average", () => {
-    // No rate is known yet on the first poll — not even the lifetime average,
-    // which would flash a whole session's history as if it were live. A
-    // session deep into its life (500 tokens over 2 s would seed 250) still
-    // reads as zero until the next poll brings a delta to divide.
-    expect(createInstantTps()(500, 500)).toBe(0);
-    expect(createInstantTps()(5, 10_000)).toBe(0);
-    expect(createInstantTps()(500, 2_000)).toBe(0);
-  });
-
-  test("tracks per-poll deltas once baselines are set", () => {
-    const tps = createInstantTps();
-    expect(tps(200, 2_000)).toBe(0);
-    // 100 new tokens over 1 new second: instant 100, the first smoothed rate,
-    // which always paints.
-    expect(tps(300, 3_000)).toBe(100);
-    // 400 new tokens over 1 new second: instant 400, EWMA bends 100 toward it
-    // (100 + 0.3 * 300 = 190), which clears hysteresis and repaints.
-    expect(tps(700, 4_000)).toBeCloseTo(190, 10);
-  });
-
-  test("reads zero while generating time does not advance, then resumes held", () => {
-    const tps = createInstantTps();
-    expect(tps(200, 2_000)).toBe(0);
-    expect(tps(300, 3_000)).toBe(100);
-    // The clock has not advanced: the session is not generating right now, so
-    // the rate is zero — never a division by zero new time.
-    expect(tps(300, 3_000)).toBe(0);
-    // Work resumes: the delta spans only the new second, and the smoother
-    // resumes from the held 100 rather than from zero — instant 100 bends
-    // nothing, so the held figure stands.
-    expect(tps(400, 4_000)).toBe(100);
-  });
-
-  test("rebaselines a backwards counter instead of dividing it", () => {
-    const tps = createInstantTps();
-    expect(tps(200, 2_000)).toBe(0);
-    expect(tps(300, 3_000)).toBe(100);
-    expect(tps(50, 1_000)).toBe(0);
-    // The new baselines stand with a fresh smoother: the next honest delta
-    // (100 tokens over 1 s) seeds 100 again, not a blend with the old era.
-    expect(tps(150, 2_000)).toBe(100);
   });
 });
 

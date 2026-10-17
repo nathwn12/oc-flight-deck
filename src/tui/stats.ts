@@ -20,7 +20,6 @@ export type { StatSegment } from "./rows.js";
 export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, canonicalField, fieldLabel, isStatField, skeletonValue } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
 export {
-  createInstantTps,
   instantTpsRate,
   settledAverageRate,
   smoothTpsRate,
@@ -35,3 +34,11 @@ export {
   unionSpanTotals,
 } from "./throughput.js";
 export type { SpanTotals, ThroughputSpan } from "./throughput.js";
+export {
+  createRealtimeTps,
+  estimateDeltaTokens,
+  RT_MAX_SESSIONS,
+  RT_SAMPLE_WINDOW_MS,
+  RT_STALE_MS,
+} from "./realtime-tps.js";
+export type { RealtimeTps } from "./realtime-tps.js";

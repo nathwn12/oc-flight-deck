@@ -135,10 +135,11 @@ export type TpsScope = "family" | "session";
  *
  * `"avg"` is the settled-turn average: generation tokens over assistant
  * turns that recorded `streamed`, divided by the union of their
- * `streamed - created` spans. `"live"` is the near-instantaneous EWMA rate,
- * reading zero while nothing generates. `"both"` draws both on one line.
+ * `streamed - created` spans. `"rt"` is the realtime estimate from the
+ * host's streaming delta events, reading zero while nothing streams.
+ * `"both"` draws both on one line.
  */
-export type TpsDisplay = "avg" | "live" | "both";
+export type TpsDisplay = "avg" | "rt" | "both";
 
 /**
  * The shipped `tps` scope: `"family"`.
@@ -146,8 +147,8 @@ export type TpsDisplay = "avg" | "live" | "both";
  * The one default for this knob, so flipping the shipped behaviour is one
  * line here. Family ships because the visible work in a delegation-heavy
  * session happens in its subagents: a root that has gone idle while its child
- * is still decoding must still read live, the way `cost` already rolls the
- * tree up. Set it to `"session"` for the previous per-session figure.
+ * is still decoding must still read realtime, the way `cost` already rolls
+ * the tree up. Set it to `"session"` for the previous per-session figure.
  */
 export const DEFAULT_TPS_SCOPE: TpsScope = "family";
 
@@ -158,7 +159,7 @@ export const DEFAULT_TPS_SCOPE: TpsScope = "family";
  * line here. The average ships because it answers the question the row is
  * really asked — how fast is this session producing — instead of what the
  * decoder is doing in this exact poll: an idle gap between turns reads as a
- * steady figure rather than as zero, while `live` stays one edit away for
+ * steady figure rather than as zero, while `rt` stays one edit away for
  * the moment-to-moment view.
  */
 export const DEFAULT_TPS_DISPLAY: TpsDisplay = "avg";
@@ -787,8 +788,8 @@ function readTpsScope(value: unknown, issues: string[]): TpsScope {
  */
 function readTpsDisplay(value: unknown, issues: string[]): TpsDisplay {
   if (value === undefined) return DEFAULT_TPS_DISPLAY;
-  if (value === "avg" || value === "live" || value === "both") return value;
-  issues.push(`sidebar.tps.display must be "avg", "live" or "both"; using "avg"`);
+  if (value === "avg" || value === "rt" || value === "both") return value;
+  issues.push(`sidebar.tps.display must be "avg", "rt" or "both"; using "avg"`);
   return DEFAULT_TPS_DISPLAY;
 }
 

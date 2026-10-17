@@ -147,9 +147,10 @@
     //   tps        mean speed over `sidebar.tps.scope` below: generation
     //              tokens (output + reasoning) over the settled turns' own
     //              generating time. Draws the average by default — an idle
-    //              gap reads as a steady figure rather than zero. `live`
-    //              below restores the moment-to-moment rate (zero while
-    //              nothing generates); `both` draws both on one line
+    //              gap reads as a steady figure rather than zero. `rt`
+    //              below draws the realtime estimate from the host's
+    //              streaming events instead (zero while nothing generates);
+    //              `both` draws both on one line
     //   spark      recent turn sizes as a sparkline
     //   reasoning  reasoning tokens, when the model emits them, in the same
     //              family scope as `cost`
@@ -204,18 +205,19 @@
     // Concurrent decoders share wall clock, so overlapping spans merge
     // instead of adding — a root that is idle while its child decodes still
     // reads live. `"session"` restores the per-session figure: the open
-    // session's own tokens over its own spans (the `live` figure reading zero
+    // session's own tokens over its own spans (the `rt` figure reading zero
     // while it is idle even when a child is still running). An unknown value
     // falls back to `"family"` and is reported.
     //
     // `"display"` is what draws. `"avg"` (the default) is the settled-turn
     // average: generation tokens over assistant turns that recorded
     // `streamed`, divided by the union of their `streamed - created` spans —
-    // in-flight turns excluded, idle gaps never billed. `"live"` is the
-    // near-instantaneous rate, reading `0 tok/s` whenever the scope is not
-    // generating (idle, between turns, or before the first sample). `"both"`
-    // draws both on one line (`106 live · 41 avg`). An unknown value falls
-    // back to `"avg"` and is reported.
+    // in-flight turns excluded, idle gaps never billed. `"rt"` is the
+    // realtime estimate from the host's streaming delta events, reading
+    // `0 tok/s` whenever the scope is not generating (idle, between turns,
+    // or before the first delta). `"both"` draws both on one line
+    // (`106 rt · 41 avg`). An unknown value falls back to `"avg"` and is
+    // reported.
     "tps": { "scope": "family", "display": "avg" },
 
     // Every named row renders persistently: with no data yet it draws its

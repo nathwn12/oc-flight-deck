@@ -94,7 +94,7 @@ describe("flight deck config", () => {
     expect(DEFAULT_CONFIG.sidebar.tps.display).toBe("avg");
 
     // Every exact value passes through cleanly, leaving the scope alone.
-    for (const display of ["avg", "live", "both"] as const) {
+    for (const display of ["avg", "rt", "both"] as const) {
       const resolution = resolveConfig({ sidebar: { tps: { display } } });
       expect(resolution.issues).toEqual([]);
       expect(resolution.config.sidebar.tps).toEqual({ scope: "family", display });
@@ -104,7 +104,7 @@ describe("flight deck config", () => {
     // the key is named, like every other invalid option.
     const bad = resolveConfig({ sidebar: { tps: { display: "turbo" } } });
     expect(bad.config.sidebar.tps).toEqual({ scope: "family", display: "avg" });
-    expect(bad.issues).toEqual(['sidebar.tps.display must be "avg", "live" or "both"; using "avg"']);
+    expect(bad.issues).toEqual(['sidebar.tps.display must be "avg", "rt" or "both"; using "avg"']);
 
     // The two knobs are independent: a bad display keeps a good scope, and a
     // bad scope keeps a good display.
@@ -543,10 +543,10 @@ describe("flight deck option precedence", () => {
   test("merges the nested tps keys leaf by leaf instead of replacing the section", () => {
     // A host `{ display }` must not drop a file `{ scope }`, and vice versa:
     // the two knobs ride the same nested merge the footer already uses.
-    const merged = mergeOptions({ sidebar: { tps: { scope: "session" } } }, { sidebar: { tps: { display: "live" } } });
+    const merged = mergeOptions({ sidebar: { tps: { scope: "session" } } }, { sidebar: { tps: { display: "rt" } } });
     const { config, issues } = resolveConfig(merged);
     expect(issues).toEqual([]);
-    expect(config.sidebar.tps).toEqual({ scope: "session", display: "live" });
+    expect(config.sidebar.tps).toEqual({ scope: "session", display: "rt" });
   });
 
   // A tick now wakes the host's renderer, so a sub-frame interval is a way to
@@ -699,7 +699,7 @@ describe("option validation", () => {
       context: { used: 1 },
       perms: { count: 1 },
       elapsedMs: 1_000,
-      tps: { live: 10, avg: 10 },
+      tps: { rt: 10, avg: 10 },
     };
     expect(sidebarLines(config, source)).toHaveLength(24);
   });

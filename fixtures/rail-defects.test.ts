@@ -43,6 +43,45 @@ function stubContext(
   return context as unknown as Parameters<typeof createSessionReads>[0];
 }
 
+/**
+ * A stub context with a fake host subscription surface for the realtime
+ * tracker, plus an `emit` that delivers one delta event on the host's own
+ * clock. The reader under test builds its default tracker against this bus —
+ * injected samples, no sleeps, no message-list polling.
+ */
+function deltaContext(
+  messages: Record<string, readonly unknown[]> = {},
+  family: (id: string) => readonly string[] = (id) => [id],
+) {
+  const handlers = new Map<string, Array<(event: unknown) => void>>();
+  const emit = (type: string, sessionID: string, delta: string, at: number) => {
+    for (const handler of handlers.get(type) ?? []) {
+      handler({ data: { sessionID, assistantMessageID: "msg_1", ordinal: 0, delta }, created: at });
+    }
+  };
+  const context = {
+    data: {
+      session: {
+        family,
+        message: { list: (id: string) => messages[id] ?? [] },
+      },
+      shell: { list: () => [] },
+    },
+  } as unknown as Parameters<typeof createTpsReader>[0];
+  (context as unknown as { data: { on: unknown } }).data.on = (
+    type: string,
+    handler: (event: unknown) => void,
+  ) => {
+    const known = handlers.get(type) ?? [];
+    known.push(handler);
+    handlers.set(type, known);
+    return () => {
+      handlers.set(type, (handlers.get(type) ?? []).filter((entry) => entry !== handler));
+    };
+  };
+  return { context, emit };
+}
+
 // `treeTotals` used to call `session.get(id)` bare inside the loop, so one
 // throwing member blanked the whole cost/total. The TPS reader for the same
 // walk already caught per id; the tree total now does the same — and it rolls
@@ -138,42 +177,28 @@ describe("clip measures cells, not characters", () => {
   });
 });
 
-// The per-session maps stay bounded. The TPS tracker map is LRU-capped (cap
-// plus eviction): pushing past the cap drops the stalest tracker and a revisit
-// restarts its baselines instead of smoothing a delta off evicted state. The
-// elapsed clock instead sweeps only sessions the host forgot, so a live
-// session's high-water mark survives any amount of session-hopping.
+// The per-session maps stay bounded. The realtime tracker's sample map is
+// LRU-capped (cap plus eviction): pushing past the cap drops the stalest
+// session's samples and a revisit reads zero, exactly like a first sight —
+// which is also what proves the eviction, since surviving samples would
+// divide. The elapsed clock instead sweeps only sessions the host forgot, so
+// a live session's high-water mark survives any amount of session-hopping.
 describe("per-session maps stay bounded", () => {
   const FILLERS = 60;
 
-  test("the TPS reader evicts stale trackers instead of growing forever", () => {
-    const elapsed = new Map<string, number>([["a", 10_000]]);
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => [id],
-          // Assistant turns with no timestamps: an unstamped host, so the
-          // denominator is the supplied active clock, fully controlled here.
-          message: { list: () => [{ type: "assistant" }] },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
-    const reader = createTpsReader(context, {
-      elapsedMsOf: (id: string) => elapsed.get(id) ?? 10_000,
-    });
-    // First poll sets the baselines; no rate is known yet, so it reads zero
-    // rather than the cumulative average.
-    expect(reader.sessionTps("a", { time: { created: 0 }, tokens: { output: 100 } }).live).toBe(0);
+  test("the realtime tracker evicts stale sample rings instead of growing forever", () => {
+    const { context, emit } = deltaContext();
+    const reader = createTpsReader(context);
+    // A fresh 100-token delta a second ago paints 100 tok/s outright.
+    emit("session.text.delta", "a", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("a", { time: { created: 0 } }).rt).toBe(100);
     for (let index = 0; index < FILLERS; index += 1) {
-      reader.sessionTps(`s${index}`, { time: { created: 0 }, tokens: { output: 100 } });
+      emit("session.text.delta", `s${index}`, "x", Date.now() - 1_000);
     }
-    // The tracker for "a" was pushed out: the revisit restarts its baselines
-    // and reads zero — which is also what proves the eviction, since the
-    // surviving tracker would have smoothed a 100-tokens-over-1-s delta.
-    elapsed.set("a", 11_000);
-    expect(
-      reader.sessionTps("a", { time: { created: 0 }, tokens: { output: 200 } }).live,
-    ).toBe(0);
+    // The ring for "a" was pushed out: the revisit reads zero, exactly like a
+    // first sight — which is also what proves the eviction, since the
+    // surviving samples would have divided.
+    expect(reader.sessionTps("a", { time: { created: 0 } }).rt).toBe(0);
   });
 
   test("a live elapsed figure survives crowding past the sweep bound", () => {
@@ -208,306 +233,141 @@ describe("per-session maps stay bounded", () => {
   });
 });
 
-// `tps` under scope `"session"` is directly per-session: each session paces
-// only its own decoder, and the idle test is the session's own
-// generating-time delta — no family-wide busy flag reaches the reader, so a
-// parent that stopped generating reads as zero even while its child is still
-// running. The first poll for a session only sets the tracker's baselines
-// and reads as zero: no cumulative average ever seeds the figure. These pin
-// that scope explicitly; the shipped `"family"` default is covered in
-// fixtures/render.test.ts.
-describe("tps is directly per-session", () => {
-  const turn = (id: string, streamed: number, tokens: Record<string, number>) => ({
-    id,
-    type: "assistant",
-    time: { created: 0, streamed },
-    tokens,
-  });
-  const familyContext = (messages: Record<string, readonly unknown[]>) =>
-    ({
-      data: {
-        session: {
-          family: (id: string) => [id],
-          message: { list: (id: string) => messages[id] ?? [] },
-        },
-      },
-    }) as unknown as Parameters<typeof createTpsReader>[0];
+// `rt` under scope `"session"` is directly per-session: each session paces
+// only its own delta stream, and the idle test is the session's own
+// staleness — no family-wide flag reaches the reader, so a parent that
+// stopped streaming reads as zero even while its child still runs. A session
+// with no samples reads as zero: no rate is ever guessed. The turns below
+// carry no `streamed` rung, so the average stays unknown and the realtime
+// figure asserts alone. These pin that scope explicitly; the shipped
+// `"family"` default is covered in fixtures/render.test.ts.
+describe("rt is directly per-session", () => {
+  // A stamped turn with nothing settled: capability known, average unknown.
+  const openTurn = (id: string) => ({ id, type: "assistant", time: { created: 0 }, tokens: { output: 1 } });
 
-  test("a root with its own and a child's spans reports only its own rate", async () => {
+  test("a root with its own and a child's deltas reports only its own rate", () => {
     const messages: Record<string, readonly unknown[]> = {
-      root: [turn("r1", 2_000, { output: 60, reasoning: 40 })],
-      child: [turn("c1", 5_000, { output: 900, reasoning: 100 })],
+      root: [openTurn("r1")],
+      child: [openTurn("c1")],
     };
-    const reader = createTpsReader(familyContext(messages), undefined, "session");
-    // First sight only sets the baselines: no rate is known yet.
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(0);
-    await Bun.sleep(1_100);
-    // Both turns advance: the parent gains 100 generation tokens over 1 new
-    // second; the child gains 1,100 over 1 new second of its wider span.
-    messages.root = [turn("r1", 3_000, { output: 160, reasoning: 40 })];
-    messages.child = [turn("c1", 6_000, { output: 1_900, reasoning: 200 })];
-    // The parent's own delta is 100 tok/s. Folding the child's advancing turn
-    // in would add its 1,100 tokens to a 1 s wider union and read 1,200.
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(100);
+    const { context, emit } = deltaContext(messages);
+    const reader = createTpsReader(context, undefined, "session");
+    // Both sessions stream 100 estimated tokens a second ago. The parent's
+    // own stream divides alone: folding the child's stream in would double
+    // the tokens over the same wall clock and read 200.
+    const at = Date.now() - 1_000;
+    emit("session.text.delta", "root", "x".repeat(500), at);
+    emit("session.text.delta", "child", "x".repeat(500), at);
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 100, avg: undefined });
   });
 
-  test("a parent that stopped generating reads zero while its child still runs", async () => {
+  test("a parent that stopped streaming reads zero while its child still runs", () => {
     const messages: Record<string, readonly unknown[]> = {
-      root: [turn("r1", 2_000, { output: 60, reasoning: 40 })],
-      child: [turn("c1", 2_000, { output: 900, reasoning: 100 })],
+      root: [openTurn("r1")],
+      child: [openTurn("c1")],
     };
-    const reader = createTpsReader(familyContext(messages), undefined, "session");
-    // Establish a live rate: first sight sets the baselines, the advancing
-    // second poll paints 100 tok/s.
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(0);
-    await Bun.sleep(1_100);
-    messages.root = [turn("r1", 3_000, { output: 160, reasoning: 40 })];
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(100);
-    // The parent's spans freeze while the child keeps advancing elsewhere. The
-    // parent's own unmoved denominator reads as zero — not its last rate, and
-    // the child's work cannot hold it up.
-    await Bun.sleep(1_100);
-    messages.child = [turn("c1", 4_000, { output: 1_900, reasoning: 200 })];
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(0);
+    const { context, emit } = deltaContext(messages);
+    const reader = createTpsReader(context, undefined, "session");
+    // The parent's only sample is stale (past the window for good measure)
+    // while the child streamed a second ago. The parent's own silence reads
+    // as zero — not its last rate, and the child's work cannot hold it up.
+    emit("session.text.delta", "root", "x".repeat(500), Date.now() - 10_000);
+    emit("session.text.delta", "child", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("root", { time: { created: 0 } }).rt).toBe(0);
+    expect(reader.sessionTps("child", { time: { created: 0 } }).rt).toBe(100);
   });
 
-  test("first sight never seeds from the cumulative lifetime average", () => {
-    const reader = createTpsReader(
-      familyContext({
-        root: [turn("r1", 2_000, { output: 60, reasoning: 40 })],
-        child: [turn("c1", 2_000, { output: 900, reasoning: 100 })],
-      }),
-      undefined,
-      "session",
-    );
-    // A session deep into its life: the root's own 100 generation tokens over
-    // its 2 s span would seed 50 as a cumulative average. No rate is known
-    // yet, so the first poll reads as zero instead — for the child too.
-    expect(reader.sessionTps("root", { time: { created: 0 } }).live).toBe(0);
-    expect(reader.sessionTps("child", { time: { created: 0 } }).live).toBe(0);
-  });
-
-  test("tps returns zero when there is no figure yet, never undefined", () => {
-    const reader = createTpsReader(familyContext({}), undefined, "session");
-    expect(reader.sessionTps("quiet", { time: { created: 0 } }).live).toBe(0);
-  });
-});
-
-// The TPS numerator is generation - output plus reasoning - on both host
-// paths: the stamped union over message turns, and the unstamped session
-// record. A thinking-heavy turn reads as speed, not as idle time with no
-// output yet.
-describe("TPS counts reasoning as generation", () => {
-  const stampedContext = (messages: Record<string, readonly unknown[]>) =>
-    ({
-      data: {
-        session: {
-          family: (id: string) => [id],
-          message: { list: (id: string) => messages[id] ?? [] },
-        },
-      },
-    }) as unknown as Parameters<typeof createTpsReader>[0];
-
-  test("a stamped turn divides output plus reasoning over its streaming span", async () => {
-    const messages: Record<string, readonly unknown[]> = {
-      s: [
-        {
-          id: "m1",
-          type: "assistant",
-          time: { created: 0, streamed: 2_000 },
-          tokens: { output: 60, reasoning: 40 },
-        },
-      ],
-    };
-    const reader = createTpsReader(stampedContext(messages));
-    // First sight sets the baselines: no rate is known yet.
-    expect(reader.sessionTps("s", { time: { created: 0 } }).live).toBe(0);
-    await Bun.sleep(1_100);
-    // The turn gains 200 generation tokens over 2 new seconds: 100 tok/s. An
-    // output-only numerator would see half the delta and read 50.
-    messages.s = [
-      {
-        id: "m1",
-        type: "assistant",
-        time: { created: 0, streamed: 4_000 },
-        tokens: { output: 160, reasoning: 140 },
-      },
-    ];
-    expect(reader.sessionTps("s", { time: { created: 0 } }).live).toBe(100);
-  });
-
-  test("a reasoning-only stamped turn still paces the decoder", async () => {
-    const messages: Record<string, readonly unknown[]> = {
-      s: [
-        {
-          id: "m1",
-          type: "assistant",
-          time: { created: 0, streamed: 2_000 },
-          tokens: { reasoning: 120 },
-        },
-      ],
-    };
-    const reader = createTpsReader(stampedContext(messages));
-    expect(reader.sessionTps("s", { time: { created: 0 } }).live).toBe(0);
-    await Bun.sleep(1_100);
-    // Reasoning grows 120 → 320 over 2 new seconds: 100 tok/s. Output-only
-    // would see no new output tokens and read zero.
-    messages.s = [
-      {
-        id: "m1",
-        type: "assistant",
-        time: { created: 0, streamed: 4_000 },
-        tokens: { reasoning: 320 },
-      },
-    ];
-    expect(reader.sessionTps("s", { time: { created: 0 } }).live).toBe(100);
-  });
-
-  test("the unstamped record path sums the output and reasoning rungs", async () => {
-    const elapsed = new Map<string, number>([["s", 10_000]]);
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => [id],
-          message: { list: () => [{ type: "assistant" }] },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
-    const reader = createTpsReader(context, {
-      elapsedMsOf: (id: string) => elapsed.get(id) ?? 10_000,
+  test("first sight never guesses a cumulative figure", () => {
+    const { context } = deltaContext({
+      root: [openTurn("r1")],
+      child: [openTurn("c1")],
     });
-    expect(
-      reader.sessionTps("s", { time: { created: 0 }, tokens: { output: 100, reasoning: 50 } }).live,
-    ).toBe(0);
-    await Bun.sleep(1_100);
-    // Reasoning grows 50 → 250 while output holds: +200 over 2 s of active
-    // clock. Output-only would see no new output and read zero.
-    elapsed.set("s", 12_000);
-    expect(
-      reader.sessionTps("s", { time: { created: 0 }, tokens: { output: 100, reasoning: 250 } }).live,
-    ).toBe(100);
+    const reader = createTpsReader(context, undefined, "session");
+    // No deltas injected: nothing streamed yet, so both read zero — the old
+    // poll tracker's lifetime-average flash has nowhere to come from.
+    expect(reader.sessionTps("root", { time: { created: 0 } }).rt).toBe(0);
+    expect(reader.sessionTps("child", { time: { created: 0 } }).rt).toBe(0);
+  });
+
+  test("rt returns zero when there is no figure yet, never undefined", () => {
+    const { context } = deltaContext({});
+    const reader = createTpsReader(context, undefined, "session");
+    expect(reader.sessionTps("quiet", { time: { created: 0 } }).rt).toBe(0);
   });
 });
 
-// Family-scope TPS hardening: an incomplete family walk must never move the
-// tracker's baselines, and the creation-time gate belongs to `"session"`
-// alone. A member message read that throws leaves a partial stamped total; a
-// member record read that throws leaves a partial generation total — either
-// fed in would reset the baselines, and the member's history would return as
-// a spike on recovery. And an unstamped root without `time.created` must
-// still pace its children off the family-wide active clock.
-describe("family tps holds baselines through partial reads and paces children without a root stamp", () => {
-  const turn = (id: string, streamed: number, tokens: Record<string, number>) => ({
-    id,
-    type: "assistant",
-    time: { created: 0, streamed },
-    tokens,
+// The realtime estimate counts every delta the host emits — text and
+// reasoning — because both paced the decoder. A thinking-heavy turn reads as
+// speed, not as silence with no output yet.
+describe("rt counts reasoning deltas as generation", () => {
+  const openTurn = (id: string) => ({ id, type: "assistant", time: { created: 0 }, tokens: { output: 1 } });
+
+  test("a reasoning delta paces the decoder like a text delta", () => {
+    const { context, emit } = deltaContext({ s: [openTurn("m1")] });
+    const reader = createTpsReader(context, undefined, "session");
+    // 100 estimated tokens a second ago, carried on the reasoning channel.
+    // A text-only numerator would see nothing streaming and read zero.
+    emit("session.reasoning.delta", "s", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("s", { time: { created: 0 } })).toEqual({ rt: 100, avg: undefined });
+  });
+});
+
+// Family-scope rt hardening: there are no baselines to hold — deltas are
+// additive, so a partial message walk cannot spike a later figure — and the
+// creation-time gate belongs to the average alone. A member message read that
+// throws leaves the average unknown while the realtime figure stands; and an
+// unstamped root without `time.created` still paces its children, for both
+// figures, off the family-wide streams and clock.
+describe("family rt sums concurrent decoders and degrades with the average", () => {
+  const familyOf = (id: string) => (id === "root" ? ["root", "child"] : [id]);
+  const openTurn = (id: string) => ({ id, type: "assistant", time: { created: 0 }, tokens: { output: 1 } });
+
+  test("concurrent decoders share wall clock instead of adding it", () => {
+    const { context, emit } = deltaContext({ root: [openTurn("r1")], child: [openTurn("c1")] }, familyOf);
+    const family = createTpsReader(context, undefined, "family");
+    const session = createTpsReader(context, undefined, "session");
+    // Both sessions stream 100 estimated tokens over the same second: the
+    // family paces their 200-token sum over the shared 1 s coverage, while
+    // the session reader paces the root alone.
+    const at = Date.now() - 1_000;
+    emit("session.text.delta", "root", "x".repeat(500), at);
+    emit("session.text.delta", "child", "x".repeat(500), at);
+    expect(family.sessionTps("root", { time: { created: 0 } }).rt).toBe(200);
+    expect(session.sessionTps("root", { time: { created: 0 } }).rt).toBe(100);
   });
 
-  test("a failed member message read holds the baselines instead of spiking on recovery", async () => {
+  test("a failed member message read leaves the average unknown while rt stands", () => {
     const messages: Record<string, readonly unknown[]> = {
-      root: [turn("r1", 2_000, { output: 60, reasoning: 40 })],
-      child: [turn("c1", 2_000, { output: 900, reasoning: 100 })],
+      root: [{ id: "r1", type: "assistant", time: { created: 0, streamed: 2_000 }, tokens: { output: 60, reasoning: 40 } }],
+      child: [{ id: "c1", type: "assistant", time: { created: 0, streamed: 2_000 }, tokens: { output: 900, reasoning: 100 } }],
     };
-    let childReadable = true;
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => (id === "root" ? ["root", "child"] : [id]),
-          message: {
-            list: (id: string) => {
-              if (id === "child" && !childReadable) throw new Error("transient child read failure");
-              return messages[id] ?? [];
-            },
-          },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
+    const { context, emit } = deltaContext(messages, familyOf);
+    // The child's read fails: partial spans would undercount time and inflate
+    // the mean, so the average stays unknown — while the realtime figure,
+    // estimated from events rather than polls, stands on the root's stream.
+    type List = (id: string) => readonly unknown[];
+    const session = (context as unknown as { data: { session: { message: { list: List } } } }).data.session;
+    const list = session.message.list;
+    session.message.list = (id: string) => {
+      if (id === "child") throw new Error("transient child read failure");
+      return list(id);
+    };
     const reader = createTpsReader(context, undefined, "family");
-    const root = { time: { created: 0 } };
-    // First sight sets the baselines (1,100 generation tokens over 2 s).
-    expect(reader.sessionTps("root", root).live).toBe(0);
-    await Bun.sleep(1_100);
-    // The root gains 100 generation tokens over 1 new second; the child holds.
-    messages.root = [turn("r1", 3_000, { output: 160, reasoning: 40 })];
-    expect(reader.sessionTps("root", root).live).toBe(100);
-    await Bun.sleep(1_100);
-    // The child's read fails: the partial total must not move the baselines,
-    // so the poll reads as zero either way — the proof is the next poll.
-    childReadable = false;
-    expect(reader.sessionTps("root", root).live).toBe(0);
-    await Bun.sleep(1_100);
-    // Recovery brings only 200 new tokens over 1 new second. Feeding the
-    // partial poll in would have rebaselined, and this would read 1200; with
-    // the baselines held it smooths the 200 sample from 100 to 130 instead.
-    childReadable = true;
-    messages.child = [turn("c1", 4_000, { output: 1100, reasoning: 100 })];
-    expect(reader.sessionTps("root", root).live).toBe(130);
+    emit("session.text.delta", "root", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 100, avg: undefined });
   });
 
-  test("a failed member record read holds the baselines instead of spiking on recovery", async () => {
-    const rootSession = { time: { created: 0 }, tokens: { output: 0 } };
-    let childOutput = 100;
-    let childReadable = true;
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => (id === "root" ? ["root", "child"] : [id]),
-          get: (id: string) => {
-            if (id === "child" && !childReadable) throw new Error("transient child record failure");
-            if (id === "root") return rootSession;
-            if (id === "child") return { tokens: { output: childOutput } };
-            throw new Error(`gone: ${id}`);
-          },
-          // Assistant turns with no timestamps: an unstamped host, so the
-          // denominator is the supplied active clock, fully controlled here.
-          message: { list: () => [{ type: "assistant" }] },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
-    const clock = new Map<string, number>([["root", 1_000]]);
-    const reader = createTpsReader(
-      context,
-      { elapsedMsOf: (id: string) => clock.get(id) ?? 0 },
-      "family",
-    );
-    // First sight sets the baselines (100 tokens over 1 s of active clock).
-    expect(reader.sessionTps("root", rootSession).live).toBe(0);
-    await Bun.sleep(1_100);
-    // The child gains 100 tokens over 1 new second of active clock.
-    childOutput = 200;
-    clock.set("root", 2_000);
-    expect(reader.sessionTps("root", rootSession).live).toBe(100);
-    await Bun.sleep(1_100);
-    // The child's record fails: the partial total must not move the baselines.
-    childReadable = false;
-    expect(reader.sessionTps("root", rootSession).live).toBe(0);
-    await Bun.sleep(1_100);
-    // Recovery brings only 200 new tokens over 1 new second: the 200 sample
-    // smooths from 100 to 130, not the 400 a rebaselined tracker would divide.
-    childReadable = true;
-    childOutput = 400;
-    clock.set("root", 3_000);
-    expect(reader.sessionTps("root", rootSession).live).toBe(130);
-  });
-
-  test("family scope paces a child off the active clock when the root carries no creation stamp", async () => {
-    let childOutput = 100;
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => (id === "root" ? ["root", "child"] : [id]),
-          get: (id: string) => {
-            // The displayed session carries no `time.created` at all; the
-            // child carries the tokens.
-            if (id === "root") return { tokens: { output: 0 } };
-            if (id === "child") return { tokens: { output: childOutput } };
-            throw new Error(`gone: ${id}`);
-          },
-          message: { list: () => [{ type: "assistant" }] },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
+  test("family scope paces a child off the active clock when the root carries no creation stamp", () => {
+    const { context, emit } = deltaContext({}, familyOf);
+    const session = (context as unknown as { data: { session: { get: (id: string) => unknown; message: { list: () => readonly unknown[] } } } }).data.session;
+    session.get = (id: string) => {
+      // The displayed session carries no `time.created` at all; the
+      // child carries the tokens.
+      if (id === "root") return { tokens: { output: 0 } };
+      if (id === "child") return { tokens: { output: 100 } };
+      throw new Error(`gone: ${id}`);
+    };
+    session.message.list = () => [{ type: "assistant" }];
     const clock = new Map<string, number>([["root", 1_000]]);
     const reader = createTpsReader(
       context,
@@ -515,34 +375,26 @@ describe("family tps holds baselines through partial reads and paces children wi
       "family",
     );
     const rootSession = { tokens: { output: 0 } };
-    // First sight sets the baselines rather than printing an average.
-    expect(reader.sessionTps("root", rootSession).live).toBe(0);
-    await Bun.sleep(1_100);
-    // The child gains 100 tokens over 1 new second of active clock: the row
-    // paces the child instead of reading the gate's zero.
-    childOutput = 200;
-    clock.set("root", 2_000);
-    expect(reader.sessionTps("root", rootSession).live).toBe(100);
+    // The child streams 100 estimated tokens a second ago: rt paces it with
+    // no gate at all, while the average divides the 100 recorded tokens over
+    // the same 1 s of family-wide active clock.
+    emit("session.text.delta", "child", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("root", rootSession)).toEqual({ rt: 100, avg: 100 });
   });
 
-  test("session scope keeps the creation-time gate", async () => {
-    // Same host state as above — unstamped, root without `time.created`,
-    // child advancing under an advancing clock — but `"session"` restores
-    // the pre-change figure: no stamp, no clock, so both polls read zero.
-    let childOutput = 100;
-    const context = {
-      data: {
-        session: {
-          family: (id: string) => (id === "root" ? ["root", "child"] : [id]),
-          get: (id: string) => {
-            if (id === "root") return { tokens: { output: 0 } };
-            if (id === "child") return { tokens: { output: childOutput } };
-            throw new Error(`gone: ${id}`);
-          },
-          message: { list: () => [{ type: "assistant" }] },
-        },
-      },
-    } as unknown as Parameters<typeof createTpsReader>[0];
+  test("session scope keeps the creation-time gate for the average only", () => {
+    // Same host state as above — unstamped, root without `time.created` —
+    // but `"session"` restores the gate for the average: no stamp, no
+    // clock, so the average stays unknown. The realtime figure has no gate:
+    // the root's own stream still paces.
+    const { context, emit } = deltaContext({}, familyOf);
+    const session = (context as unknown as { data: { session: { get: (id: string) => unknown; message: { list: () => readonly unknown[] } } } }).data.session;
+    session.get = (id: string) => {
+      if (id === "root") return { tokens: { output: 0 } };
+      if (id === "child") return { tokens: { output: 100 } };
+      throw new Error(`gone: ${id}`);
+    };
+    session.message.list = () => [{ type: "assistant" }];
     const clock = new Map<string, number>([["root", 1_000]]);
     const reader = createTpsReader(
       context,
@@ -550,22 +402,19 @@ describe("family tps holds baselines through partial reads and paces children wi
       "session",
     );
     const rootSession = { tokens: { output: 0 } };
-    expect(reader.sessionTps("root", rootSession).live).toBe(0);
-    await Bun.sleep(1_100);
-    childOutput = 200;
-    clock.set("root", 2_000);
-    expect(reader.sessionTps("root", rootSession).live).toBe(0);
+    emit("session.text.delta", "root", "x".repeat(500), Date.now() - 1_000);
+    expect(reader.sessionTps("root", rootSession)).toEqual({ rt: 100, avg: undefined });
   });
 });
 
 // The reader's second figure: the settled-turn average over the same scope,
-// handed over beside the EWMA `live` half. Unlike the live figure it needs
+// handed over beside the realtime rt estimate. Unlike the estimate it needs
 // no baselines — settled turns already divide on the first poll, so `avg`
 // draws immediately — and an in-flight turn (no `streamed` yet) stays out of
 // the numerator and the denominator together. These pin the pair shape, the
 // settled-only rule, the family union, the unstamped clock path, and the
 // partial-read degradation.
-describe("the tps reader hands over the settled-turn average beside the live rate", () => {
+describe("the tps reader hands over the settled-turn average beside the rt estimate", () => {
   const stampedContext = (
     messages: Record<string, readonly unknown[]>,
     family: (id: string) => readonly string[] = (id) => [id],
@@ -589,7 +438,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     );
     // The root's own 100 generation tokens over its 2 s span: 50 tok/s on the
     // first poll, while the live half still waits for a delta.
-    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ live: 0, avg: 50 });
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: 50 });
   });
 
   test("an in-flight turn stays out of the numerator and the denominator together", () => {
@@ -603,7 +452,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     const reader = createTpsReader(stampedContext(messages), undefined, "session");
     // Only the settled turn divides: 100 over 2 s. Counting the in-flight
     // turn's tokens over its open span would read 2,550.
-    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ live: 0, avg: 50 });
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: 50 });
   });
 
   test("a turn that settled only its tools is not settled work", () => {
@@ -633,7 +482,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     );
     // 1,100 generation tokens over the 5 s union: 220. Summing the spans
     // instead of unioning them would divide by 7 s and read ~157.
-    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ live: 0, avg: 220 });
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: 220 });
   });
 
   test("with no settled turn the average is unknown, never zero", () => {
@@ -646,7 +495,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
       undefined,
       "session",
     );
-    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ live: 0, avg: undefined });
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: undefined });
   });
 
   test("a failed member read leaves the average unknown with the live zero", () => {
@@ -670,7 +519,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     const reader = createTpsReader(context, undefined, "family");
     // Partial spans would undercount time and inflate the mean, so the poll
     // degrades instead of dividing: live zero, average unknown.
-    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ live: 0, avg: undefined });
+    expect(reader.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: undefined });
   });
 
   test("the unstamped path divides generation over the borrowed active clock", () => {
@@ -689,7 +538,7 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     // still waits for a delta, so the pair reads zero beside it.
     expect(
       reader.sessionTps("s", { time: { created: 0 }, tokens: { output: 100, reasoning: 50 } }),
-    ).toEqual({ live: 0, avg: 15 });
+    ).toEqual({ rt: 0, avg: 15 });
   });
 
   test("the unstamped average is unknown when the clock has nothing to lend", () => {
@@ -706,6 +555,6 @@ describe("the tps reader hands over the settled-turn average beside the live rat
     // no average — never the wall-clock lifetime figure.
     expect(
       reader.sessionTps("s", { time: { created: 0 }, tokens: { output: 100, reasoning: 50 } }),
-    ).toEqual({ live: 0, avg: undefined });
+    ).toEqual({ rt: 0, avg: undefined });
   });
 });
