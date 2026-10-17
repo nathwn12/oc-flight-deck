@@ -391,6 +391,34 @@ describe("the time to first token", () => {
     tracker.dispose();
   });
 
+  test("a correction landing after eviction seeds the corrected value, never zero", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    const delta = (sessionID: string, messageID: string, at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID, assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
+      }
+    };
+    started(bus, "s", "m1", 1_000);
+    delta("s", "m1", 3_000);
+    expect(tracker.ttft(["s"])).toBe(2);
+    // Fifty other sessions measure, settle, and push "s" out of the bounded
+    // totals — while "s"'s own step stays pending, its start never dropped.
+    for (let index = 0; index < RT_MAX_SESSIONS; index += 1) {
+      started(bus, `fill${index}`, `n${index}`, 0);
+      delta(`fill${index}`, `n${index}`, 1_000);
+      step(bus, "session.step.ended", `fill${index}`, `n${index}`, { finish: "stop" }, 2_000);
+    }
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    // The earlier-stamped delta still corrects the pending step — from the
+    // step's own value, not from a subtraction against the evicted total,
+    // which would have fabricated 0.
+    delta("s", "m1", 2_000);
+    expect(tracker.ttft(["s"])).toBe(1);
+    tracker.dispose();
+  });
+
   test("a duplicate delta never re-counts the step", () => {
     const time = clock();
     const { context, bus } = busContext();

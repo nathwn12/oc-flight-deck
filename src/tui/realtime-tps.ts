@@ -224,13 +224,22 @@ export function createRealtimeTps(
       });
       return;
     }
+    // The session's total is missing: evicted after this step was first
+    // measured, or never seeded because the session's history aged out. Seed
+    // from the step's own corrected value — never from a subtraction against
+    // a total that is no longer there, which would fabricate a zero from a
+    // negative adjust. This seed is sufficient (no need to shield sessions
+    // with pending steps from eviction): `pending.best` always carries this
+    // step's corrected measurement locally, so the seed is exact for the
+    // step itself, and totals eviction by design already concedes older
+    // history. Neither map can grow from it — both stay under their bound.
     if (ttftTotals.size >= RT_MAX_SESSIONS) {
       for (const oldest of ttftTotals.keys()) {
         ttftTotals.delete(oldest);
         break;
       }
     }
-    ttftTotals.set(pending.sessionID, { totalMs: Math.max(0, adjust), count: 1 });
+    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
   };
 
   const stepStarted = (event: unknown): void => {

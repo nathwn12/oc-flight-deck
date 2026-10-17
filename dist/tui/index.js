@@ -1281,7 +1281,7 @@ function createRealtimeTps(context, opts) {
         break;
       }
     }
-    ttftTotals.set(pending.sessionID, { totalMs: Math.max(0, adjust), count: 1 });
+    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
   };
   const stepStarted = (event) => {
     if (disposed)
