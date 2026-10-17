@@ -20,12 +20,15 @@ interface Bus {
 }
 
 /** A fake host subscription surface that records handlers and emits on demand. */
-function busContext(opts?: { now?: () => number; throwing?: boolean }) {
+function busContext(opts?: { now?: () => number; throwing?: boolean; failAt?: number }) {
   const bus: Bus = { handlers: new Map(), released: [] };
+  let calls = 0;
   const context = {
     data: {
       on: (type: string, handler: Handler) => {
         if (opts?.throwing === true) throw new Error("no subscription surface");
+        calls += 1;
+        if (opts?.failAt === calls) throw new Error(`rejected subscription: ${type}`);
         const known = bus.handlers.get(type) ?? [];
         known.push(handler);
         bus.handlers.set(type, known);
@@ -57,13 +60,17 @@ function clock(start = 1_000_000) {
 }
 
 describe("the realtime estimate", () => {
-  test("estimates tokens from delta bytes, at least one per delta", () => {
-    // Five bytes per token, rounded up; every delta moved the decoder, so
-    // even an empty one counts one. An ESTIMATE — the host publishes real
-    // counts only at step end.
-    expect(estimateDeltaTokens("")).toBe(1);
+  test("estimates tokens from raw delta bytes, zero for an empty delta", () => {
+    // Five bytes per token, rounded up, measured as sent — never trimmed. A
+    // whitespace-only delta still moved the decoder, so `" "` counts one
+    // token and `" abcde "` (7 bytes) counts two. An empty delta carries
+    // nothing: 0, never 1. An ESTIMATE — the host publishes real counts only
+    // at step end.
+    expect(estimateDeltaTokens("")).toBe(0);
+    expect(estimateDeltaTokens(" ")).toBe(1);
     expect(estimateDeltaTokens("abc")).toBe(1);
     expect(estimateDeltaTokens("abcde")).toBe(1);
+    expect(estimateDeltaTokens(" abcde ")).toBe(2);
     expect(estimateDeltaTokens("abcdef")).toBe(2);
     expect(estimateDeltaTokens("x".repeat(500))).toBe(100);
     // Multibyte text counts bytes, not characters.
@@ -365,6 +372,60 @@ describe("the time to first token", () => {
     tracker.dispose();
   });
 
+  test("a later-received delta with an earlier stamp corrects the step", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    const delta = (messageID: string, at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
+      }
+    };
+    started(bus, "s", "m1", 1_000);
+    // Delivered out of order: the 3000ms delta lands first and the step
+    // reads 2s — then the 2000ms delta corrects it to 1s in place.
+    delta("m1", 3_000);
+    expect(tracker.ttft(["s"])).toBe(2);
+    delta("m1", 2_000);
+    expect(tracker.ttft(["s"])).toBe(1);
+    tracker.dispose();
+  });
+
+  test("a duplicate delta never re-counts the step", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    const delta = (messageID: string, at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
+      }
+    };
+    started(bus, "s", "m1", 1_000);
+    delta("m1", 2_000);
+    started(bus, "s", "m2", 0);
+    delta("m2", 4_000);
+    // Two steps measured: (1 + 4) / 2.
+    expect(tracker.ttft(["s"])).toBe(2.5);
+    // The same stamp again changes nothing — count and total hold.
+    delta("m1", 2_000);
+    expect(tracker.ttft(["s"])).toBe(2.5);
+    tracker.dispose();
+  });
+
+  test("a whitespace-first token still measures the step", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 1_000);
+    // The old trimmed coercion skipped this delta entirely; the raw string
+    // carries the timestamp that starts the clock.
+    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+      handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: " " }, created: 1_500 });
+    }
+    expect(tracker.ttft(["s"])).toBe(0.5);
+    tracker.dispose();
+  });
+
   test("a step that settles without a delta contributes nothing", () => {
     const time = clock();
     const { context, bus } = busContext();
@@ -411,6 +472,26 @@ describe("the time to first token", () => {
     }
     expect(tracker.ttft(["s"])).toBeUndefined();
     tracker.dispose();
+  });
+
+  test("a rejected subscription keeps every earlier release and the accepted data", () => {
+    const time = clock();
+    // The second subscription (reasoning deltas) throws: the first release
+    // must survive, and the tracker stays live on what the host accepted.
+    const { context, bus } = busContext({ failAt: 2 });
+    const tracker = createRealtimeTps(context, { now: time.now });
+    expect(tracker.active).toBe(true);
+    expect(bus.handlers.get("session.text.delta")).toHaveLength(1);
+    expect(bus.handlers.get("session.reasoning.delta")).toBeUndefined();
+    // Later subscriptions still land after the rejection.
+    expect(bus.handlers.get("session.step.started")).toHaveLength(1);
+    emit(bus, "session.text.delta", "s", "x".repeat(500), time.now());
+    time.advance(1_000);
+    expect(tracker.rate("s", ["s"])).toBe(100);
+    tracker.dispose();
+    // Every obtained release is still called — nothing leaks.
+    expect(bus.released).toHaveLength(4);
+    expect(bus.handlers.get("session.text.delta")).toBeUndefined();
   });
 
   test("disposal forgets pending starts and running totals", () => {

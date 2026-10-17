@@ -1205,7 +1205,8 @@ var RT_SAMPLE_WINDOW_MS = 5000;
 var RT_STALE_MS = 1500;
 var RT_MAX_SESSIONS = 50;
 function estimateDeltaTokens(delta) {
-  return Math.max(1, Math.ceil(Buffer.byteLength(delta, "utf8") / 5));
+  const bytes = Buffer.byteLength(delta, "utf8");
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes / 5)) : 0;
 }
 function createRealtimeTps(context, opts) {
   const now = opts?.now ?? Date.now;
@@ -1236,7 +1237,8 @@ function createRealtimeTps(context, opts) {
     const record = asRecord2(event);
     const data = asRecord2(record?.["data"]);
     const sessionID = asText2(data?.["sessionID"]);
-    const delta = asText2(data?.["delta"]);
+    const raw = data?.["delta"];
+    const delta = typeof raw === "string" ? raw : undefined;
     if (sessionID === undefined || delta === undefined)
       return;
     const at = asCount2(record?.["created"]) ?? now();
@@ -1258,12 +1260,19 @@ function createRealtimeTps(context, opts) {
     const pending = pendingStarts.get(messageID);
     if (pending === undefined)
       return;
-    pendingStarts.delete(messageID);
-    const total = ttftTotals.get(pending.sessionID);
     const step = Math.max(0, at - pending.started);
+    const prev = pending.best;
+    if (prev !== undefined && step >= prev)
+      return;
+    const adjust = prev === undefined ? step : step - prev;
+    pending.best = step;
+    const total = ttftTotals.get(pending.sessionID);
     if (total !== undefined) {
       ttftTotals.delete(pending.sessionID);
-      ttftTotals.set(pending.sessionID, { totalMs: total.totalMs + step, count: total.count + 1 });
+      ttftTotals.set(pending.sessionID, {
+        totalMs: total.totalMs + adjust,
+        count: total.count + (prev === undefined ? 1 : 0)
+      });
       return;
     }
     if (ttftTotals.size >= RT_MAX_SESSIONS) {
@@ -1272,7 +1281,7 @@ function createRealtimeTps(context, opts) {
         break;
       }
     }
-    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+    ttftTotals.set(pending.sessionID, { totalMs: Math.max(0, adjust), count: 1 });
   };
   const stepStarted = (event) => {
     if (disposed)
@@ -1290,7 +1299,7 @@ function createRealtimeTps(context, opts) {
         break;
       }
     }
-    pendingStarts.set(messageID, { sessionID, started });
+    pendingStarts.set(messageID, { sessionID, started, best: undefined });
   };
   const stepSettled = (event) => {
     if (disposed)
@@ -1304,8 +1313,17 @@ function createRealtimeTps(context, opts) {
     const on = context.data?.on;
     if (typeof on === "function") {
       const subscribe = on;
-      releases.push(subscribe("session.text.delta", ingest), subscribe("session.reasoning.delta", ingest), subscribe("session.step.started", stepStarted), subscribe("session.step.ended", stepSettled), subscribe("session.step.failed", stepSettled));
-      active = true;
+      const track = (type, handler) => {
+        try {
+          releases.push(subscribe(type, handler));
+        } catch {}
+      };
+      track("session.text.delta", ingest);
+      track("session.reasoning.delta", ingest);
+      track("session.step.started", stepStarted);
+      track("session.step.ended", stepSettled);
+      track("session.step.failed", stepSettled);
+      active = releases.length > 0;
     }
   } catch {
     active = false;

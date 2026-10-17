@@ -61,16 +61,18 @@ interface RealtimeSample {
 }
 
 /**
- * Estimate one delta's tokens from its bytes.
+ * Estimate one delta's tokens from its raw bytes.
  *
- * `Math.max(1, Math.ceil(Buffer.byteLength(delta, "utf8") / 5))`: every
- * delta moved the decoder, so even an empty one counts one token, and five
- * bytes per token is the working ratio, not a measurement. Documented as an
- * ESTIMATE at the module top: the host publishes real counts only at step
- * end, and the settled average stays the real figure.
+ * The delta is measured as sent — `Buffer.byteLength` over the full string,
+ * never trimmed: a whitespace-only delta still moved the decoder, so `" "`
+ * estimates 1 token and `" abcde "` estimates 2. An empty delta carries
+ * nothing and estimates 0, never 1. An ESTIMATE, documented at the module
+ * top: the host publishes real counts only at step end, and the settled
+ * average stays the real figure.
  */
 export function estimateDeltaTokens(delta: string): number {
-  return Math.max(1, Math.ceil(Buffer.byteLength(delta, "utf8") / 5));
+  const bytes = Buffer.byteLength(delta, "utf8");
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes / 5)) : 0;
 }
 
 /** The realtime tracker: `active` is false when the host offers no subscription surface. */
@@ -134,8 +136,10 @@ export function createRealtimeTps(
   // TTFT state, same lifetime as the samples: pending dispatch stamps keyed
   // by `assistantMessageID`, and running totals keyed by session. Both
   // bounded with eviction like the sample ring — a host that starts steps it
-  // never ends must not grow these maps forever.
-  const pendingStarts = new Map<string, { sessionID: string; started: number }>();
+  // never ends must not grow these maps forever. A pending step keeps the
+  // earliest delta timestamp seen so far: delivery order is not trusted, so a
+  // later-received delta carrying an earlier stamp corrects the step.
+  const pendingStarts = new Map<string, { sessionID: string; started: number; best: number | undefined }>();
   const ttftTotals = new Map<string, { totalMs: number; count: number }>();
   let disposed = false;
   let active = false;
@@ -164,7 +168,12 @@ export function createRealtimeTps(
     const record = asRecord(event);
     const data = asRecord(record?.["data"]);
     const sessionID = asText(data?.["sessionID"]);
-    const delta = asText(data?.["delta"]);
+    // The delta is byte-measured, never coerced: `asText` trims and rejects
+    // whitespace-only strings, which would estimate a whitespace-first token
+    // as nothing and hide it from TTFT. A raw string — even empty or blank —
+    // is a real decoder event with a real timestamp.
+    const raw = data?.["delta"];
+    const delta = typeof raw === "string" ? raw : undefined;
     if (sessionID === undefined || delta === undefined) return undefined;
     // The host's own event clock, not ours: `created` is when the decoder
     // moved. A missing stamp falls back to now rather than dropping work.
@@ -181,27 +190,38 @@ export function createRealtimeTps(
   };
 
   /**
-   * Fold one step's first delta into its session's TTFT totals.
+   * Fold one step's delta into its session's TTFT totals.
    *
-   * Only the FIRST delta of a step counts: the pending start is dropped once
-   * measured, so later deltas never re-count. A step that ends or fails
-   * without any delta leaves nothing behind — its pending start is dropped
-   * by the end/fail handler below. The per-step figure is the delta's event
-   * time minus the step's `started`, clamped at 0 so a skewed clock can
-   * never subtract time.
+   * While the step is pending, every delta's own event time is a candidate:
+   * the earliest wins, so a later-received delta carrying an earlier stamp
+   * corrects the step's contribution in place (the session total moves by
+   * the delta between old and new). A delta at or after the best stamp is a
+   * duplicate, never a re-count. The step stays live — its ttft shows as
+   * soon as its first delta arrives and improves if an earlier-stamped delta
+   * lands later — until `session.step.ended` / `session.step.failed`
+   * finalizes it. The per-step figure is the delta's event time minus the
+   * step's `started`, clamped at 0 so a skewed clock can never subtract
+   * time. A step that settles without any delta leaves nothing behind.
    */
   const measureFirstToken = (event: unknown, at: number): void => {
     const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined) return;
     const pending = pendingStarts.get(messageID);
     if (pending === undefined) return;
-    // Marked measured: later deltas for this step find nothing pending.
-    pendingStarts.delete(messageID);
-    const total = ttftTotals.get(pending.sessionID);
     const step = Math.max(0, at - pending.started);
+    const prev = pending.best;
+    // A delta at or after the best stamp adds nothing — duplicates and
+    // later tokens never re-count.
+    if (prev !== undefined && step >= prev) return;
+    const adjust = prev === undefined ? step : step - prev;
+    pending.best = step;
+    const total = ttftTotals.get(pending.sessionID);
     if (total !== undefined) {
       ttftTotals.delete(pending.sessionID);
-      ttftTotals.set(pending.sessionID, { totalMs: total.totalMs + step, count: total.count + 1 });
+      ttftTotals.set(pending.sessionID, {
+        totalMs: total.totalMs + adjust,
+        count: total.count + (prev === undefined ? 1 : 0),
+      });
       return;
     }
     if (ttftTotals.size >= RT_MAX_SESSIONS) {
@@ -210,7 +230,7 @@ export function createRealtimeTps(
         break;
       }
     }
-    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+    ttftTotals.set(pending.sessionID, { totalMs: Math.max(0, adjust), count: 1 });
   };
 
   const stepStarted = (event: unknown): void => {
@@ -231,30 +251,44 @@ export function createRealtimeTps(
         break;
       }
     }
-    pendingStarts.set(messageID, { sessionID, started });
+    pendingStarts.set(messageID, { sessionID, started, best: undefined });
   };
 
   const stepSettled = (event: unknown): void => {
     if (disposed) return;
     const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
     if (messageID === undefined) return;
-    // Ended or failed without a first delta: the step contributes nothing
-    // and its pending start is dropped rather than left to linger.
+    // Finalize: the step's contribution stands as measured, and a step that
+    // settled without any delta leaves nothing behind — its pending start is
+    // dropped rather than left to linger.
     pendingStarts.delete(messageID);
   };
 
+  // Each subscription stands on its own: the release is retained the moment
+  // the call succeeds, so a host that rejects one event keeps the ones it
+  // accepted — partial data, with the missing figures degrading naturally —
+  // and a failure can never strand an earlier release. The tracker is live
+  // while at least one subscription landed.
   try {
     const on = (context as { data?: { on?: unknown } }).data?.on;
     if (typeof on === "function") {
       const subscribe = on as Plugin.Context["data"]["on"];
-      releases.push(
-        subscribe("session.text.delta", ingest),
-        subscribe("session.reasoning.delta", ingest),
-        subscribe("session.step.started", stepStarted),
-        subscribe("session.step.ended", stepSettled),
-        subscribe("session.step.failed", stepSettled),
-      );
-      active = true;
+      const track = (
+        type: "session.text.delta" | "session.reasoning.delta" | "session.step.started" | "session.step.ended" | "session.step.failed",
+        handler: (event: unknown) => void,
+      ): void => {
+        try {
+          releases.push(subscribe(type, handler));
+        } catch {
+          // This event stays unsubscribed; the releases already held survive.
+        }
+      };
+      track("session.text.delta", ingest);
+      track("session.reasoning.delta", ingest);
+      track("session.step.started", stepStarted);
+      track("session.step.ended", stepSettled);
+      track("session.step.failed", stepSettled);
+      active = releases.length > 0;
     }
   } catch {
     // No subscription surface on this host (missing or throwing): the tracker
