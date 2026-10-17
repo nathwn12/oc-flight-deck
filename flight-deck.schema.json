@@ -148,7 +148,7 @@
           "items": { "enum": ["caution", "status", "agent", "model", "branch", "cost", "total", "project", "tokens", "cache", "context", "perms", "elapsed", "tps", "spark", "reasoning", "turns", "guard", "go", "ses", "session"] },
           "default": ["status", "agent", "model", "cost", "project", "tokens", "cache", "context", "perms", "elapsed", "tps"],
           "maxItems": 24,
-          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, drawing its zero skeleton until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows a clipped preview of the session id under the `session` label - budget 18 cells, reduced by however much the label overflows `layout.labelWidth`, floored at 8 - and a mouse click on that row sends the full id to the terminal clipboard as a best-effort OSC52 request: terminal-dependent (the terminal may ignore it) and never reported as a confirmed copy. `session` is accepted as an alias for `ses` and is normalized to it."
+          "description": "Which live fields to draw, top to bottom. Any subset, any order - this is the single most useful thing to change. With `sidebar.persist` (the default) every named row always renders, drawing its zero skeleton until the host has data; with `persist: false` rows with no data are omitted entirely. Counted together with `sidebar.lines` against a 24-line cap on the whole rail. The opt-in `ses` row shows a clipped preview of the session id under the `session` label - budget 18 cells, reduced by however much the label overflows `layout.labelWidth`, floored at 8 - and a mouse click on that row copies the full id to the OS clipboard: a host write reporting `written` or an exact clipboard read-back after the OSC52 dispatch verifies it, only a verified copy counts as success, a verified copy stays silent, and an unverified or failed outcome surfaces a toast gated by `notifications.copy`. `session` is accepted as an alias for `ses` and is normalized to it."
         },
         "tps": {
           "type": "object",
@@ -252,6 +252,34 @@
           "type": "boolean",
           "default": false,
           "description": "Also raise a toast the first time a caution appears, once per distinct problem, re-arming when the session goes quiet. Off by default: the rail is the signal and a notification is an interruption. Worth enabling if you walk away from long runs."
+        }
+      }
+    },
+
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The silencing layer over every toast the plugin can raise: the invalid-config warning, the copy outcome, and the opt-in caution toast. Every flag is on by default and only ever silences — a verified copy is silent regardless and never reaches this gate.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch: false silences every toast with one key. True leaves each per-kind flag to decide."
+        },
+        "config": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the one-time warning naming an invalid config key. False ignores bad values silently, restoring defaults."
+        },
+        "copy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the copy-outcome toast when a copy could not be verified. False keeps failures silent too; verified copies are always silent."
+        },
+        "caution": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow the opt-in caution toast. False suppresses it even when `caution.enabled` and `caution.toast` are both true."
         }
       }
     },

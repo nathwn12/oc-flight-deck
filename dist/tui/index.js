@@ -246,8 +246,19 @@ function formatElapsed(ms) {
 }
 
 // src/tui/host-clipboard.ts
+import { createHostClipboard as createCoreHostClipboard } from "@opentui/core";
+var cached;
+var attempted = false;
 function createHostClipboard() {
-  return;
+  if (attempted)
+    return cached;
+  attempted = true;
+  try {
+    cached = createCoreHostClipboard();
+  } catch {
+    cached = undefined;
+  }
+  return cached;
 }
 
 // src/tui/clipboard.ts
@@ -264,6 +275,40 @@ function dispatchOsc52(renderer, text) {
   } catch {
     return false;
   }
+}
+var READ_BACK_ATTEMPTS = 5;
+var READ_BACK_INTERVAL_MS = 60;
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function readBackMatches(host, text) {
+  const read = host?.read;
+  if (host === undefined || read === undefined)
+    return false;
+  for (let attempt = 0;attempt < READ_BACK_ATTEMPTS; attempt += 1) {
+    if (attempt > 0)
+      await delay(READ_BACK_INTERVAL_MS);
+    let current;
+    try {
+      current = await read.call(host, { preferredTypes: ["text/plain"], selection: "clipboard" });
+    } catch {
+      return false;
+    }
+    if (current.status !== "read")
+      continue;
+    const bytes = current.representation?.bytes;
+    if (bytes === undefined)
+      continue;
+    let decoded;
+    try {
+      decoded = new TextDecoder().decode(bytes);
+    } catch {
+      return false;
+    }
+    if (decoded === text)
+      return true;
+  }
+  return false;
 }
 async function copyToClipboard(renderer, text, createHost = createHostClipboard) {
   let hostReached = true;
@@ -286,8 +331,11 @@ async function copyToClipboard(renderer, text, createHost = createHostClipboard)
   }
   if (hostStatus === "written")
     return { verified: true, outcome: "written" };
-  if (dispatchOsc52(renderer, text))
+  if (dispatchOsc52(renderer, text)) {
+    if (await readBackMatches(host, text))
+      return { verified: true, outcome: "osc52-confirmed" };
     return { verified: false, outcome: "osc52-dispatched" };
+  }
   if (!hostReached)
     return { verified: false, outcome: "no-backend" };
   const outcome = hostStatus === "unsupported" || hostStatus === "cancelled" || hostStatus === "timed-out" || hostStatus === "failed" ? hostStatus : "failed";
@@ -301,8 +349,8 @@ function copyFeedback(result, id) {
     case "osc52-dispatched":
       return {
         ok: false,
-        variant: "error",
-        message: "Sent the session id to the terminal, but could not confirm it was copied."
+        variant: "warning",
+        message: "Sent the session id to the terminal; the terminal does not confirm copies, so paste to verify."
       };
     case "unsupported":
       return { ok: false, variant: "error", message: "This terminal cannot copy to the clipboard." };
@@ -1259,6 +1307,12 @@ var DEFAULT_GLYPHS = {
   caution: "\u25CF",
   clear: "\u25CB"
 };
+var DEFAULT_NOTIFICATIONS = {
+  enabled: true,
+  config: true,
+  copy: true,
+  caution: true
+};
 var DEFAULT_CAUTION = {
   enabled: false,
   toolWatchSeconds: 180,
@@ -1302,6 +1356,7 @@ var DEFAULT_CONFIG = {
   },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
+  notifications: DEFAULT_NOTIFICATIONS,
   layout: DEFAULT_LAYOUT,
   format: DEFAULT_FORMAT,
   glyphs: DEFAULT_GLYPHS,
@@ -1557,6 +1612,7 @@ function mergeOptions(fileOptions, hostOptions) {
     sidebar: mergeSection(file, host, "sidebar"),
     footer: mergeSection(file, host, "footer"),
     caution: mergeSection(file, host, "caution"),
+    notifications: mergeSection(file, host, "notifications"),
     layout: mergeSection(file, host, "layout"),
     format: mergeSection(file, host, "format"),
     glyphs: mergeSection(file, host, "glyphs"),
@@ -1741,6 +1797,14 @@ function readToolNames(value, issues) {
   }
   return names;
 }
+function readNotifications(section, issues) {
+  return {
+    enabled: readBoolean(section["enabled"], DEFAULT_NOTIFICATIONS.enabled, "notifications.enabled", issues),
+    config: readBoolean(section["config"], DEFAULT_NOTIFICATIONS.config, "notifications.config", issues),
+    copy: readBoolean(section["copy"], DEFAULT_NOTIFICATIONS.copy, "notifications.copy", issues),
+    caution: readBoolean(section["caution"], DEFAULT_NOTIFICATIONS.caution, "notifications.caution", issues)
+  };
+}
 function readCaution(section, issues) {
   const toolWatchSeconds = readNumber(section["toolWatchSeconds"], DEFAULT_CAUTION.toolWatchSeconds, "caution.toolWatchSeconds", issues, 0);
   const turnWatchSeconds = readNumber(section["turnWatchSeconds"], DEFAULT_CAUTION.turnWatchSeconds, "caution.turnWatchSeconds", issues, 0);
@@ -1777,6 +1841,7 @@ function resolveConfig(options) {
   const rawSidebar = options.sidebar;
   const rawFooter = options.footer;
   const rawCaution = options.caution;
+  const rawNotifications = options.notifications;
   const rawFormat = options.format;
   const rawStyle = options.style;
   if (rawSidebar !== undefined && !isRecord(rawSidebar)) {
@@ -1788,6 +1853,9 @@ function resolveConfig(options) {
   if (rawCaution !== undefined && !isRecord(rawCaution)) {
     issues.push("caution must be an object; using defaults");
   }
+  if (rawNotifications !== undefined && !isRecord(rawNotifications)) {
+    issues.push("notifications must be an object; using defaults");
+  }
   if (rawFormat !== undefined && !isRecord(rawFormat)) {
     issues.push("format must be an object; using defaults");
   }
@@ -1797,6 +1865,7 @@ function resolveConfig(options) {
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
   const caution = isRecord(rawCaution) ? rawCaution : {};
+  const notifications = isRecord(rawNotifications) ? rawNotifications : {};
   const layout = isRecord(options.layout) ? options.layout : {};
   const format = isRecord(rawFormat) ? rawFormat : {};
   const glyphs = isRecord(options.glyphs) ? options.glyphs : {};
@@ -1834,6 +1903,7 @@ function resolveConfig(options) {
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues)
       },
       caution: readCaution(caution, issues),
+      notifications: readNotifications(notifications, issues),
       layout: readLayout(layout, issues),
       format: readFormat(format, issues),
       glyphs: readGlyphs(glyphs, issues),
@@ -1842,6 +1912,11 @@ function resolveConfig(options) {
     },
     issues
   };
+}
+
+// src/tui/notify.ts
+function shouldNotify(config, kind) {
+  return config.enabled && config[kind];
 }
 
 // src/tui/file-config.ts
@@ -3589,7 +3664,7 @@ var tui_default = Plugin.define({
       console.warn(`[flight-deck] ${file.issue}`);
     }
     const problems = file.issue !== undefined ? [file.issue, ...issues] : issues;
-    if (problems.length > 0) {
+    if (problems.length > 0 && shouldNotify(config.notifications, "config")) {
       const extra = problems.length > 1 ? ` (+${problems.length - 1} more)` : "";
       context.ui.toast.show({
         title: "Flight Deck",
@@ -3620,6 +3695,8 @@ var tui_default = Plugin.define({
               const result = await copyToClipboard(context.renderer, copyId);
               const fb = copyFeedback(result, copyId);
               if (fb.ok)
+                return;
+              if (!shouldNotify(config.notifications, "copy"))
                 return;
               context.ui.toast.show({
                 title: "Flight Deck",
@@ -3728,7 +3805,7 @@ var tui_default = Plugin.define({
     let toastedKey;
     let watchTimer;
     const toastMs = Math.max(1000, config.refresh > 0 ? config.refresh : 1000);
-    if (config.sidebar.enabled && config.caution.enabled && config.caution.toast) {
+    if (config.sidebar.enabled && config.caution.enabled && config.caution.toast && shouldNotify(config.notifications, "caution")) {
       watchTimer = setInterval(() => {
         const sessionID = watchedSession;
         if (sessionID === undefined)

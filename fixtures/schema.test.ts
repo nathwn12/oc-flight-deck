@@ -98,6 +98,11 @@ describe("the schema describes the real config", () => {
     expect(props["caution"]!.properties.exemptTools.default).toEqual([...DEFAULT_CONFIG.caution.exemptTools]);
     expect(props["caution"]!.properties.toast.default).toBe(DEFAULT_CONFIG.caution.toast);
 
+    expect(props["notifications"]!.properties.enabled.default).toBe(DEFAULT_CONFIG.notifications.enabled);
+    expect(props["notifications"]!.properties.config.default).toBe(DEFAULT_CONFIG.notifications.config);
+    expect(props["notifications"]!.properties.copy.default).toBe(DEFAULT_CONFIG.notifications.copy);
+    expect(props["notifications"]!.properties.caution.default).toBe(DEFAULT_CONFIG.notifications.caution);
+
     expect(props["layout"]!.properties.labelWidth.default).toBe(DEFAULT_CONFIG.layout.labelWidth);
     expect(props["layout"]!.properties.barWidth.default).toBe(DEFAULT_CONFIG.layout.barWidth);
     expect(props["layout"]!.properties.sparkWidth.default).toBe(DEFAULT_CONFIG.layout.sparkWidth);

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_TEXT,
+  DEFAULT_NOTIFICATIONS,
   DEFAULT_REFRESH_MS,
   DEFAULT_SIDEBAR_FOOTER_LINES,
   DEFAULT_SIDEBAR_LINES,
@@ -672,6 +673,49 @@ describe("option validation", () => {
   });
 });
 
+// The `notifications` silencing layer: every toast on by default, each flag an
+// explicit opt-out. These pin the defaults, the loud fallbacks, and the
+// file/host precedence the other sections share.
+describe("the notifications section", () => {
+  test("ships with every toast on", () => {
+    expect(DEFAULT_NOTIFICATIONS).toEqual({ enabled: true, config: true, copy: true, caution: true });
+    expect(DEFAULT_CONFIG.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+    const resolution = resolveConfig(undefined);
+    expect(resolution.issues).toEqual([]);
+    expect(resolution.config.notifications).toEqual({ enabled: true, config: true, copy: true, caution: true });
+  });
+
+  test("honours valid overrides per flag", () => {
+    const off = resolveConfig({ notifications: { enabled: false } });
+    expect(off.issues).toEqual([]);
+    expect(off.config.notifications).toEqual({ enabled: false, config: true, copy: true, caution: true });
+
+    const kinds = resolveConfig({ notifications: { config: false, copy: false, caution: false } });
+    expect(kinds.issues).toEqual([]);
+    expect(kinds.config.notifications).toEqual({ enabled: true, config: false, copy: false, caution: false });
+  });
+
+  test("reports a malformed section and falls back to all on", () => {
+    const malformed = resolveConfig({ notifications: "silent" });
+    expect(malformed.config.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+    expect(malformed.issues.join(" ")).toContain("notifications must be an object");
+
+    const badFlag = resolveConfig({ notifications: { copy: "never" } });
+    expect(badFlag.config.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+    expect(badFlag.issues.join(" ")).toContain("notifications.copy");
+  });
+
+  test("lets host options override file options key by key", () => {
+    const merged = mergeOptions({ notifications: { copy: false, caution: false } }, { notifications: { copy: true } });
+    const { config, issues } = resolveConfig(merged);
+    expect(issues).toEqual([]);
+    expect(config.notifications).toEqual({ enabled: true, config: true, copy: true, caution: false });
+
+    const malformedHost = resolveConfig(mergeOptions({ notifications: { copy: false } }, { notifications: 42 }));
+    expect(malformedHost.issues.join(" ")).toContain("notifications must be an object");
+    expect(malformedHost.config.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+  });
+});
 // The default-rail flips: `caution`, `branch`, and `go` are all available but
 // not on the shipped rail, and each is one edit away. These pin the flips, so a
 // silent edit to a constant cannot put a clock, a VCS call, or an account-wide

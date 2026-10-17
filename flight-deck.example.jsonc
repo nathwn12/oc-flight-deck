@@ -286,6 +286,27 @@
     "toast": false
   },
 
+  // -- Notifications ---------------------------------------------------------
+  // The silencing layer over every toast the plugin can raise: the
+  // invalid-config warning, the copy outcome, and the opt-in caution toast
+  // above. Every flag is on by default and only ever silences — a verified
+  // copy is silent regardless.
+  //
+  // The one-line silence switch (commented, so copying this file keeps the
+  // defaults):
+  //
+  //   "notifications": { "enabled": false }
+  "notifications": {
+    // false silences every toast with one key.
+    "enabled": true,
+    // The one-time warning naming an invalid config key.
+    "config": true,
+    // The copy-outcome toast when a copy could not be verified.
+    "copy": true,
+    // The opt-in caution toast (still needs `caution.enabled` + `caution.toast`).
+    "caution": true
+  },
+
   // -- Layout ----------------------------------------------------------------
   // Row geometry and wording. Change these when your terminal is unusually
   // narrow or wide, or when you want a row called something else.

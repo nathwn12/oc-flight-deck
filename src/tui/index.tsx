@@ -10,6 +10,7 @@ import {
 } from "./caution.js";
 import { copyFeedback, copyToClipboard } from "./clipboard.js";
 import { cautionThresholds, mergeOptions, resolveConfig } from "./config.js";
+import { shouldNotify } from "./notify.js";
 import { loadConfigFile } from "./file-config.js";
 import { createGoLookReader } from "./go-look.js";
 import { footerLine, railLineSpans, railLines, railLineStyle, type RailLine } from "./presentation.js";
@@ -58,7 +59,7 @@ export default Plugin.define({
       console.warn(`[flight-deck] ${file.issue}`);
     }
     const problems = file.issue !== undefined ? [file.issue, ...issues] : issues;
-    if (problems.length > 0) {
+    if (problems.length > 0 && shouldNotify(config.notifications, "config")) {
       const extra = problems.length > 1 ? ` (+${problems.length - 1} more)` : "";
       context.ui.toast.show({
         title: "Flight Deck",
@@ -128,6 +129,7 @@ export default Plugin.define({
                 const result = await copyToClipboard(context.renderer, copyId);
                 const fb = copyFeedback(result, copyId);
                 if (fb.ok) return;
+                if (!shouldNotify(config.notifications, "copy")) return;
                 context.ui.toast.show({
                   title: "Flight Deck",
                   message: fb.message,
@@ -342,7 +344,12 @@ export default Plugin.define({
     // `sidebar.content` render, which exists only when the sidebar is enabled,
     // so without it this timer could never fire and would leak a live interval.
     const toastMs = Math.max(1_000, config.refresh > 0 ? config.refresh : 1_000);
-    if (config.sidebar.enabled && config.caution.enabled && config.caution.toast) {
+    if (
+      config.sidebar.enabled &&
+      config.caution.enabled &&
+      config.caution.toast &&
+      shouldNotify(config.notifications, "caution")
+    ) {
       watchTimer = setInterval(() => {
         const sessionID = watchedSession;
         if (sessionID === undefined) return;

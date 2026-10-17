@@ -228,6 +228,12 @@ export interface FlightDeckConfig {
    * it is opt-in, so an install that never asks for it spends no timer on it.
    */
   readonly caution: CautionConfig;
+  /**
+   * The silencing layer over every toast the plugin can raise: the
+   * invalid-config warning, the copy outcome, and the opt-in caution toast.
+   * All on by default; `enabled: false` silences everything with one key.
+   */
+  readonly notifications: NotificationsConfig;
   /** Geometry and wording of a row. Every value has a sane default. */
   readonly layout: LayoutConfig;
   /** How values are written on the rail, e.g. the `elapsed` duration style. */
@@ -326,6 +332,34 @@ const DEFAULT_GLYPHS: GlyphConfig = {
   watch: "▲",
   caution: "●",
   clear: "○",
+};
+
+/**
+ * Which toasts the plugin may raise.
+ *
+ * The silencing layer, not a feature switch: every kind is on by default, and
+ * each flag only ever silences. `enabled` is the one-line master switch;
+ * `config`, `copy`, and `caution` silence the invalid-config warning, the copy
+ * outcome, and the opt-in caution toast respectively. A verified copy is
+ * silent regardless and never reaches this gate.
+ */
+export interface NotificationsConfig {
+  /** Master switch: `false` silences every toast. Default `true`. */
+  readonly enabled: boolean;
+  /** The invalid-config warning toast. Default `true`. */
+  readonly config: boolean;
+  /** The copy-outcome toast (failures only; verified copies are silent). Default `true`. */
+  readonly copy: boolean;
+  /** The opt-in caution toast (still also requires `caution.enabled` and `caution.toast`). Default `true`. */
+  readonly caution: boolean;
+}
+
+/** All toasts on: silencing is always an explicit edit. */
+export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
+  enabled: true,
+  config: true,
+  copy: true,
+  caution: true,
 };
 
 const DEFAULT_CAUTION: CautionConfig = {
@@ -433,6 +467,7 @@ export const DEFAULT_CONFIG: FlightDeckConfig = {
   },
   footer: { enabled: false, text: DEFAULT_FOOTER_TEXT },
   caution: DEFAULT_CAUTION,
+  notifications: DEFAULT_NOTIFICATIONS,
   layout: DEFAULT_LAYOUT,
   format: DEFAULT_FORMAT,
   glyphs: DEFAULT_GLYPHS,
@@ -747,7 +782,7 @@ function readMaxLines(value: unknown, issues: string[]): number {
 }
 
 /** Every config section that can be set from the file and overridden by the host. */
-type SectionKey = "sidebar" | "footer" | "caution" | "layout" | "format" | "glyphs" | "style";
+type SectionKey = "sidebar" | "footer" | "caution" | "notifications" | "layout" | "format" | "glyphs" | "style";
 
 function sectionOf(options: Record<string, unknown>, key: SectionKey): Record<string, unknown> {
   const value = options[key];
@@ -827,6 +862,7 @@ export function mergeOptions(fileOptions: unknown, hostOptions: unknown): Record
     sidebar: mergeSection(file, host, "sidebar"),
     footer: mergeSection(file, host, "footer"),
     caution: mergeSection(file, host, "caution"),
+    notifications: mergeSection(file, host, "notifications"),
     layout: mergeSection(file, host, "layout"),
     format: mergeSection(file, host, "format"),
     glyphs: mergeSection(file, host, "glyphs"),
@@ -1085,6 +1121,22 @@ function readToolNames(value: unknown, issues: string[]): readonly string[] {
   return names;
 }
 
+/**
+ * The notification silencing layer.
+ *
+ * Every flag falls back independently through the existing `readBoolean`
+ * idiom: absent means on, malformed is reported and means on. Silencing is
+ * always an explicit `false`, never a typo.
+ */
+function readNotifications(section: Record<string, unknown>, issues: string[]): NotificationsConfig {
+  return {
+    enabled: readBoolean(section["enabled"], DEFAULT_NOTIFICATIONS.enabled, "notifications.enabled", issues),
+    config: readBoolean(section["config"], DEFAULT_NOTIFICATIONS.config, "notifications.config", issues),
+    copy: readBoolean(section["copy"], DEFAULT_NOTIFICATIONS.copy, "notifications.copy", issues),
+    caution: readBoolean(section["caution"], DEFAULT_NOTIFICATIONS.caution, "notifications.caution", issues),
+  };
+}
+
 function readCaution(section: Record<string, unknown>, issues: string[]): CautionConfig {
   const toolWatchSeconds = readNumber(
     section["toolWatchSeconds"],
@@ -1166,6 +1218,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const rawSidebar = options.sidebar;
   const rawFooter = options.footer;
   const rawCaution = options.caution;
+  const rawNotifications = options.notifications;
   const rawFormat = options.format;
   const rawStyle = options.style;
   if (rawSidebar !== undefined && !isRecord(rawSidebar)) {
@@ -1177,6 +1230,9 @@ export function resolveConfig(options: unknown): ConfigResolution {
   if (rawCaution !== undefined && !isRecord(rawCaution)) {
     issues.push("caution must be an object; using defaults");
   }
+  if (rawNotifications !== undefined && !isRecord(rawNotifications)) {
+    issues.push("notifications must be an object; using defaults");
+  }
   if (rawFormat !== undefined && !isRecord(rawFormat)) {
     issues.push("format must be an object; using defaults");
   }
@@ -1187,6 +1243,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
   const sidebar = isRecord(rawSidebar) ? rawSidebar : {};
   const footer = isRecord(rawFooter) ? rawFooter : {};
   const caution = isRecord(rawCaution) ? rawCaution : {};
+  const notifications = isRecord(rawNotifications) ? rawNotifications : {};
   const layout = isRecord(options.layout) ? options.layout : {};
   const format = isRecord(rawFormat) ? rawFormat : {};
   const glyphs = isRecord(options.glyphs) ? options.glyphs : {};
@@ -1248,6 +1305,7 @@ export function resolveConfig(options: unknown): ConfigResolution {
         text: readText(footer.text, DEFAULT_CONFIG.footer.text, "footer.text", issues),
       },
       caution: readCaution(caution, issues),
+      notifications: readNotifications(notifications, issues),
       layout: readLayout(layout, issues),
       format: readFormat(format, issues),
       glyphs: readGlyphs(glyphs, issues),

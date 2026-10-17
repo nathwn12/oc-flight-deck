@@ -42,7 +42,7 @@ host session state ──► src/tui/session-reads.ts ──► src/tui/stats.ts
         └─ config: host options ▷ flight-deck.jsonc ▷ src/tui/config.ts defaults
 ```
 
-The panel is read-only with one exception: clicking the opt-in `ses` row sends the full session id to the terminal clipboard as a best-effort OSC52 request (terminal-dependent, never reported as a confirmed copy). Bad config values are ignored with defaults restored plus a one-time toast naming the key, so a typo never breaks the TUI.
+The panel is read-only with one exception: clicking the opt-in `ses` row copies the full session id to the OS clipboard — verified, either by the host clipboard write or by reading the clipboard back after the terminal fallback — and stays silent. Only a copy that could not be confirmed raises its warning toast, so a typo never breaks the TUI and a working copy never nags. Every toast the plugin can raise (invalid-config warnings, copy outcomes, the opt-in caution toast) is silenced per-kind or altogether through the `notifications` section; `"notifications": { "enabled": false }` is the one-line silence switch.
 
 ## Getting started
 
@@ -87,6 +87,22 @@ The config file is optional — with no file at all you get the defaults.
   "caution": { "toast": false }
 }
 ```
+
+### Notifications
+
+Every toast the plugin can raise is silenced through one section — the
+invalid-config warning, the copy outcome, and the opt-in caution toast:
+
+```jsonc
+// Silence everything with one key:
+{ "notifications": { "enabled": false } }
+```
+
+Each per-kind flag (`config`, `copy`, `caution`) silences only its kind, and
+all of them default to `true`, so silencing is always an explicit edit. A
+verified copy is silent regardless and never reaches this gate; `caution.toast`
+stays the feature opt-in (default `false`) — `notifications.caution` only
+suppresses it.
 
 ## Project structure
 
