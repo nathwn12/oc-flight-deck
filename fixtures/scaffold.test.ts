@@ -184,6 +184,7 @@ describe("flight deck plugin", () => {
       "format",
       "glyphs",
       "layout",
+      "notifications",
       "refresh",
       "sidebar",
       "style",

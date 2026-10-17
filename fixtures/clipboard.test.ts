@@ -1,17 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { copyFeedback, copyToClipboard, type CopyResult } from "../src/tui/clipboard.js";
 
-// The copy path has two transports and only one of them can be verified:
+// The copy path has two transports and a copy counts only when it is verified:
 //
 //   1. the real host clipboard write, whose `written` status is the only thing
 //      that may be reported to the user as a success; and
-//   2. the OSC52 dispatch through the renderer, whose `attempted` status only
-//      says a sequence was emitted - the terminal may ignore it entirely.
+//   2. the OSC52 dispatch through the renderer, which is verified by reading
+//      the OS clipboard back through the same host service: an exact match is
+//      a confirmed copy (`osc52-confirmed`), anything else stays advisory.
 //
 // These pin the properties that make the path honest and safe: success is
-// claimed only for a verified host write, an OSC52 dispatch is never dressed up
-// as one, and a backend that fails or is absent degrades to a definite
-// non-success rather than throwing out of the caller's mouse handler.
+// claimed only for a verified copy, an unconfirmed OSC52 dispatch is never
+// dressed up as one, and a backend that fails or is absent degrades to a
+// definite non-success rather than throwing out of the caller's mouse handler.
 
 /** A host clipboard factory whose write resolves to `status`. */
 function hostReturning(status: string) {
@@ -22,6 +23,35 @@ function hostReturning(status: string) {
       writeText: async (text: string) => {
         writes.push(text);
         return { status };
+      },
+    }),
+  };
+}
+
+/**
+ * A host clipboard factory whose write resolves to `writeStatus` and whose
+ * read returns `clipboardText` — or throws, or reports empty, so the read-back
+ * polling can be pinned without a real clipboard.
+ */
+function hostWithReadBack(writeStatus: string, clipboardText: string | undefined | Error) {
+  const writes: string[] = [];
+  const reads: number[] = [];
+  return {
+    writes,
+    reads,
+    createHost: () => ({
+      writeText: async (text: string) => {
+        writes.push(text);
+        return { status: writeStatus };
+      },
+      read: async () => {
+        reads.push(1);
+        if (clipboardText instanceof Error) throw clipboardText;
+        if (clipboardText === undefined) return { status: "empty" };
+        return {
+          status: "read",
+          representation: { mimeType: "text/plain", bytes: new TextEncoder().encode(clipboardText) },
+        };
       },
     }),
   };
@@ -71,8 +101,54 @@ describe("the session-id copy path", () => {
 
   test("reports a verified host write and passes the exact full text", async () => {
     const { createHost, writes } = hostReturning("written");
-    const result = await copyToClipboard(undefined, id, createHost);
+    const { renderer, writes: osc52 } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
     expect(result).toEqual({ verified: true, outcome: "written" });
+    expect(writes).toEqual([id]);
+    // The verified path carried it: the OSC52 fallback was never reached.
+    expect(osc52).toEqual([]);
+  });
+
+  test("a host write failure plus a confirmed OSC52 dispatch is a verified copy", async () => {
+    // The host write reports anything but `written`, the renderer dispatches
+    // OSC52, and the OS clipboard reads back the exact text: the dispatch
+    // demonstrably landed, whatever the terminal claims.
+    const { createHost, writes } = hostWithReadBack("unsupported", id);
+    const { renderer, writes: osc52 } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
+    expect(result).toEqual({ verified: true, outcome: "osc52-confirmed" });
+    expect(writes).toEqual([id]);
+    expect(osc52).toEqual([id]);
+  });
+
+  test("a stale read-back keeps the dispatch advisory, never a verified copy", async () => {
+    const { createHost } = hostWithReadBack("unsupported", "something else entirely");
+    const { renderer } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
+  });
+
+  test("an empty clipboard keeps the dispatch advisory, never a verified copy", async () => {
+    const { createHost } = hostWithReadBack("unsupported", undefined);
+    const { renderer } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
+  });
+
+  test("a read-back that throws degrades to advisory, never a throw", async () => {
+    const { createHost } = hostWithReadBack("unsupported", new Error("boom"));
+    const { renderer } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
+  });
+
+  test("no host read surface means no verification, never a throw", async () => {
+    // A host with writes only (like the render-test fake): the dispatch is
+    // issued but cannot be confirmed, so it stays advisory.
+    const { createHost } = hostReturning("unsupported");
+    const { renderer, writes } = recordingRenderer();
+    const result = await copyToClipboard(renderer, id, createHost);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
     expect(writes).toEqual([id]);
   });
 
@@ -140,17 +216,24 @@ describe("the session-id copy path", () => {
     expect(writes).toEqual([]);
   });
 
-  test("the production default has no host backend: OSC52-only fallback, unmocked", async () => {
-    // No factory passed, so this exercises the real default
-    // (`createHostClipboard`, explicitly absent): the only transport left is
-    // the OSC52 dispatch through the renderer, which is never verified.
+  test("the production default has a stable singleton shape, never called here", async () => {
+    // Shape only: constructing the service performs no clipboard I/O, and
+    // neither `writeText` nor `read` is ever invoked in this suite.
+    const { createHostClipboard } = await import("../src/tui/host-clipboard.js");
+    const first = createHostClipboard();
+    expect(first).toBeDefined();
+    expect(typeof first?.writeText).toBe("function");
+    expect(typeof first?.read).toBe("function");
+    expect(createHostClipboard()).toBe(first);
+  });
+
+  test("a missing host service degrades to a non-success without a real backend", async () => {
+    // Injected factory returning `undefined`: no real backend is touched, and
+    // the OSC52 dispatch stays advisory, never a verified copy.
     const { renderer, writes } = recordingRenderer();
-    const result = await copyToClipboard(renderer, id);
-    expect(result.verified).toBe(false);
-    expect(result.outcome).toBe("osc52-dispatched");
+    const result = await copyToClipboard(renderer, id, () => undefined);
+    expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
     expect(writes).toEqual([id]);
-    // And with no renderer either, the default path reports no backend.
-    expect(await copyToClipboard(undefined, id)).toEqual({ verified: false, outcome: "no-backend" });
   });
 });
 
@@ -166,6 +249,11 @@ describe("the copy confirmation", () => {
     expect(fb.ok).toBe(true);
     expect(fb.variant).toBe("success");
     expect(fb.message).toContain(id);
+    // A confirmed OSC52 dispatch is verified too, so it succeeds the same way.
+    const confirmed = copyFeedback({ verified: true, outcome: "osc52-confirmed" }, id);
+    expect(confirmed.ok).toBe(true);
+    expect(confirmed.variant).toBe("success");
+    expect(confirmed.message).toContain(id);
   });
 
   test("every genuine failure is an error that never claims the id was copied", () => {
@@ -191,10 +279,12 @@ describe("the copy confirmation", () => {
     // Truthful wording: sent, but unconfirmable - and never naming the id.
     expect(fb.message).not.toContain(id);
     expect(fb.message).not.toBe(copyFeedback({ verified: true, outcome: "written" }, id).message);
-    // End to end on the production path (no host backend): the dispatch still
-    // never reports a verified copy.
+    // End to end with a write-only host (no read surface): the dispatch is
+    // issued but cannot be confirmed, so it still never reports a verified
+    // copy. The production default is intentionally not asserted here - this
+    // machine's real clipboard may confirm the copy.
     const { renderer } = recordingRenderer();
-    const result = await copyToClipboard(renderer, id);
+    const result = await copyToClipboard(renderer, id, unsupportedHost);
     expect(result).toEqual({ verified: false, outcome: "osc52-dispatched" });
     expect(copyFeedback(result, id).variant).toBe("warning");
   });

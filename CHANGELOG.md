@@ -5,11 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.20.0] - 2026-10-17
+
+### Added
+
+- `notifications` section (`enabled`, `config`, `copy`, `caution`, all default `true`): the silencing layer over every toast the plugin can raise — the invalid-config warning, the copy outcome, and the opt-in caution toast. `"notifications": { "enabled": false }` is the one-line silence switch; each per-kind flag silences only its kind. `caution.toast` stays the feature opt-in (default `false`); the new section only ever silences, never enables.
 
 ### Fixed
 
-- The `ses` row's unconfirmed OSC52 dispatch no longer reports as an error: the bytes were sent but no backend can confirm the terminal acted on them, so it is now an advisory `warning` ("paste to verify") instead of a failure. The five genuine failures stay `error`, and only a confirmed host `written` ever reports a verified copy.
+- The session-id copy is now really verified: the plugin uses the host-served clipboard (`createHostClipboard` from `@opentui/core`, resolved to the host's own core instance) instead of no backend, and an OSC52 dispatch is confirmed by reading the OS clipboard back (up to 5 attempts, 60ms apart) before it counts — `osc52-confirmed` stays silent like every verified copy, while an unconfirmed dispatch keeps its advisory warning.
+- The `0.19.2` tag shipped a stale `dist/`: `src/tui/clipboard.ts` changed without a rebuild, so installs still showed the old toast. `dist/` is rebuilt in this commit, and the new `bun run check:dist` gate (wired into `check.yml`) fails when `dist/` drifts from source again.
+- The `ses` row's unconfirmed OSC52 dispatch reports as an advisory `warning` ("paste to verify") instead of an error: the bytes were sent but no backend can confirm the terminal acted on them. The five genuine failures stay `error`, and only a verified copy ever reports success.
 
 ## [0.19.2] - 2026-10-16
 
