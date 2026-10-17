@@ -467,11 +467,13 @@ export function statLine(
         return row("tps", `${rounded} tok/s`);
       }
       if (display === "both") {
-        // Both figures on one line when the average exists — the live half
+        // Both figures on one line when the average stands — the live half
         // may round to zero while the average stands (`0 live · 41 avg`).
-        // Without an average the live half stands alone; without either
-        // figure there is no row.
-        if (avg !== undefined && Math.round(avg) > 0) {
+        // The live-alone degrade is only for a missing average; a present
+        // average that rounds to zero hides the whole row, like the avg
+        // mode's own hide rule. Without either figure there is no row.
+        if (avg !== undefined) {
+          if (Math.round(avg) <= 0) return undefined;
           return row("tps", `${live === undefined ? 0 : Math.round(live)} live · ${Math.round(avg)} avg`);
         }
         if (live !== undefined && Math.round(live) > 0) return row("tps", `${Math.round(live)} live`);

@@ -1006,7 +1006,9 @@ function statLine(field, source, layout = {}) {
         return row("tps", `${rounded} tok/s`);
       }
       if (display === "both") {
-        if (avg !== undefined && Math.round(avg) > 0) {
+        if (avg !== undefined) {
+          if (Math.round(avg) <= 0)
+            return;
           return row("tps", `${live === undefined ? 0 : Math.round(live)} live \xB7 ${Math.round(avg)} avg`);
         }
         if (live !== undefined && Math.round(live) > 0)

@@ -44,7 +44,7 @@ Silence it: set `"notifications": { "enabled": false }` in the same file to swit
 - One money row that includes subagent spend, rolled up through the host's session links
 - A stable rail: every row draws a real zero until the host reports data, so the panel never jumps
 - Elapsed time that survives restarts, recomputed from the host's recorded turn spans
-- Average generation speed over the session or the whole family, settled turns only — with the realtime rate, or both on one line, via `sidebar.tps.display`
+- Average generation speed over the session or the whole family — settled turns where the host stamps them, the active clock where it does not — with the realtime rate, or both on one line, via `sidebar.tps.display`
 - An opt-in watchdog row that stays silent until a tool or turn stops moving
 - Every toast silenced per kind or altogether through one `notifications` section
 

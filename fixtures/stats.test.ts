@@ -245,8 +245,12 @@ describe("flight deck live rows", () => {
     // The live half may round to zero while the average stands: idle right
     // now does not erase the session's mean speed.
     expect(statLine("tps", { tps: { live: 0.4, avg: 41 } }, { tpsDisplay: "both" })).toBe("tps       0 live · 41 avg");
-    // Without an average the live half stands alone.
+    // Without an average the live half stands alone — and only then: a
+    // present average that rounds to zero hides the whole row, like the
+    // avg mode's own hide rule.
     expect(statLine("tps", { tps: { live: 106, avg: undefined } }, { tpsDisplay: "both" })).toBe("tps       106 live");
+    expect(statLine("tps", { tps: { live: 106, avg: 0.4 } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
     // Without either figure there is no row.
     expect(statLine("tps", { tps: { live: undefined, avg: undefined } }, { tpsDisplay: "both" })).toBeUndefined();
     expect(statLine("tps", { tps: { live: 0, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
