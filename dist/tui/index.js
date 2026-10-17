@@ -733,7 +733,7 @@ function skeletonValue(field, layout) {
     case "elapsed":
       return formatDuration(0, layout.durationStyle);
     case "tps":
-      return "0 tok/s";
+      return layout.tpsDisplay === "both" ? "0 live \xB7 0 avg" : "0 tok/s";
     case "spark":
       return "\u2581".repeat(Math.max(0, Math.floor(layout.sparkWidth ?? DEFAULT_SPARK_WIDTH)));
     case "reasoning":
@@ -995,13 +995,29 @@ function statLine(field, source, layout = {}) {
       return row("elapsed", formatDuration(ms, layout.durationStyle));
     }
     case "tps": {
-      const tps = asCount2(source.tps);
-      if (tps === undefined)
+      const pair = asRecord2(source.tps);
+      const live = asCount2(pair?.["live"]);
+      const avg = asCount2(pair?.["avg"]);
+      const display = layout.tpsDisplay ?? "avg";
+      if (display === "live") {
+        const rounded = live === undefined ? undefined : Math.round(live);
+        if (rounded === undefined || rounded <= 0)
+          return;
+        return row("tps", `${rounded} tok/s`);
+      }
+      if (display === "both") {
+        if (avg !== undefined) {
+          if (Math.round(avg) <= 0)
+            return;
+          return row("tps", `${live === undefined ? 0 : Math.round(live)} live \xB7 ${Math.round(avg)} avg`);
+        }
+        if (live !== undefined && Math.round(live) > 0)
+          return row("tps", `${Math.round(live)} live`);
         return;
-      const rounded = Math.round(tps);
-      if (rounded <= 0)
+      }
+      if (avg === undefined || Math.round(avg) <= 0)
         return;
-      return row("tps", `${rounded} tok/s`);
+      return row("tps", `${Math.round(avg)} tok/s`);
     }
     case "spark": {
       const values = Array.isArray(source.spark) ? source.spark.map((value) => asCount2(value) ?? 0) : [];
@@ -1119,6 +1135,26 @@ function mergedSpanMs(accepted) {
   unionMs += openEnd - openStart;
   return unionMs;
 }
+function unionSpanTotals(spans) {
+  const seen = new Set;
+  const accepted = [];
+  let tokens = 0;
+  for (const span of spans) {
+    const key = asText2(span.key);
+    if (key === undefined || seen.has(key))
+      continue;
+    const start = asCount2(span.start);
+    const end = asCount2(span.end);
+    if (start === undefined || end === undefined)
+      continue;
+    const output = asCount2(span.tokens);
+    const reasoning = asCount2(span.reasoning);
+    seen.add(key);
+    accepted.push({ start, end: Math.max(start, end) });
+    tokens += (output ?? 0) + (reasoning ?? 0);
+  }
+  return { tokens, unionMs: mergedSpanMs(accepted) };
+}
 function unionSpanMs(spans) {
   const seen = new Set;
   const accepted = [];
@@ -1155,6 +1191,12 @@ function tpsNeedsRepaint(displayed, smoothed) {
   if (displayed === 0)
     return smoothed !== 0;
   return Math.abs(smoothed - displayed) / Math.abs(displayed) >= TPS_REPAINT_RATIO;
+}
+function settledAverageRate(spans) {
+  const { tokens, unionMs } = unionSpanTotals(spans);
+  if (unionMs <= 0)
+    return;
+  return tokens / (unionMs / 1000);
 }
 function unionGenerationTotals(spans) {
   const seen = new Set;
@@ -1286,6 +1328,7 @@ var DEFAULT_GO_PANEL_LOOK = {
   blinkMs: 700
 };
 var DEFAULT_TPS_SCOPE = "family";
+var DEFAULT_TPS_DISPLAY = "avg";
 function cautionThresholds(config) {
   return {
     toolWatchMs: config.toolWatchSeconds * 1000,
@@ -1349,7 +1392,7 @@ var DEFAULT_CONFIG = {
     lines: DEFAULT_SIDEBAR_LINES,
     footer: { lines: DEFAULT_SIDEBAR_FOOTER_LINES, go: false },
     rows: DEFAULT_SIDEBAR_ROWS,
-    tps: { scope: DEFAULT_TPS_SCOPE },
+    tps: { scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY },
     persist: true,
     placeholder: DEFAULT_PLACEHOLDER,
     maxLines: MAX_LINES
@@ -1546,14 +1589,22 @@ function readTpsScope(value, issues) {
   issues.push(`sidebar.tps.scope must be "family" or "session"; using "${DEFAULT_TPS_SCOPE}"`);
   return DEFAULT_TPS_SCOPE;
 }
+function readTpsDisplay(value, issues) {
+  if (value === undefined)
+    return DEFAULT_TPS_DISPLAY;
+  if (value === "avg" || value === "live" || value === "both")
+    return value;
+  issues.push(`sidebar.tps.display must be "avg", "live" or "both"; using "avg"`);
+  return DEFAULT_TPS_DISPLAY;
+}
 function readTps(section, issues) {
   const raw = section["tps"];
   if (raw !== undefined && !isRecord(raw)) {
     issues.push("sidebar.tps must be an object; using defaults");
-    return { scope: DEFAULT_TPS_SCOPE };
+    return { scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY };
   }
   const tps = isRecord(raw) ? raw : {};
-  return { scope: readTpsScope(tps["scope"], issues) };
+  return { scope: readTpsScope(tps["scope"], issues), display: readTpsDisplay(tps["display"], issues) };
 }
 function readMaxLines(value, issues) {
   return readNumber(value, MAX_LINES, "sidebar.maxLines", issues, 1, MAX_LINES);
@@ -2044,6 +2095,7 @@ function railLines(config, source = {}) {
     persist: config.sidebar.persist,
     placeholder: config.sidebar.placeholder,
     durationStyle: config.format.duration,
+    tpsDisplay: config.sidebar.tps.display,
     hasTotalRow: config.sidebar.rows.includes("total")
   };
   const lines = config.sidebar.lines.map((text) => ({ text }));
@@ -3526,9 +3578,10 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     try {
       messages = context.data.session.message.list(id) ?? [];
     } catch {
-      return { ok: false, assistant: 0, stamped: 0, spans: [] };
+      return { ok: false, assistant: 0, stamped: 0, spans: [], settled: [] };
     }
     const spans = [];
+    const settled = [];
     let assistant = 0;
     let stamped = 0;
     for (const entry of messages) {
@@ -3549,16 +3602,19 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
       const tokens = asRecord2(message["tokens"]);
       const output = tokens?.["output"];
       const reasoning = tokens?.["reasoning"];
-      const settled = completed !== undefined || streamed !== undefined;
+      const settledTurn = completed !== undefined || streamed !== undefined;
       const key = turnKey(message["id"], created, completed, output, streamed);
-      spans.push({
-        key: settled ? `${key}:${asCount2(reasoning) ?? "?"}` : key,
+      const turn = {
+        key: settledTurn ? `${key}:${asCount2(reasoning) ?? "?"}` : key,
         tokens: output,
         reasoning,
         ...span
-      });
+      };
+      spans.push(turn);
+      if (streamed !== undefined)
+        settled.push(turn);
     }
-    return { ok: true, assistant, stamped, spans };
+    return { ok: true, assistant, stamped, spans, settled };
   };
   const familyIds = (sessionID) => {
     const ids = [sessionID];
@@ -3576,6 +3632,7 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     let assistant = 0;
     let stamped = 0;
     const spans = [];
+    const settled = [];
     for (const id of ids) {
       const scan = scanMessages(id, now);
       ok = ok && scan.ok;
@@ -3583,8 +3640,10 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
       stamped += scan.stamped;
       for (const span of scan.spans)
         spans.push({ ...span, key: `${id} ${String(span.key)}` });
+      for (const span of scan.settled)
+        settled.push({ ...span, key: `${id} ${String(span.key)}` });
     }
-    return { ok, assistant, stamped, spans };
+    return { ok, assistant, stamped, spans, settled };
   };
   const recordGeneration = (session) => {
     const tokens = asRecord2(session?.tokens);
@@ -3608,7 +3667,7 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     const time = asRecord2(session?.time);
     const created = asCount2(time?.["created"]);
     const now = Date.now();
-    const scan = hostStamps === false ? { ok: true, assistant: 0, stamped: 0, spans: [] } : scope === "family" ? scanScope(familyIds(sessionID), now) : scanMessages(sessionID, now);
+    const scan = hostStamps === false ? { ok: true, assistant: 0, stamped: 0, spans: [], settled: [] } : scope === "family" ? scanScope(familyIds(sessionID), now) : scanMessages(sessionID, now);
     if (hostStamps === undefined) {
       if (scan.stamped > 0)
         hostStamps = true;
@@ -3620,31 +3679,32 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE) {
     const tracker = trackerOf(sessionID);
     if (hostStamps === true) {
       if (scope === "family" && scan.ok === false)
-        return 0;
+        return { live: 0, avg: undefined };
       const { tokens } = unionGenerationTotals(scan.spans);
       const genMs = unionSpanMs(scan.spans);
-      return tracker(tokens, genMs);
+      return { live: tracker(tokens, genMs) ?? 0, avg: settledAverageRate(scan.settled) };
     }
     const family = scope === "family" ? familyGeneration(sessionID, session) : undefined;
     if (family !== undefined && family.ok === false)
-      return 0;
+      return { live: 0, avg: undefined };
     const generation = family?.generation ?? recordGeneration(session);
-    if (created === undefined && scope === "session")
-      return tracker(recordGeneration(session), 0);
+    if (created === undefined && scope === "session") {
+      return { live: tracker(recordGeneration(session), 0) ?? 0, avg: undefined };
+    }
     let genMs = 0;
     try {
       genMs = live?.elapsedMsOf?.(sessionID, now) ?? 0;
     } catch {
       genMs = 0;
     }
-    return tracker(generation, genMs);
+    return { live: tracker(generation, genMs) ?? 0, avg: genMs > 0 ? generation / (genMs / 1000) : undefined };
   };
   const sessionTps = (sessionID, session) => {
     const cached = tpsCache;
     if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
       return cached.value;
     }
-    const value = computeTps(sessionID, session) ?? 0;
+    const value = computeTps(sessionID, session) ?? { live: 0, avg: undefined };
     tpsCache = { sessionID, at: Date.now(), value };
     return value;
   };

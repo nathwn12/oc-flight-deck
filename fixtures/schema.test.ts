@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, DEFAULT_GO_PANEL_LOOK, DEFAULT_TPS_SCOPE, resolveConfig } from "../src/tui/config.js";
+import { DEFAULT_CONFIG, DEFAULT_GO_PANEL_LOOK, DEFAULT_TPS_DISPLAY, DEFAULT_TPS_SCOPE, resolveConfig } from "../src/tui/config.js";
 import { parseJsonc } from "../src/tui/file-config.js";
 import { STAT_FIELDS } from "../src/tui/stats.js";
 
@@ -82,6 +82,10 @@ describe("the schema describes the real config", () => {
     expect(props["sidebar"]!.properties.tps.properties.scope.default).toBe(DEFAULT_TPS_SCOPE);
     expect(props["sidebar"]!.properties.tps.properties.scope.default).toBe("family");
     expect(props["sidebar"]!.properties.tps.properties.scope.enum).toEqual(["family", "session"]);
+    expect(props["sidebar"]!.properties.tps.properties.display.default).toBe(DEFAULT_CONFIG.sidebar.tps.display);
+    expect(props["sidebar"]!.properties.tps.properties.display.default).toBe(DEFAULT_TPS_DISPLAY);
+    expect(props["sidebar"]!.properties.tps.properties.display.default).toBe("avg");
+    expect(props["sidebar"]!.properties.tps.properties.display.enum).toEqual(["avg", "live", "both"]);
     expect(props["sidebar"]!.properties.persist.default).toBe(DEFAULT_CONFIG.sidebar.persist);
     expect(props["sidebar"]!.properties.placeholder.default).toBe(DEFAULT_CONFIG.sidebar.placeholder);
     expect(props["sidebar"]!.properties.maxLines.default).toBe(DEFAULT_CONFIG.sidebar.maxLines);
@@ -302,7 +306,7 @@ describe("the shipped example validates against the shipped schema", () => {
     expect(sidebar["persist"]).toBe(true);
     expect(sidebar["placeholder"]).toBe("—");
     expect(sidebar["maxLines"]).toBe(DEFAULT_CONFIG.sidebar.maxLines);
-    expect(sidebar["tps"]).toEqual({ scope: "family" });
+    expect(sidebar["tps"]).toEqual({ scope: "family", display: "avg" });
     const style = parsed["style"] as Record<string, unknown>;
     expect(resolveConfig(parsed).config.style).toEqual(DEFAULT_CONFIG.style);
     expect(style["rows"]).toEqual({ "*": { color: "subdued", attributes: [] } });
@@ -391,5 +395,19 @@ describe("the shipped example validates against the shipped schema", () => {
     const tpsScopeOk = { sidebar: { tps: { scope: "session" } } };
     expect(schemaErrors(schema as unknown as SchemaNode, tpsScopeOk, "")).toEqual([]);
     expect(resolveConfig(tpsScopeOk).issues).toEqual([]);
+
+    // The display knob is an enum in the schema too, and it merges leaf by
+    // leaf: a file scope plus a host display keep each other.
+    const tpsDisplay = { sidebar: { tps: { display: "turbo" } } };
+    expect(schemaErrors(schema as unknown as SchemaNode, tpsDisplay, "")).not.toEqual([]);
+    const tpsDisplayResolution = resolveConfig(tpsDisplay);
+    expect(tpsDisplayResolution.config.sidebar.tps.display).toBe(DEFAULT_CONFIG.sidebar.tps.display);
+    expect(tpsDisplayResolution.issues.join(" ")).toContain("sidebar.tps.display");
+    expect(tpsDisplayResolution.issues.join(" ")).toContain('must be "avg", "live" or "both"; using "avg"');
+    for (const display of ["avg", "live", "both"]) {
+      const ok = { sidebar: { tps: { display } } };
+      expect(schemaErrors(schema as unknown as SchemaNode, ok, "")).toEqual([]);
+      expect(resolveConfig(ok).issues).toEqual([]);
+    }
   });
 });

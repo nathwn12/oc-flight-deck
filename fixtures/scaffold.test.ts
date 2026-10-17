@@ -143,28 +143,24 @@ describe("flight deck plugin", () => {
       expect(existsSync(join(root, ...gone.split("/")))).toBe(false);
     }
 
-    // The public README installs and configures the plugin, documents every
-    // row it can render, and never leaks a specific development machine.
-    // Headings are the README's own business, so these assert the substance a
-    // reader acts on: the plugin entry, the restart, the one config file's
-    // real path, and the official API link.
+    // The public README installs and configures the plugin and never leaks a
+    // specific development machine. Headings are the README's own business, so
+    // these assert the substance a reader acts on: the plugin entry, the
+    // restart, the one config file's real path, and the official API link.
+    // OS data-directory variables stay out of READMEs by README-STANDARD.md
+    // §2.3 — the XDG nuance lives in flight-deck.example.jsonc's header.
     const readme = await readFile(join(root, "README.md"), "utf8");
     expect(readme).toMatch(/"plugins"\s*:\s*\[\s*"oc-flight-deck(@[^"]*)?"\s*\]/);
     expect(readme).toMatch(/\brestart\b/i);
     expect(readme).toContain("flight-deck.jsonc");
     expect(readme).toContain("~/.config/opencode/flight-deck.jsonc");
-    expect(readme).toContain("XDG_CONFIG_HOME");
     expect(readme).toContain("https://opencode.ai/v2/docs/build/plugins/cli");
-    // Every row the code can render has to stay named in the README. A summary
-    // table that lists only the default rows is exactly how `spark`,
-    // `reasoning`, `turns`, `total`, and `guard` vanished from the docs before
-    // while this guard stayed green.
-    for (const field of STAT_FIELDS) {
-      expect(readme).toContain(`\`${field}\``);
-    }
-    // Loading from source is a per-developer choice, so the README has to keep
-    // saying how: the plugin entry names a git file URL, never a bare path.
-    expect(readme).toContain("git+file://");
+    // Loading from source is a per-developer choice, so INSTALL.md has to keep
+    // saying how: the local route names a local clone, never a bare path. The
+    // README keeps only the front door — per-tool tours and local routes stay
+    // out of READMEs by README-STANDARD.md §5 and the Tier A skeleton.
+    const install = await readFile(join(root, "INSTALL.md"), "utf8");
+    expect(install).toContain("a local clone of this repository");
     expect(readme).not.toContain("Q:\\");
     expect(readme).not.toContain("Q:/");
 
@@ -189,6 +185,15 @@ describe("flight deck plugin", () => {
       "sidebar",
       "style",
     ]);
+    // Every row the code can render has to stay named in the example's
+    // commented catalogue. A summary that lists only the default rows is
+    // exactly how `spark`, `reasoning`, `turns`, `total`, and `guard` vanished
+    // from the docs before while this guard stayed green — and the README no
+    // longer carries the tour (README-STANDARD.md §5), so the example is
+    // where the guarantee lives.
+    for (const field of STAT_FIELDS) {
+      expect(example).toContain(field);
+    }
 
     // The shipped TUI source stays inside its boundary: slot claims, theme
     // tokens, read-only config, and read-only session state. No RPC, no keymap,

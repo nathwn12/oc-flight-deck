@@ -7,6 +7,7 @@ import {
   DEFAULT_SIDEBAR_FOOTER_LINES,
   DEFAULT_SIDEBAR_LINES,
   DEFAULT_TPS_SCOPE,
+  DEFAULT_TPS_DISPLAY,
   MIN_REFRESH_MS,
   mergeOptions,
   resolveConfig,
@@ -67,24 +68,50 @@ describe("flight deck config", () => {
     // The shipped default is the one constant: a silent edit to it is caught
     // here, and the example file pins the same value in scaffold.test.ts.
     expect(DEFAULT_TPS_SCOPE).toBe("family");
-    expect(resolveConfig(undefined).config.sidebar.tps).toEqual({ scope: "family" });
-    expect(DEFAULT_CONFIG.sidebar.tps).toEqual({ scope: DEFAULT_TPS_SCOPE });
+    expect(resolveConfig(undefined).config.sidebar.tps).toEqual({ scope: "family", display: "avg" });
+    expect(DEFAULT_CONFIG.sidebar.tps).toEqual({ scope: DEFAULT_TPS_SCOPE, display: DEFAULT_TPS_DISPLAY });
 
     const session = resolveConfig({ sidebar: { tps: { scope: "session" } } });
     expect(session.issues).toEqual([]);
-    expect(session.config.sidebar.tps).toEqual({ scope: "session" });
+    expect(session.config.sidebar.tps).toEqual({ scope: "session", display: "avg" });
 
     // No sensible repair for a misspelled scope: the default comes back and
     // the key is named, like every other invalid option.
     const bad = resolveConfig({ sidebar: { tps: { scope: "swarm" } } });
-    expect(bad.config.sidebar.tps).toEqual({ scope: "family" });
+    expect(bad.config.sidebar.tps).toEqual({ scope: "family", display: "avg" });
     expect(bad.issues.join(" ")).toContain("sidebar.tps.scope");
 
     // A string where an object belongs falls back whole rather than silently
     // becoming a scope.
     const malformed = resolveConfig({ sidebar: { tps: "family" } });
-    expect(malformed.config.sidebar.tps).toEqual({ scope: "family" });
+    expect(malformed.config.sidebar.tps).toEqual({ scope: "family", display: "avg" });
     expect(malformed.issues.join(" ")).toContain("sidebar.tps must be an object");
+  });
+
+  test("selects which tps figure draws, defaulting to the settled-turn average", () => {
+    // The shipped default is the one constant, like the scope beside it.
+    expect(DEFAULT_TPS_DISPLAY).toBe("avg");
+    expect(DEFAULT_CONFIG.sidebar.tps.display).toBe("avg");
+
+    // Every exact value passes through cleanly, leaving the scope alone.
+    for (const display of ["avg", "live", "both"] as const) {
+      const resolution = resolveConfig({ sidebar: { tps: { display } } });
+      expect(resolution.issues).toEqual([]);
+      expect(resolution.config.sidebar.tps).toEqual({ scope: "family", display });
+    }
+
+    // No sensible repair for a misspelled display: the default comes back and
+    // the key is named, like every other invalid option.
+    const bad = resolveConfig({ sidebar: { tps: { display: "turbo" } } });
+    expect(bad.config.sidebar.tps).toEqual({ scope: "family", display: "avg" });
+    expect(bad.issues).toEqual(['sidebar.tps.display must be "avg", "live" or "both"; using "avg"']);
+
+    // The two knobs are independent: a bad display keeps a good scope, and a
+    // bad scope keeps a good display.
+    const mixed = resolveConfig({ sidebar: { tps: { scope: "session", display: "turbo" } } });
+    expect(mixed.config.sidebar.tps).toEqual({ scope: "session", display: "avg" });
+    expect(mixed.issues.join(" ")).toContain("sidebar.tps.display");
+    expect(mixed.issues.join(" ")).not.toContain("sidebar.tps.scope");
   });
 
   test("turns the footer on as soon as any footer setting is written", () => {
@@ -513,6 +540,15 @@ describe("flight deck option precedence", () => {
     expect(sidebarLines(config)).toEqual(["host"]);
   });
 
+  test("merges the nested tps keys leaf by leaf instead of replacing the section", () => {
+    // A host `{ display }` must not drop a file `{ scope }`, and vice versa:
+    // the two knobs ride the same nested merge the footer already uses.
+    const merged = mergeOptions({ sidebar: { tps: { scope: "session" } } }, { sidebar: { tps: { display: "live" } } });
+    const { config, issues } = resolveConfig(merged);
+    expect(issues).toEqual([]);
+    expect(config.sidebar.tps).toEqual({ scope: "session", display: "live" });
+  });
+
   // A tick now wakes the host's renderer, so a sub-frame interval is a way to
   // wedge the TUI from a config file rather than a way to make it smoother.
   test("clamps a sub-frame refresh rate instead of accepting it", () => {
@@ -663,7 +699,7 @@ describe("option validation", () => {
       context: { used: 1 },
       perms: { count: 1 },
       elapsedMs: 1_000,
-      tps: 10,
+      tps: { live: 10, avg: 10 },
     };
     expect(sidebarLines(config, source)).toHaveLength(24);
   });

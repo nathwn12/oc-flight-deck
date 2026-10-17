@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { clip, formatCost, formatCount, formatDuration, fuelBar, isStatField, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanTotals } from "../src/tui/stats.js";
 import { canonicalField } from "../src/tui/stat-fields.js";
-import { createInstantTps, instantTpsRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
+import { createInstantTps, instantTpsRate, settledAverageRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -218,23 +218,59 @@ describe("flight deck live rows", () => {
     expect(statLine("project", {})).toBeUndefined();
   });
 
-  test("reports measured throughput, not an estimate", () => {
+  test("reports measured throughput in live mode, byte for byte like before", () => {
     // Whole tokens/second, honestly rounded: the value is already an EWMA of
     // per-poll deltas, so a decimal would fake a precision the samples never
     // had. No fractional rendering, ever.
-    expect(statLine("tps", { tps: 106.3 })).toBe("tps       106 tok/s");
-    expect(statLine("tps", { tps: 106 })).toBe("tps       106 tok/s");
-    expect(statLine("tps", { tps: 106.5 })).toBe("tps       107 tok/s");
-    expect(statLine("tps", { tps: 0 })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106.3, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: { live: 106, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
+    expect(statLine("tps", { tps: { live: 106.5, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       107 tok/s");
+    expect(statLine("tps", { tps: { live: 0, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
+    // The average beside it never leaks into the live figure.
+    expect(statLine("tps", { tps: { live: 106, avg: 999 } }, { tpsDisplay: "live" })).toBe("tps       106 tok/s");
   });
 
-  test("hides the tps row rather than printing a zero rate", () => {
-    expect(statLine("tps", { tps: 0 })).toBeUndefined();
-    expect(statLine("tps", { tps: Number.NaN })).toBeUndefined();
+  test("draws the settled-turn average by default", () => {
+    // No layout hint: the shipped default is the average, not the live rate.
+    expect(statLine("tps", { tps: { live: 106, avg: 41.4 } })).toBe("tps       41 tok/s");
+    expect(statLine("tps", { tps: { live: 106, avg: 41.5 } })).toBe("tps       42 tok/s");
+    // The live half never leaks into the average figure.
+    expect(statLine("tps", { tps: { live: 999, avg: 41 } })).toBe("tps       41 tok/s");
+  });
+
+  test("draws both figures on one line in both mode", () => {
+    expect(statLine("tps", { tps: { live: 106.4, avg: 41.4 } }, { tpsDisplay: "both" })).toBe(
+      "tps       106 live · 41 avg",
+    );
+    // The live half may round to zero while the average stands: idle right
+    // now does not erase the session's mean speed.
+    expect(statLine("tps", { tps: { live: 0.4, avg: 41 } }, { tpsDisplay: "both" })).toBe("tps       0 live · 41 avg");
+    // Without an average the live half stands alone — and only then: a
+    // present average that rounds to zero hides the whole row, like the
+    // avg mode's own hide rule.
+    expect(statLine("tps", { tps: { live: 106, avg: undefined } }, { tpsDisplay: "both" })).toBe("tps       106 live");
+    expect(statLine("tps", { tps: { live: 106, avg: 0.4 } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
+    // Without either figure there is no row.
+    expect(statLine("tps", { tps: { live: undefined, avg: undefined } }, { tpsDisplay: "both" })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 0, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
+  });
+
+  test("hides the tps row rather than printing a zero rate, in every mode", () => {
+    expect(statLine("tps", { tps: { live: 0, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: Number.NaN, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
     // Below half a token/second rounds to zero, which hides rather than
     // printing "0 tok/s".
-    expect(statLine("tps", { tps: 0.4 })).toBeUndefined();
-    expect(statLine("tps", { tps: 0.5 })).toBe("tps       1 tok/s");
+    expect(statLine("tps", { tps: { live: 0.4, avg: 41 } }, { tpsDisplay: "live" })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 0.5, avg: 41 } }, { tpsDisplay: "live" })).toBe("tps       1 tok/s");
+    // The average hides the same way: unknown, zero, or below half a token.
+    expect(statLine("tps", { tps: { live: 106, avg: undefined } })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106, avg: 0 } })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106, avg: 0.4 } })).toBeUndefined();
+    expect(statLine("tps", { tps: { live: 106, avg: 0.5 } })).toBe("tps       1 tok/s");
+    // A bare number is no longer a figure: the reader hands over the pair.
+    expect(statLine("tps", { tps: 106 })).toBeUndefined();
+    expect(statLine("tps", {})).toBeUndefined();
   });
 
   test("draws recent turn sizes as a sparkline", () => {
@@ -765,6 +801,37 @@ describe("instantaneous tps", () => {
     // The new baselines stand with a fresh smoother: the next honest delta
     // (100 tokens over 1 s) seeds 100 again, not a blend with the old era.
     expect(tps(150, 2_000)).toBe(100);
+  });
+});
+
+// The `tps` row's default figure: generation tokens over already-accepted
+// settled spans, divided by their union in seconds. The reader passes only
+// turns that recorded `streamed`, so in-flight work never reaches this
+// division — these pin the arithmetic on the spans themselves.
+describe("settled-turn average", () => {
+  test("divides generation over the union, weighting by provider-active time", () => {
+    // 100 generation tokens over a 2 s span: 50 tok/s.
+    expect(settledAverageRate([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 2_000 }])).toBe(50);
+    // Overlapping spans share wall clock: 200 tokens over a 3 s union, not 4 s.
+    expect(
+      settledAverageRate([
+        { key: "a", tokens: 100, start: 0, end: 2_000 },
+        { key: "b", tokens: 100, start: 1_000, end: 3_000 },
+      ]),
+    ).toBeCloseTo(200 / 3, 10);
+  });
+
+  test("is unknown when there is no settled time to divide by", () => {
+    expect(settledAverageRate([])).toBeUndefined();
+    // Zero-length spans cover no time: dividing would be a guess.
+    expect(settledAverageRate([{ key: "a", tokens: 100, start: 2_000, end: 2_000 }])).toBeUndefined();
+  });
+
+  test("a zero-token settled history divides cleanly to zero", () => {
+    // The row hides it through its rounded-zero rule; the rate itself is 0,
+    // not unknown — a stamped turn that streamed for two seconds with nothing
+    // to show still took two seconds.
+    expect(settledAverageRate([{ key: "a", tokens: 0, start: 0, end: 2_000 }])).toBe(0);
   });
 });
 // `unionSpanMs` is the token-blind twin of `unionSpanTotals`, used to seed

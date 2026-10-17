@@ -103,6 +103,22 @@ describe("persistent sidebar rows", () => {
     ]);
   });
 
+  test("the tps skeleton follows the display mode", () => {
+    // The single-figure modes draw the one shape either would read as a
+    // zero; `both` draws both figures, like the live row.
+    expect(statRows(["tps"], {}, { persist: true })).toEqual(["tps       0 tok/s"]);
+    expect(statRows(["tps"], {}, { persist: true, tpsDisplay: "live" })).toEqual(["tps       0 tok/s"]);
+    expect(statRows(["tps"], {}, { persist: true, tpsDisplay: "both" })).toEqual(["tps       0 live · 0 avg"]);
+  });
+
+  test("the both-mode skeleton rides the resolved display from the config", () => {
+    const both = resolveConfig({ sidebar: { tps: { display: "both" } } }).config;
+    expect(sidebarLines(both, {})).toContain("tps       0 live · 0 avg");
+    // ... and the default config keeps the single figure.
+    expect(sidebarLines(DEFAULT_CONFIG, {})).toContain("tps       0 tok/s");
+    expect(sidebarLines(DEFAULT_CONFIG, {})).not.toContain("0 live");
+  });
+
   test("persist:false omits rows with no data", () => {
     expect(statRows(["cache"], { tokens: {} }, { persist: false })).toEqual([]);
     // Omitting is also the default when calling `statRows` directly.
