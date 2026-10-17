@@ -55,8 +55,11 @@ function deltaContext(
 ) {
   const handlers = new Map<string, Array<(event: unknown) => void>>();
   const emit = (type: string, sessionID: string, delta: string, at: number) => {
+    emitRaw(type, { data: { sessionID, assistantMessageID: "msg_1", ordinal: 0, delta }, created: at });
+  };
+  const emitRaw = (type: string, event: unknown) => {
     for (const handler of handlers.get(type) ?? []) {
-      handler({ data: { sessionID, assistantMessageID: "msg_1", ordinal: 0, delta }, created: at });
+      handler(event);
     }
   };
   const context = {
@@ -79,7 +82,7 @@ function deltaContext(
       handlers.set(type, (handlers.get(type) ?? []).filter((entry) => entry !== handler));
     };
   };
-  return { context, emit };
+  return { context, emit, emitRaw };
 }
 
 // `treeTotals` used to call `session.get(id)` bare inside the loop, so one
@@ -334,6 +337,27 @@ describe("family rt sums concurrent decoders and degrades with the average", () 
     emit("session.text.delta", "child", "x".repeat(500), at);
     expect(family.sessionTps("root", { time: { created: 0 } }).rt).toBe(200);
     expect(session.sessionTps("root", { time: { created: 0 } }).rt).toBe(100);
+  });
+
+  test("ttft pools family steps into one mean while session scope isolates", () => {
+    const { context, emitRaw } = deltaContext({}, familyOf);
+    const family = createTpsReader(context, undefined, "family");
+    const session = createTpsReader(context, undefined, "session");
+    const step = (type: string, sessionID: string, messageID: string, extra: Record<string, unknown>, at: number) => {
+      emitRaw(type, { data: { sessionID, assistantMessageID: messageID, ...extra }, created: at });
+    };
+    const delta = (sessionID: string, messageID: string, at: number) => {
+      step("session.text.delta", sessionID, messageID, { ordinal: 0, delta: "x" }, at);
+    };
+    // Dispatch at 0, first token a second later in the root; three seconds
+    // later in the child. The mean rides the both line beside rt and avg.
+    step("session.step.started", "root", "m1", { started: 0 }, 0);
+    delta("root", "m1", 1_000);
+    step("session.step.started", "child", "m2", { started: 0 }, 0);
+    delta("child", "m2", 3_000);
+    expect(family.sessionTps("root", { time: { created: 0 } }).ttft).toBe(2);
+    expect(session.sessionTps("root", { time: { created: 0 } }).ttft).toBe(1);
+    expect(family.sessionTps("root", { time: { created: 0 } })).toEqual({ rt: 0, avg: undefined, ttft: 2 });
   });
 
   test("a failed member message read leaves the average unknown while rt stands", () => {

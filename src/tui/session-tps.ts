@@ -227,11 +227,14 @@ export function createTpsReader(
    * with no subscription surface. `avg` is the settled-turn mean over the
    * same scope — generation tokens over turns that recorded `streamed`,
    * divided by the union of their spans — and `undefined` when no settled
-   * turn exists, so the row hides rather than inventing a rate.
+   * turn exists, so the row hides rather than inventing a rate. `ttft` is
+   * the mean time to first token over the same scope, in seconds, and
+   * `undefined` while no step with a first delta is on record.
    */
   interface TpsFigures {
     readonly rt: number;
     readonly avg: number | undefined;
+    readonly ttft?: number | undefined;
   }
 
   const computeAvg = (sessionID: string, session: SessionLike | undefined): number | undefined => {
@@ -308,22 +311,29 @@ export function createTpsReader(
   // zero it cannot stand behind. (The row itself hides a zero; that decision
   // lives in ./rows.js.)
   const sessionTps = (sessionID: string, session: SessionLike | undefined): TpsFigures => {
-    // The realtime figure is estimated from events that arrive between
-    // renders: it reads fresh on every render and takes no part in the cache
+    // The realtime figures are estimated from events that arrive between
+    // renders: they read fresh on every render and take no part in the cache
     // below, which holds the settled-average scan alone.
+    const ids = scope === "family" ? familyIds(sessionID) : [sessionID];
     let rt = 0;
     try {
-      rt = tracker.rate(sessionID, scope === "family" ? familyIds(sessionID) : [sessionID]);
+      rt = tracker.rate(sessionID, ids);
     } catch {
       rt = 0;
     }
+    let ttft: number | undefined;
+    try {
+      ttft = tracker.ttft(ids);
+    } catch {
+      ttft = undefined;
+    }
     const cached = tpsCache;
     if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
-      return { rt, avg: cached.avg };
+      return { rt, avg: cached.avg, ttft };
     }
     const avg = computeAvg(sessionID, session);
     tpsCache = { sessionID, at: Date.now(), avg };
-    return { rt, avg };
+    return { rt, avg, ttft };
   };
 
   return { sessionTps };

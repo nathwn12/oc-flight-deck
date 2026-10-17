@@ -20,7 +20,6 @@ export type { StatSegment } from "./rows.js";
 export { ANIMATED_FIELDS, DEFAULT_PLACEHOLDER, STAT_FIELDS, canonicalField, fieldLabel, isStatField, skeletonValue } from "./stat-fields.js";
 export type { StatSource } from "./stat-fields.js";
 export {
-  instantTpsRate,
   settledAverageRate,
   smoothTpsRate,
   TPS_EWMA_ALPHA,
@@ -29,7 +28,6 @@ export {
   tpsNeedsRepaint,
   turnKey,
   turnSpan,
-  unionGenerationTotals,
   unionSpanMs,
   unionSpanTotals,
 } from "./throughput.js";

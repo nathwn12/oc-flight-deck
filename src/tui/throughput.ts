@@ -210,21 +210,6 @@ export const TPS_REPAINT_ABS = 1;
 export const TPS_REPAINT_RATIO = 0.1;
 
 /**
- * One per-poll instantaneous rate: generation-token DELTA over generating-time
- * DELTA, never over idle time. The caller passes only what happened since the
- * previous poll; both deltas exclude idle by construction (the union of
- * streaming spans, or the busy-gated active clock), so a pause can never sag
- * the figure. Returns `undefined` when there is no new generating time to
- * divide by.
- */
-export function instantTpsRate(deltaTokens: unknown, deltaMs: unknown): number | undefined {
-  const tokens = asCount(deltaTokens);
-  const ms = asCount(deltaMs);
-  if (tokens === undefined || ms === undefined || ms <= 0) return undefined;
-  return tokens / (ms / 1_000);
-}
-
-/**
  * Fold one instantaneous sample into the running rate. The first sample seeds
  * the average directly; every later one moves it `alpha` of the way toward
  * the sample, so a single fast or slow poll bends the figure instead of
@@ -266,35 +251,4 @@ export function settledAverageRate(spans: readonly ThroughputSpan[]): number | u
   const { tokens, unionMs } = unionSpanTotals(spans);
   if (unionMs <= 0) return undefined;
   return tokens / (unionMs / 1_000);
-}
-
-/**
- * Generation tokens and generating time for the TPS numerator: output plus
- * reasoning, the same pair the official TUI divides.
- *
- * The same identity rule, clamp, pre-sort and merge as `unionSpanTotals`.
- * Kept for the union arithmetic it pins (see fixtures): the realtime figure
- * no longer polls spans, so no reader divides through this anymore.
- */
-export function unionGenerationTotals(spans: readonly ThroughputSpan[]): SpanTotals {
-  const seen = new Set<string>();
-  const accepted: Array<{ start: number; end: number }> = [];
-  let tokens = 0;
-
-  for (const span of spans) {
-    const key = asText(span.key);
-    if (key === undefined || seen.has(key)) continue;
-
-    const start = asCount(span.start);
-    const end = asCount(span.end);
-    if (start === undefined || end === undefined) continue;
-    const output = asCount(span.tokens);
-    const reasoning = asCount(span.reasoning);
-
-    seen.add(key);
-    accepted.push({ start, end: Math.max(start, end) });
-    tokens += (output ?? 0) + (reasoning ?? 0);
-  }
-
-  return { tokens, unionMs: mergedSpanMs(accepted) };
 }

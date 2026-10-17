@@ -998,6 +998,7 @@ function statLine(field, source, layout = {}) {
       const pair = asRecord2(source.tps);
       const rt = asCount2(pair?.["rt"]);
       const avg = asCount2(pair?.["avg"]);
+      const ttft = asCount2(pair?.["ttft"]);
       const display = layout.tpsDisplay ?? "avg";
       if (display === "rt") {
         const rounded = rt === undefined ? undefined : Math.round(rt);
@@ -1009,7 +1010,8 @@ function statLine(field, source, layout = {}) {
         if (avg !== undefined) {
           if (Math.round(avg) <= 0)
             return;
-          return row("tps", `${rt === undefined ? 0 : Math.round(rt)} rt \xB7 ${Math.round(avg)} avg`);
+          const head = `${rt === undefined ? 0 : Math.round(rt)} rt \xB7 ${Math.round(avg)} avg`;
+          return ttft === undefined ? row("tps", head) : row("tps", `${head} \xB7 ${ttft.toFixed(1)}s ttft`);
         }
         if (rt !== undefined && Math.round(rt) > 0)
           return row("tps", `${Math.round(rt)} rt`);
@@ -1209,6 +1211,8 @@ function createRealtimeTps(context, opts) {
   const now = opts?.now ?? Date.now;
   const samples = new Map;
   const shown = new Map;
+  const pendingStarts = new Map;
+  const ttftTotals = new Map;
   let disposed = false;
   let active = false;
   const releases = [];
@@ -1245,12 +1249,62 @@ function createRealtimeTps(context, opts) {
     if (reading === undefined)
       return;
     remember(reading.sessionID, { at: reading.at, tokens: estimateDeltaTokens(reading.delta) });
+    measureFirstToken(event, reading.at);
+  };
+  const measureFirstToken = (event, at) => {
+    const messageID = asText2(asRecord2(asRecord2(event)?.["data"])?.["assistantMessageID"]);
+    if (messageID === undefined)
+      return;
+    const pending = pendingStarts.get(messageID);
+    if (pending === undefined)
+      return;
+    pendingStarts.delete(messageID);
+    const total = ttftTotals.get(pending.sessionID);
+    const step = Math.max(0, at - pending.started);
+    if (total !== undefined) {
+      ttftTotals.delete(pending.sessionID);
+      ttftTotals.set(pending.sessionID, { totalMs: total.totalMs + step, count: total.count + 1 });
+      return;
+    }
+    if (ttftTotals.size >= RT_MAX_SESSIONS) {
+      for (const oldest of ttftTotals.keys()) {
+        ttftTotals.delete(oldest);
+        break;
+      }
+    }
+    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+  };
+  const stepStarted = (event) => {
+    if (disposed)
+      return;
+    const data = asRecord2(asRecord2(event)?.["data"]);
+    const sessionID = asText2(data?.["sessionID"]);
+    const messageID = asText2(data?.["assistantMessageID"]);
+    const started = asCount2(data?.["started"]);
+    if (sessionID === undefined || messageID === undefined || started === undefined)
+      return;
+    pendingStarts.delete(messageID);
+    if (pendingStarts.size >= RT_MAX_SESSIONS) {
+      for (const oldest of pendingStarts.keys()) {
+        pendingStarts.delete(oldest);
+        break;
+      }
+    }
+    pendingStarts.set(messageID, { sessionID, started });
+  };
+  const stepSettled = (event) => {
+    if (disposed)
+      return;
+    const messageID = asText2(asRecord2(asRecord2(event)?.["data"])?.["assistantMessageID"]);
+    if (messageID === undefined)
+      return;
+    pendingStarts.delete(messageID);
   };
   try {
     const on = context.data?.on;
     if (typeof on === "function") {
       const subscribe = on;
-      releases.push(subscribe("session.text.delta", ingest), subscribe("session.reasoning.delta", ingest));
+      releases.push(subscribe("session.text.delta", ingest), subscribe("session.reasoning.delta", ingest), subscribe("session.step.started", stepStarted), subscribe("session.step.ended", stepSettled), subscribe("session.step.failed", stepSettled));
       active = true;
     }
   } catch {
@@ -1337,6 +1391,26 @@ function createRealtimeTps(context, opts) {
       state.displayed = state.smoothed;
     return state.displayed ?? 0;
   };
+  const ttft = (ids) => {
+    if (!active || disposed)
+      return;
+    const seen = new Set;
+    let totalMs = 0;
+    let count = 0;
+    for (const id of ids) {
+      if (typeof id !== "string" || seen.has(id))
+        continue;
+      seen.add(id);
+      const total = ttftTotals.get(id);
+      if (total === undefined)
+        continue;
+      totalMs += total.totalMs;
+      count += total.count;
+    }
+    if (count === 0)
+      return;
+    return totalMs / count / 1000;
+  };
   const dispose = () => {
     if (disposed)
       return;
@@ -1349,10 +1423,12 @@ function createRealtimeTps(context, opts) {
     releases.length = 0;
     samples.clear();
     shown.clear();
+    pendingStarts.clear();
+    ttftTotals.clear();
   };
   return { get active() {
     return active && !disposed;
-  }, rate, dispose };
+  }, rate, ttft, dispose };
 }
 // src/tui/style.ts
 var TextAttributes = {
@@ -3776,19 +3852,26 @@ function createTpsReader(context, live, scope = DEFAULT_TPS_SCOPE, realtime) {
     return genMs > 0 ? generation / (genMs / 1000) : undefined;
   };
   const sessionTps = (sessionID, session) => {
+    const ids = scope === "family" ? familyIds(sessionID) : [sessionID];
     let rt = 0;
     try {
-      rt = tracker.rate(sessionID, scope === "family" ? familyIds(sessionID) : [sessionID]);
+      rt = tracker.rate(sessionID, ids);
     } catch {
       rt = 0;
     }
+    let ttft;
+    try {
+      ttft = tracker.ttft(ids);
+    } catch {
+      ttft = undefined;
+    }
     const cached = tpsCache;
     if (cached !== undefined && cached.sessionID === sessionID && Date.now() - cached.at < TPS_CACHE_MS) {
-      return { rt, avg: cached.avg };
+      return { rt, avg: cached.avg, ttft };
     }
     const avg = computeAvg(sessionID, session);
     tpsCache = { sessionID, at: Date.now(), avg };
-    return { rt, avg };
+    return { rt, avg, ttft };
   };
   return { sessionTps };
 }

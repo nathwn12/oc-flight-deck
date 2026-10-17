@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { normalizeGoUsage } from "../src/tui/go-usage.js";
 import { clip, formatCost, formatCount, formatDuration, fuelBar, isStatField, sparkline, statLine, statRows, statSegments, turnKey, turnSpan, unionSpanMs, unionSpanTotals } from "../src/tui/stats.js";
 import { canonicalField } from "../src/tui/stat-fields.js";
-import { instantTpsRate, settledAverageRate, smoothTpsRate, tpsNeedsRepaint, unionGenerationTotals } from "../src/tui/throughput.js";
+import { settledAverageRate, smoothTpsRate, tpsNeedsRepaint } from "../src/tui/throughput.js";
 
 // Shaped exactly like the live `Session.Info` read from the server, so the
 // assertions stay tied to real data rather than a convenient invention.
@@ -254,6 +254,30 @@ describe("flight deck live rows", () => {
     // Without either figure there is no row.
     expect(statLine("tps", { tps: { rt: undefined, avg: undefined } }, { tpsDisplay: "both" })).toBeUndefined();
     expect(statLine("tps", { tps: { rt: 0, avg: 0 } }, { tpsDisplay: "both" })).toBeUndefined();
+  });
+
+  test("appends the observed time to first token to the both line, and only then", () => {
+    // One decimal plus the unit, from the seconds figure the reader hands
+    // over: 1.23 s draws as `1.2s ttft`.
+    expect(statLine("tps", { tps: { rt: 83.4, avg: 38.2, ttft: 1.23 } }, { tpsDisplay: "both" })).toBe(
+      "tps       83 rt · 38 avg · 1.2s ttft",
+    );
+    // Unknown is omitted, never zeroed: the line stays exactly as it was.
+    expect(statLine("tps", { tps: { rt: 83.4, avg: 38.2 } }, { tpsDisplay: "both" })).toBe(
+      "tps       83 rt · 38 avg",
+    );
+    // ... and an uncoercible figure is unknown too.
+    expect(statLine("tps", { tps: { rt: 83, avg: 38, ttft: Number.NaN } }, { tpsDisplay: "both" })).toBe(
+      "tps       83 rt · 38 avg",
+    );
+    // The realtime-alone degrade stands: a missing average hides the ttft
+    // segment with it.
+    expect(statLine("tps", { tps: { rt: 106, avg: undefined, ttft: 1.2 } }, { tpsDisplay: "both" })).toBe(
+      "tps       106 rt",
+    );
+    // Single modes never draw it.
+    expect(statLine("tps", { tps: { rt: 83, avg: 38, ttft: 1.2 } }, { tpsDisplay: "rt" })).toBe("tps       83 tok/s");
+    expect(statLine("tps", { tps: { rt: 83, avg: 38, ttft: 1.2 } })).toBe("tps       38 tok/s");
   });
 
   test("hides the tps row rather than printing a zero rate, in every mode", () => {
@@ -670,22 +694,11 @@ describe("active-work throughput", () => {
 });
 
 // The realtime `rt` figure is estimated from the host's streaming delta
-// events (see fixtures/realtime-tps.test.ts): the per-poll delta tracker below
-// is gone because a poll of the message list can only see a turn's tokens
-// after it settles. What remains here is the shared arithmetic — the delta
-// division, the EWMA, the hysteresis — plus the settled-span union the
-// average divides through.
+// events (see fixtures/realtime-tps.test.ts): the per-poll delta arithmetic
+// below is gone — no reader divides through it anymore. What remains here is
+// the shared smoothing — the EWMA and the hysteresis the tracker reuses —
+// plus the key and span unions the settled average divides through.
 describe("shared tps arithmetic", () => {
-  test("divides deltas, never idle-inclusive totals", () => {
-    expect(instantTpsRate(100, 2_000)).toBe(50);
-    expect(instantTpsRate(0, 2_000)).toBe(0);
-    // No new generating time is no sample, not a zero rate and never an
-    // infinity: the tracker holds instead of dividing.
-    expect(instantTpsRate(100, 0)).toBeUndefined();
-    expect(instantTpsRate(100, -5)).toBeUndefined();
-    expect(instantTpsRate(undefined, 2_000)).toBeUndefined();
-  });
-
   test("smooths with an EWMA that bends instead of replacing", () => {
     // The first sample seeds the average directly.
     expect(smoothTpsRate(undefined, 100)).toBe(100);
@@ -705,46 +718,6 @@ describe("shared tps arithmetic", () => {
     expect(tpsNeedsRepaint(100, 99)).toBe(true);
     expect(tpsNeedsRepaint(10, 11)).toBe(true);
     expect(tpsNeedsRepaint(10, 10.5)).toBe(false);
-  });
-
-  test("the TPS union counts generation, so reasoning reads as speed", () => {
-    expect(unionGenerationTotals([{ key: "a", tokens: 60, reasoning: 40, start: 0, end: 1_000 }])).toEqual({
-      tokens: 100,
-      unionMs: 1_000,
-    });
-    // Reasoning alone is generation too: a thinking-heavy turn that emits
-    // nothing still paced the decoder for two seconds.
-    expect(unionGenerationTotals([{ key: "a", reasoning: 120, start: 0, end: 2_000 }])).toEqual({
-      tokens: 120,
-      unionMs: 2_000,
-    });
-    // Dedup and merge match the union's own rules.
-    expect(
-      unionGenerationTotals([
-        { key: "id:msg_1", tokens: 60, reasoning: 40, start: 0, end: 1_000 },
-        { key: "id:msg_1", tokens: 60, reasoning: 40, start: 0, end: 9_000 },
-      ]),
-    ).toEqual({ tokens: 100, unionMs: 1_000 });
-  });
-
-  test("an id-less streaming turn keeps one identity across polls, so repeat polls never inflate the rate", () => {
-    // The review's mechanism: the fallback key embedded the growing output
-    // count, so each poll of the same in-flight turn looked like a new span
-    // and the union summed the cumulative snapshots repeatedly.
-    const created = 1_000;
-    const now = created + 10_000;
-    const polls = [10, 20, 30].map((output) => {
-      const span = turnSpan(created, undefined, undefined, now)!;
-      return { key: turnKey(undefined, created, undefined, output), tokens: output, ...span };
-    });
-    // Stable identity: every poll keys the same, whatever the output count.
-    expect(polls[1]?.key).toBe(polls[0]?.key);
-    expect(polls[2]?.key).toBe(polls[0]?.key);
-    // Every snapshot seen together (re-sent history beside the live record)
-    // counts once: never above the single latest-poll baseline.
-    const baseline = unionGenerationTotals([polls[2]!]);
-    expect(unionGenerationTotals(polls).tokens).toBeLessThanOrEqual(baseline.tokens);
-    expect(unionGenerationTotals(polls).unionMs).toBe(baseline.unionMs);
   });
 
   test("a settled id-less turn still keys on its final output count", () => {

@@ -216,8 +216,13 @@
     // realtime estimate from the host's streaming delta events, reading
     // `0 tok/s` whenever the scope is not generating (idle, between turns,
     // or before the first delta). `"both"` draws both on one line
-    // (`106 rt · 41 avg`). An unknown value falls back to `"avg"` and is
-    // reported.
+    // (`106 rt · 41 avg`), plus the mean time to first token once observed
+    // (`83 rt · 38 avg · 1.2s ttft`): per step, the first text/reasoning
+    // delta's event time minus the step's `started` dispatch stamp (request
+    // dispatch time, before waiting for provider output), pooled across the
+    // scope. Steps observed while the plugin ran only — the totals live in
+    // memory, so a restart forgets them. An unknown value falls back to
+    // `"avg"` and is reported.
     "tps": { "scope": "family", "display": "avg" },
 
     // Every named row renders persistently: with no data yet it draws its

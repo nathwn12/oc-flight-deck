@@ -39,13 +39,15 @@ export interface StatSource {
   readonly busy?: unknown;
   readonly perms?: unknown;
   /**
-   * Session generation speed: the pair the reader hands over.
+   * Session generation speed: the figures the reader hands over.
    *
    * `rt` is the realtime estimate from the host's streaming delta events
    * (zero while nothing streams), `avg` the settled-turn average over the
-   * same scope (`undefined` when no settled turn exists). Both are unknown at
-   * this boundary, so the row re-coerces them like every other field. Which
-   * one draws is `LayoutHint.tpsDisplay` (default `"avg"`).
+   * same scope (`undefined` when no settled turn exists), `ttft` the mean
+   * time to first token in seconds (`undefined` while no step with a first
+   * delta is on record). All are unknown at this boundary, so the row
+   * re-coerces them like every other field. Which one draws is
+   * `LayoutHint.tpsDisplay` (default `"avg"`).
    */
   readonly tps?: unknown;
   readonly elapsedMs?: unknown;

@@ -263,6 +263,9 @@ describe("the realtime estimate", () => {
     const tracker = createRealtimeTps(context, { now: time.now });
     expect(bus.handlers.get("session.text.delta")).toHaveLength(1);
     expect(bus.handlers.get("session.reasoning.delta")).toHaveLength(1);
+    expect(bus.handlers.get("session.step.started")).toHaveLength(1);
+    expect(bus.handlers.get("session.step.ended")).toHaveLength(1);
+    expect(bus.handlers.get("session.step.failed")).toHaveLength(1);
     emit(bus, "session.text.delta", "s", "x".repeat(500), time.now());
     time.advance(1_000);
     expect(tracker.rate("s", ["s"])).toBe(100);
@@ -271,9 +274,154 @@ describe("the realtime estimate", () => {
     expect(() => tracker.dispose()).not.toThrow();
     expect(bus.handlers.get("session.text.delta")).toBeUndefined();
     expect(bus.handlers.get("session.reasoning.delta")).toBeUndefined();
-    expect(bus.released).toHaveLength(2);
+    expect(bus.released).toHaveLength(5);
     // Late events go nowhere and the rate stays zero.
     emit(bus, "session.text.delta", "s", "x".repeat(5000), time.now());
     expect(tracker.rate("s", ["s"])).toBe(0);
+  });
+});
+
+// Time to first token: per step, the first delta's event time minus the
+// step's dispatch stamp — the oc-tps third figure, from the same event
+// stream. Only steps observed while the plugin ran can count: the totals are
+// in-memory, so a restart forgets them.
+describe("the time to first token", () => {
+  const step = (bus: Bus, type: string, sessionID: string, messageID: string, extra: Record<string, unknown>, at: number) => {
+    for (const handler of bus.handlers.get(type) ?? []) {
+      handler({ data: { sessionID, assistantMessageID: messageID, ...extra }, created: at });
+    }
+  };
+  const started = (bus: Bus, sessionID: string, messageID: string, startedAt: number, at = startedAt) => {
+    step(bus, "session.step.started", sessionID, messageID, { started: startedAt }, at);
+  };
+
+  test("measures dispatch to first delta, clamped at zero", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    const delta = (messageID: string, at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID: "s", assistantMessageID: messageID, ordinal: 0, delta: "x".repeat(500) }, created: at });
+      }
+    };
+    // Nothing measured yet: unknown, never a guess.
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    started(bus, "s", "m1", 1_000);
+    // A delta for another step finds no pending start and counts nothing.
+    delta("other", 2_200);
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    delta("m1", 2_200);
+    expect(tracker.ttft(["s"])).toBeCloseTo(1.2, 10);
+    tracker.dispose();
+  });
+
+  test("only the first delta of a step counts", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 1_000);
+    const delta = (at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x".repeat(500) }, created: at });
+      }
+    };
+    delta(2_000);
+    expect(tracker.ttft(["s"])).toBe(1);
+    // A later delta for the same step finds nothing pending: the mean holds.
+    delta(9_000);
+    expect(tracker.ttft(["s"])).toBe(1);
+    tracker.dispose();
+  });
+
+  test("means over steps, pooled per family and isolated per session", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    const delta = (sessionID: string, messageID: string, at: number) => {
+      for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+        handler({ data: { sessionID, assistantMessageID: messageID, ordinal: 0, delta: "x" }, created: at });
+      }
+    };
+    started(bus, "root", "m1", 0);
+    delta("root", "m1", 1_000);
+    started(bus, "child", "m2", 0);
+    delta("child", "m2", 3_000);
+    // Session scope: the displayed session's own steps alone.
+    expect(tracker.ttft(["root"])).toBe(1);
+    // Family scope: every member's steps pooled into one mean.
+    expect(tracker.ttft(["root", "child"])).toBe(2);
+    tracker.dispose();
+  });
+
+  test("a reasoning delta measures like a text delta", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 500);
+    for (const handler of bus.handlers.get("session.reasoning.delta") ?? []) {
+      handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x".repeat(10) }, created: 1_500 });
+    }
+    expect(tracker.ttft(["s"])).toBe(1);
+    tracker.dispose();
+  });
+
+  test("a step that settles without a delta contributes nothing", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 1_000);
+    step(bus, "session.step.ended", "s", "m1", { finish: "stop" }, 9_000);
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    // And a failed start is dropped the same way: a later delta for it finds
+    // nothing pending.
+    started(bus, "s", "m2", 1_000);
+    step(bus, "session.step.failed", "s", "m2", {}, 2_000);
+    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+      handler({ data: { sessionID: "s", assistantMessageID: "m2", ordinal: 0, delta: "x".repeat(500) }, created: 5_000 });
+    }
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    tracker.dispose();
+  });
+
+  test("a skewed clock clamps at zero instead of subtracting time", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 5_000);
+    for (const handler of bus.handlers.get("session.text.delta") ?? []) {
+      handler({ data: { sessionID: "s", assistantMessageID: "m1", ordinal: 0, delta: "x" }, created: 1_000 });
+    }
+    expect(tracker.ttft(["s"])).toBe(0);
+    tracker.dispose();
+  });
+
+  test("malformed step events are skipped, never thrown on", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    for (const handler of bus.handlers.get("session.step.started") ?? []) {
+      expect(() => handler(undefined)).not.toThrow();
+      expect(() => handler({})).not.toThrow();
+      expect(() => handler({ data: { sessionID: "s" }, created: 1_000 })).not.toThrow();
+      expect(() => handler({ data: { sessionID: "s", assistantMessageID: "m1" }, created: 1_000 })).not.toThrow();
+      expect(() => handler({ data: { sessionID: "s", assistantMessageID: "m1", started: -1 }, created: 1_000 })).not.toThrow();
+    }
+    for (const handler of bus.handlers.get("session.step.ended") ?? []) {
+      expect(() => handler({ data: {}, created: 1_000 })).not.toThrow();
+    }
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    tracker.dispose();
+  });
+
+  test("disposal forgets pending starts and running totals", () => {
+    const time = clock();
+    const { context, bus } = busContext();
+    const tracker = createRealtimeTps(context, { now: time.now });
+    started(bus, "s", "m1", 0);
+    tracker.dispose();
+    expect(tracker.ttft(["s"])).toBeUndefined();
+    // Late step events go nowhere.
+    started(bus, "s", "m1", 0);
+    expect(tracker.ttft(["s"])).toBeUndefined();
   });
 });

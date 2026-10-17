@@ -448,15 +448,16 @@ export function statLine(
       return row("elapsed", formatDuration(ms, layout.durationStyle));
     }
     case "tps": {
-      // The pair the reader hands over: `rt` the realtime estimate from the
-      // host's streaming delta events, `avg` the settled-turn average — both
-      // unknown at this boundary, so both re-coerced like every other field.
-      // Which one draws is `layout.tpsDisplay` (the row's view of
-      // `sidebar.tps.display`, default `"avg"`); presentation.ts feeds it from
-      // the resolved config.
+      // The triple the reader hands over: `rt` the realtime estimate from
+      // the host's streaming delta events, `avg` the settled-turn average,
+      // `ttft` the mean time to first token in seconds — all unknown at this
+      // boundary, so all re-coerced like every other field. Which one draws
+      // is `layout.tpsDisplay` (the row's view of `sidebar.tps.display`,
+      // default `"avg"`); presentation.ts feeds it from the resolved config.
       const pair = asRecord(source.tps);
       const rt = asCount(pair?.["rt"]);
       const avg = asCount(pair?.["avg"]);
+      const ttft = asCount(pair?.["ttft"]);
       const display = layout.tpsDisplay ?? "avg";
       if (display === "rt") {
         // Whole tokens/second, honestly rounded — the value is already an
@@ -470,12 +471,15 @@ export function statLine(
       if (display === "both") {
         // Both figures on one line when the average stands — the realtime
         // half may round to zero while the average stands (`0 rt · 41 avg`).
+        // The mean time to first token rides along only once observed
+        // (`83 rt · 38 avg · 1.2s ttft`); unknown is omitted, never zeroed.
         // The realtime-alone degrade is only for a missing average; a present
         // average that rounds to zero hides the whole row, like the avg
         // mode's own hide rule. Without either figure there is no row.
         if (avg !== undefined) {
           if (Math.round(avg) <= 0) return undefined;
-          return row("tps", `${rt === undefined ? 0 : Math.round(rt)} rt · ${Math.round(avg)} avg`);
+          const head = `${rt === undefined ? 0 : Math.round(rt)} rt · ${Math.round(avg)} avg`;
+          return ttft === undefined ? row("tps", head) : row("tps", `${head} · ${ttft.toFixed(1)}s ttft`);
         }
         if (rt !== undefined && Math.round(rt) > 0) return row("tps", `${Math.round(rt)} rt`);
         return undefined;

@@ -21,6 +21,10 @@
 // Pure except for the subscription itself: samples are timestamped with an
 // injectable clock so tests pin the window without sleeping.
 
+// In-memory for the plugin's lifetime only: steps observed while the plugin
+// ran. A restart forgets every total — the same limitation as oc-tps, whose
+// averages the host never persisted either.
+
 import type { Plugin } from "@opencode/plugin/tui";
 import { asCount, asRecord, asText } from "./coerce.js";
 import { smoothTpsRate, TPS_EWMA_ALPHA, tpsNeedsRepaint } from "./throughput.js";
@@ -93,6 +97,22 @@ export interface RealtimeTps {
    * settled-average scan only.
    */
   rate(displayedSessionID: string, ids: readonly string[]): number;
+  /**
+   * The mean time to first token over `ids`, in seconds — the oc-tps third
+   * figure, reachable from the same event stream.
+   *
+   * Per step: the first `session.text.delta` / `session.reasoning.delta` for
+   * its `assistantMessageID`, its event time minus the step's `started`
+   * ("Request dispatch time, before waiting for provider output"), clamped
+   * at 0. Later deltas never re-count; a step that ends or fails without any
+   * delta contributes nothing. Scope `"session"` means the displayed
+   * session's own steps; `"family"` pools every member's steps into one mean.
+   * `undefined` while no step with a first delta is on record — the both
+   * line omits the segment rather than inventing one.
+   *
+   * Fresh on every call: it divides the running totals, never a held value.
+   */
+  ttft(ids: readonly string[]): number | undefined;
   /** Drop the host subscriptions and the samples. Idempotent. */
   dispose(): void;
 }
@@ -111,6 +131,12 @@ export function createRealtimeTps(
   const now = opts?.now ?? Date.now;
   const samples = new Map<string, RealtimeSample[]>();
   const shown = new Map<string, { smoothed: number | undefined; displayed: number | undefined }>();
+  // TTFT state, same lifetime as the samples: pending dispatch stamps keyed
+  // by `assistantMessageID`, and running totals keyed by session. Both
+  // bounded with eviction like the sample ring — a host that starts steps it
+  // never ends must not grow these maps forever.
+  const pendingStarts = new Map<string, { sessionID: string; started: number }>();
+  const ttftTotals = new Map<string, { totalMs: number; count: number }>();
   let disposed = false;
   let active = false;
   const releases: Array<() => void> = [];
@@ -151,6 +177,70 @@ export function createRealtimeTps(
     const reading = readDelta(event);
     if (reading === undefined) return;
     remember(reading.sessionID, { at: reading.at, tokens: estimateDeltaTokens(reading.delta) });
+    measureFirstToken(event, reading.at);
+  };
+
+  /**
+   * Fold one step's first delta into its session's TTFT totals.
+   *
+   * Only the FIRST delta of a step counts: the pending start is dropped once
+   * measured, so later deltas never re-count. A step that ends or fails
+   * without any delta leaves nothing behind — its pending start is dropped
+   * by the end/fail handler below. The per-step figure is the delta's event
+   * time minus the step's `started`, clamped at 0 so a skewed clock can
+   * never subtract time.
+   */
+  const measureFirstToken = (event: unknown, at: number): void => {
+    const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
+    if (messageID === undefined) return;
+    const pending = pendingStarts.get(messageID);
+    if (pending === undefined) return;
+    // Marked measured: later deltas for this step find nothing pending.
+    pendingStarts.delete(messageID);
+    const total = ttftTotals.get(pending.sessionID);
+    const step = Math.max(0, at - pending.started);
+    if (total !== undefined) {
+      ttftTotals.delete(pending.sessionID);
+      ttftTotals.set(pending.sessionID, { totalMs: total.totalMs + step, count: total.count + 1 });
+      return;
+    }
+    if (ttftTotals.size >= RT_MAX_SESSIONS) {
+      for (const oldest of ttftTotals.keys()) {
+        ttftTotals.delete(oldest);
+        break;
+      }
+    }
+    ttftTotals.set(pending.sessionID, { totalMs: step, count: 1 });
+  };
+
+  const stepStarted = (event: unknown): void => {
+    if (disposed) return;
+    const data = asRecord(asRecord(event)?.["data"]);
+    const sessionID = asText(data?.["sessionID"]);
+    const messageID = asText(data?.["assistantMessageID"]);
+    // `started` is the dispatch clock: "Request dispatch time, before waiting
+    // for provider output" — used uniformly for every step, never the
+    // execution start. A step without a usable dispatch stamp cannot time
+    // its first token, so it is skipped rather than guessed at.
+    const started = asCount(data?.["started"]);
+    if (sessionID === undefined || messageID === undefined || started === undefined) return;
+    pendingStarts.delete(messageID);
+    if (pendingStarts.size >= RT_MAX_SESSIONS) {
+      for (const oldest of pendingStarts.keys()) {
+        pendingStarts.delete(oldest);
+        break;
+      }
+    }
+    pendingStarts.set(messageID, { sessionID, started });
+  };
+
+  const stepSettled = (event: unknown): void => {
+    if (disposed) return;
+    const messageID = asText(asRecord(asRecord(event)?.["data"])?.["assistantMessageID"]);
+    if (messageID === undefined) return;
+    // Ended or failed without a first delta: the step contributes nothing
+    // and its pending start is dropped rather than left to linger.
+    pendingStarts.delete(messageID);
   };
 
   try {
@@ -160,6 +250,9 @@ export function createRealtimeTps(
       releases.push(
         subscribe("session.text.delta", ingest),
         subscribe("session.reasoning.delta", ingest),
+        subscribe("session.step.started", stepStarted),
+        subscribe("session.step.ended", stepSettled),
+        subscribe("session.step.failed", stepSettled),
       );
       active = true;
     }
@@ -255,6 +348,25 @@ export function createRealtimeTps(
     return state.displayed ?? 0;
   };
 
+  const ttft = (ids: readonly string[]): number | undefined => {
+    if (!active || disposed) return undefined;
+    const seen = new Set<string>();
+    let totalMs = 0;
+    let count = 0;
+    for (const id of ids) {
+      if (typeof id !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      const total = ttftTotals.get(id);
+      if (total === undefined) continue;
+      totalMs += total.totalMs;
+      count += total.count;
+    }
+    // No step with a first delta on record: unknown, never a guess — the
+    // both line omits the segment rather than inventing one.
+    if (count === 0) return undefined;
+    return totalMs / count / 1_000;
+  };
+
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
@@ -268,7 +380,9 @@ export function createRealtimeTps(
     releases.length = 0;
     samples.clear();
     shown.clear();
+    pendingStarts.clear();
+    ttftTotals.clear();
   };
 
-  return { get active() { return active && !disposed; }, rate, dispose };
+  return { get active() { return active && !disposed; }, rate, ttft, dispose };
 }
